@@ -1,0 +1,27 @@
+kind = "web"
+previewPath = "/"
+title = "Oráculo 0.1"
+version = "1.0.0"
+id = "artifacts/oraculo"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 24594
+
+[services.development]
+run = "pnpm --filter @workspace/oraculo run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/oraculo", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/oraculo/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "24594"
+BASE_PATH = "/"
