@@ -12,8 +12,8 @@ export interface BinanceData {
   loading: boolean;
 }
 
-const SYMBOL = 'BTCUSDT';
-const POLL_MS = 30_000; // refresh every 30 seconds
+const SYMBOL  = 'BTCUSDT';
+const POLL_MS = 30_000;
 
 export function useBinanceData(): BinanceData {
   const [state, setState] = useState<BinanceData>({
@@ -30,9 +30,9 @@ export function useBinanceData(): BinanceData {
     try {
       const [price, candles1h, candles15m, candles5m] = await Promise.all([
         fetchPrice(SYMBOL),
-        fetchKlines(SYMBOL, '1h', 50),
-        fetchKlines(SYMBOL, '15m', 50),
-        fetchKlines(SYMBOL, '5m', 50),
+        fetchKlines(SYMBOL, '1h',  220), // 220 candles for accurate EMA 200 warm-up
+        fetchKlines(SYMBOL, '15m', 80),  // 80 candles for EMA 9 & 21
+        fetchKlines(SYMBOL, '5m',  50),  // 50 candles for EMA 9
       ]);
       setState({
         price,
