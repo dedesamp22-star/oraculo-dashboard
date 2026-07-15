@@ -4,12 +4,13 @@ import {
   Activity, ArrowUpRight, ArrowDownRight, Crosshair, ShieldAlert,
   Target, Zap, CheckCircle2, XCircle, Clock, AlertTriangle,
   RefreshCw, TrendingUp, TrendingDown, Bell, BellOff,
-  CalendarOff, Timer,
+  CalendarOff, Timer, BarChart2,
 } from 'lucide-react';
 import { useBinanceData }    from '../hooks/useBinanceData';
 import { useAutoAnalysis }   from '../hooks/useAutoAnalysis';
 import { runEngine, type EngineResult, type RuleStep, type StepStatus, type Decision } from '../lib/analysis';
 import { fmtTimeSP, fmtSPNow, isOperational as checkOperational } from '../lib/schedule';
+import { TradingViewChart, type TVInterval } from '../components/TradingViewChart';
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 
@@ -227,6 +228,13 @@ let alertIdCounter = 0;
 export default function Home() {
   const market = useBinanceData();
 
+  // Chart controls
+  const [selectedPair, setSelectedPair] = useState<'BTCUSDT'>('BTCUSDT');
+  const [tvInterval,   setTvInterval]   = useState<TVInterval>('5');
+
+  // Derived TV symbol
+  const tvSymbol = `BINANCE:${selectedPair}`;
+
   // Manual analysis
   const [analyzing,    setAnalyzing]    = useState(false);
   const [result,       setResult]       = useState<EngineResult | null>(null);
@@ -439,6 +447,8 @@ export default function Home() {
                 </label>
                 <div className="relative">
                   <select
+                    value={selectedPair}
+                    onChange={e => setSelectedPair(e.target.value as 'BTCUSDT')}
                     className="w-full bg-background/50 border border-border py-4 px-5 appearance-none font-mono text-xl focus:outline-none focus:border-primary/50 transition-all cursor-pointer rounded-none"
                     disabled={analyzing || market.loading}
                   >
@@ -571,6 +581,61 @@ export default function Home() {
             </motion.section>
           )}
         </AnimatePresence>
+
+        {/* ── TradingView Chart ────────────────────────────────────────────── */}
+        <section className="bg-card/50 backdrop-blur-md border border-border relative overflow-hidden">
+          <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-primary/30 to-transparent" />
+
+          {/* Chart header */}
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3 px-5 py-4 border-b border-border/50">
+            <div className="flex items-center gap-2 flex-1">
+              <BarChart2 className="w-4 h-4 text-primary flex-shrink-0" />
+              <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">
+                Gráfico Avançado
+              </span>
+              <span className="text-[10px] font-mono text-primary/50 ml-1">· TradingView</span>
+            </div>
+
+            {/* EMA legend */}
+            <div className="hidden sm:flex items-center gap-4">
+              {[
+                { label: 'EMA 9',   color: '#00f0ff' },
+                { label: 'EMA 21',  color: '#ffaa00' },
+                { label: 'EMA 200', color: '#ff6644' },
+              ].map(e => (
+                <div key={e.label} className="flex items-center gap-1.5">
+                  <div className="w-6 h-[2px]" style={{ background: e.color }} />
+                  <span className="text-[10px] font-mono" style={{ color: e.color }}>{e.label}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Timeframe switcher */}
+            <div className="flex items-center gap-1 border border-border/60 p-0.5 bg-background/40">
+              {([ ['5', '5M'], ['15', '15M'], ['60', '1H'] ] as [TVInterval, string][]).map(([val, label]) => (
+                <button
+                  key={val}
+                  onClick={() => setTvInterval(val)}
+                  className={`px-3 py-1.5 text-[11px] font-mono uppercase tracking-[0.15em] transition-all duration-200
+                    ${tvInterval === val
+                      ? 'bg-primary text-primary-foreground shadow-[0_0_8px_var(--color-primary)]'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
+                    }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Chart — key forces clean remount when symbol or interval changes */}
+          <TradingViewChart
+            key={`${tvSymbol}-${tvInterval}`}
+            symbol={tvSymbol}
+            interval={tvInterval}
+            height={540}
+          />
+        </section>
 
         {/* ── Analysis result ──────────────────────────────────────────────── */}
         <AnimatePresence>
