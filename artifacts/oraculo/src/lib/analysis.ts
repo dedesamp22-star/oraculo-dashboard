@@ -16,7 +16,7 @@
  *   4. 15M — Identify nearest Support & Resistance levels
  *   5. 15M — Volume validation on current candle
  *   6.      — Risk/Reward calculation using S/R anchors
- *   7.      — Final decision: BUY | SELL | NO TRADE
+ *   7.      — Final decision: BUY | SELL | SEM ENTRADA
  */
 
 import type { Candle } from './binance';
@@ -31,9 +31,11 @@ export interface RuleStep {
   status: StepStatus;
   value: string;
   reason: string;
+  /** Populated only when status === 'FAIL'. Describes the condition that must be met. */
+  missing?: string;
 }
 
-export type Decision = 'BUY' | 'SELL' | 'NO TRADE';
+export type Decision = 'BUY' | 'SELL' | 'SEM ENTRADA';
 
 export interface EngineResult {
   decision: Decision;
@@ -145,6 +147,7 @@ function step1_trend1h(candles1h: Candle[]): TrendResult {
         number: 1, name: 'Tendência 1H — EMA 200',
         status: 'FAIL', value: 'DADOS INSUFICIENTES',
         reason: `Apenas ${candles1h.length} velas de 1H disponíveis. O cálculo da EMA 200 requer pelo menos 30 candles (mais candles = resultado mais preciso).`,
+        missing: 'Aguardar o carregamento de mais candles de 1H para estabilizar o cálculo da EMA 200.',
       },
     };
   }
@@ -198,6 +201,7 @@ function step2_ema15m(candles15m: Candle[], trend: TrendDir): MomentumResult {
         number: 2, name: 'Momentum 15M — EMA 9 / EMA 21',
         status: 'FAIL', value: 'DADOS INSUFICIENTES',
         reason: `Apenas ${candles15m.length} velas de 15M. São necessárias pelo menos 25 para um cálculo confiável de EMA 9 e EMA 21.`,
+        missing: 'Aguardar carregamento de mais velas de 15M para calcular EMA 9 e EMA 21.',
       },
     };
   }
@@ -236,6 +240,7 @@ function step2_ema15m(candles15m: Candle[], trend: TrendDir): MomentumResult {
         number: 2, name: 'Momentum 15M — EMA 9 / EMA 21',
         status: 'FAIL', value: 'EMA9 > EMA21 — CONFLITO',
         reason: `No 15M, a EMA 9 está acima da EMA 21 (bullish), mas a tendência principal de 1H é de BAIXA. Operar contra a tendência major aumenta o risco. Sinal bloqueado por conflito de timeframes.`,
+        missing: 'A EMA 9 deve cruzar abaixo da EMA 21 no 15M para alinhar com a tendência de baixa do 1H.',
       },
     };
   }
@@ -258,6 +263,7 @@ function step2_ema15m(candles15m: Candle[], trend: TrendDir): MomentumResult {
       number: 2, name: 'Momentum 15M — EMA 9 / EMA 21',
       status: 'FAIL', value: 'EMA9 < EMA21 — CONFLITO',
       reason: `No 15M, a EMA 9 está abaixo da EMA 21 (bearish), mas a tendência principal de 1H é de ALTA. Operar contra a tendência major aumenta o risco. Sinal bloqueado por conflito de timeframes.`,
+      missing: 'A EMA 9 deve cruzar acima da EMA 21 no 15M para alinhar com a tendência de alta do 1H.',
     },
   };
 }
@@ -278,6 +284,7 @@ function step3_entry5m(candles5m: Candle[], momentum: MomentumDir): EntryResult 
         number: 3, name: 'Confirmação 5M — Preço vs EMA 9',
         status: 'FAIL', value: 'N/A',
         reason: 'Confirmação 5M não avaliada porque o momentum de 15M conflita com a tendência de 1H. Resolva o conflito de timeframes antes de buscar entrada.',
+        missing: 'Aguardar alinhamento de EMA 9/21 no 15M (Etapa 2) antes de avaliar a entrada no 5M.',
       },
     };
   }
@@ -289,6 +296,7 @@ function step3_entry5m(candles5m: Candle[], momentum: MomentumDir): EntryResult 
         number: 3, name: 'Confirmação 5M — Preço vs EMA 9',
         status: 'FAIL', value: 'DADOS INSUFICIENTES',
         reason: `Apenas ${candles5m.length} velas de 5M disponíveis. Mínimo necessário: 12.`,
+        missing: 'Aguardar carregamento de mais velas de 5M.',
       },
     };
   }
@@ -324,6 +332,7 @@ function step3_entry5m(candles5m: Candle[], momentum: MomentumDir): EntryResult 
         number: 3, name: 'Confirmação 5M — Preço vs EMA 9',
         status: 'FAIL', value: `ABAIXO DA EMA 9 (${dist.toFixed(3)}%)`,
         reason: `Setup de compra identificado nos timeframes maiores, mas no 5M o preço ($${fmt(price)}) está abaixo da EMA 9 ($${fmt(ema9)}). Aguardar o preço fechar acima da EMA 9 antes de entrar.`,
+        missing: 'Aguardar o preço fechar acima da EMA 9 no gráfico de 5M para confirmar entrada de compra.',
       },
     };
   }
@@ -348,6 +357,7 @@ function step3_entry5m(candles5m: Candle[], momentum: MomentumDir): EntryResult 
       number: 3, name: 'Confirmação 5M — Preço vs EMA 9',
       status: 'FAIL', value: `ACIMA DA EMA 9 (+${dist.toFixed(3)}%)`,
       reason: `Setup de venda identificado nos timeframes maiores, mas no 5M o preço ($${fmt(price)}) ainda está acima da EMA 9 ($${fmt(ema9)}). Aguardar o preço fechar abaixo da EMA 9 antes de entrar.`,
+      missing: 'Aguardar o preço fechar abaixo da EMA 9 no gráfico de 5M para confirmar entrada de venda.',
     },
   };
 }
@@ -383,6 +393,7 @@ function step4_supportResistance(candles15m: Candle[], currentPrice: number): SR
         number: 4, name: 'Suporte e Resistência 15M',
         status: 'FAIL', value: 'NÃO IDENTIFICADO',
         reason: `Nenhum nível de suporte ou resistência identificado nos pivôs do 15M. Sem níveis estruturais não é possível calcular Stop Loss e Target com precisão.`,
+        missing: 'Aguardar a formação de pivôs de suporte e resistência claros no gráfico de 15M.',
       },
     };
   }
@@ -430,6 +441,7 @@ function step5_volume(candles15m: Candle[]): VolumeResult {
         number: 5, name: 'Volume 15M',
         status: 'FAIL', value: `${pctStr} da média — FRACO`,
         reason: `Volume em ${pctStr} da média — abaixo do limiar mínimo de 120%. Movimento sem suporte de volume é não confiável e aumenta o risco de reversão rápida ou fakeout.`,
+        missing: 'Volume deve superar 120% da média dos últimos 20 períodos — aguardar candle com maior participação.',
       },
     };
   }
@@ -440,6 +452,7 @@ function step5_volume(candles15m: Candle[]): VolumeResult {
       number: 5, name: 'Volume 15M',
       status: 'FAIL', value: `${pctStr} da média — CRÍTICO`,
       reason: `Volume criticamente baixo (${pctStr} da média). Alta probabilidade de movimento falso ou mercado sem interesse. Operação bloqueada.`,
+      missing: 'Volume criticamente baixo. Aguardar candle com volume acima de 120% da média para confirmar interesse do mercado.',
     },
   };
 }
@@ -517,6 +530,7 @@ function step6_riskReward(
       number: 6, name: 'Risco/Retorno',
       status: 'FAIL', value: `${rrStr} — INSUFICIENTE`,
       reason: `${slNote}. ${t1Note}. R/R calculado em ${rrStr} — abaixo do mínimo de 1:1.5. O potencial de retorno não compensa o risco assumido. Aguardar melhor ponto de entrada ou próximo nível de suporte/resistência.`,
+      missing: `R/R atual é ${rrStr}. Aguardar ponto de entrada mais próximo do suporte (compra) ou resistência (venda) para atingir R/R ≥ 1:1.5.`,
     },
   };
 }
@@ -544,7 +558,7 @@ function step7_decision(direction: EntryDir, failedSteps: number[]): RuleStep {
 
   return {
     number: 7, name: 'Decisão Final',
-    status: 'FAIL', value: 'NO TRADE',
+    status: 'FAIL', value: 'SEM ENTRADA',
     reason: `${failList} O motor exige aprovação em todas as 6 etapas antes de emitir sinal. Cada regra existe para filtrar setups de baixa qualidade. Aguarde um setup onde todas as condições estejam alinhadas.`,
   };
 }
@@ -598,16 +612,16 @@ export function runEngine(
 
   const allPassed = failedSteps.length === 0;
   const dir       = entryResult.direction;
-  const decision: Decision = (allPassed && dir !== 'NONE') ? dir : 'NO TRADE';
+  const decision: Decision = (allPassed && dir !== 'NONE') ? dir : 'SEM ENTRADA';
 
   return {
     decision,
     steps,
-    entry:     decision !== 'NO TRADE' ? `$${fmt(rrResult.entry)}`  : null,
-    stopLoss:  decision !== 'NO TRADE' ? `$${fmt(rrResult.sl)}`     : null,
-    target1:   decision !== 'NO TRADE' ? `$${fmt(rrResult.t1)}`     : null,
-    target2:   decision !== 'NO TRADE' ? `$${fmt(rrResult.t2)}`     : null,
-    riskReward: decision !== 'NO TRADE' ? `1:${rrResult.rrRatio.toFixed(2)}` : null,
+    entry:      decision !== 'SEM ENTRADA' ? `$${fmt(rrResult.entry)}`  : null,
+    stopLoss:   decision !== 'SEM ENTRADA' ? `$${fmt(rrResult.sl)}`     : null,
+    target1:    decision !== 'SEM ENTRADA' ? `$${fmt(rrResult.t1)}`     : null,
+    target2:    decision !== 'SEM ENTRADA' ? `$${fmt(rrResult.t2)}`     : null,
+    riskReward: decision !== 'SEM ENTRADA' ? `1:${rrResult.rrRatio.toFixed(2)}` : null,
     nearestSupport:    srResult.support    ? `$${fmt(srResult.support)}`    : null,
     nearestResistance: srResult.resistance ? `$${fmt(srResult.resistance)}` : null,
   };

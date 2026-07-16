@@ -3,8 +3,9 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Activity, ArrowUpRight, ArrowDownRight, Crosshair, ShieldAlert,
   Target, Zap, CheckCircle2, XCircle, Clock, AlertTriangle,
-  RefreshCw, TrendingUp, TrendingDown, Bell, BellOff,
-  CalendarOff, Timer, BarChart2,
+  RefreshCw, TrendingUp, TrendingDown, Bell,
+  CalendarOff, Timer, BarChart2, AlertCircle, Lightbulb,
+  ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { useBinanceData }    from '../hooks/useBinanceData';
 import { useAutoAnalysis }   from '../hooks/useAutoAnalysis';
@@ -123,7 +124,7 @@ function StepRow({ step, index }: { step: RuleStep; index: number }) {
   );
 }
 
-// ── Position card block ───────────────────────────────────────────────────────
+// ── PriceBlock (used inside position panel) ───────────────────────────────────
 
 function PriceBlock({ label, value, accent, icon }: {
   label: string; value: string; accent: string; icon: React.ReactNode;
@@ -144,9 +145,9 @@ function PriceBlock({ label, value, accent, icon }: {
 
 function DecisionBanner({ decision }: { decision: Decision }) {
   const cfg = {
-    BUY:        { color: '#00ff66', bg: '#00ff6614', border: '#00ff6644', icon: <TrendingUp  className="w-6 h-6" />, label: 'COMPRA'   },
-    SELL:       { color: '#ff4444', bg: '#ff444414', border: '#ff444444', icon: <TrendingDown className="w-6 h-6" />, label: 'VENDA'    },
-    'NO TRADE': { color: '#ffaa00', bg: '#ffaa0014', border: '#ffaa0044', icon: <XCircle      className="w-6 h-6" />, label: 'SEM ENTRADA' },
+    BUY:           { color: '#00ff66', bg: '#00ff6614', border: '#00ff6644', icon: <TrendingUp  className="w-6 h-6" />, label: 'COMPRA'      },
+    SELL:          { color: '#ff4444', bg: '#ff444414', border: '#ff444444', icon: <TrendingDown className="w-6 h-6" />, label: 'VENDA'       },
+    'SEM ENTRADA': { color: '#ffaa00', bg: '#ffaa0014', border: '#ffaa0044', icon: <XCircle      className="w-6 h-6" />, label: 'SEM ENTRADA' },
   }[decision];
 
   return (
@@ -166,10 +167,10 @@ function DecisionBanner({ decision }: { decision: Decision }) {
       </div>
       <div className="text-right hidden sm:block">
         <p className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em]">
-          {decision === 'NO TRADE' ? 'Regras não satisfeitas' : 'Todas as regras aprovadas'}
+          {decision === 'SEM ENTRADA' ? 'Regras não satisfeitas' : 'Todas as regras aprovadas'}
         </p>
         <p className="text-xs font-mono" style={{ color: cfg.color }}>
-          {decision === 'NO TRADE' ? 'Aguardar setup completo' : 'Operar com gestão de risco'}
+          {decision === 'SEM ENTRADA' ? 'Aguardar setup completo' : 'Operar com gestão de risco'}
         </p>
       </div>
     </div>
@@ -209,15 +210,177 @@ function MarketStatusBadge({ decision }: { decision: Decision | null }) {
     <span className="text-xs font-mono text-muted-foreground/50 uppercase tracking-[0.15em]">—</span>
   );
   const cfg = {
-    BUY:        { color: '#00ff66', label: 'COMPRA'      },
-    SELL:       { color: '#ff4444', label: 'VENDA'       },
-    'NO TRADE': { color: '#ffaa00', label: 'SEM ENTRADA' },
+    BUY:           { color: '#00ff66', label: 'COMPRA'      },
+    SELL:          { color: '#ff4444', label: 'VENDA'       },
+    'SEM ENTRADA': { color: '#ffaa00', label: 'SEM ENTRADA' },
   }[decision];
   return (
     <span className="text-sm font-mono font-bold uppercase tracking-[0.1em]"
       style={{ color: cfg.color, textShadow: `0 0 8px ${cfg.color}44` }}>
       {cfg.label}
     </span>
+  );
+}
+
+// ── Price levels bar (shown in chart header when signal exists) ───────────────
+
+function PriceLevelsBar({ entry, stopLoss, target1, target2 }: {
+  entry: string; stopLoss: string; target1: string; target2: string;
+}) {
+  const levels = [
+    { label: 'ENTRADA', value: entry,    color: '#00f0ff', icon: <Crosshair  className="w-3 h-3" /> },
+    { label: 'STOP',    value: stopLoss, color: '#ff4444', icon: <ShieldAlert className="w-3 h-3" /> },
+    { label: 'ALVO 1',  value: target1,  color: '#00ff66', icon: <Target      className="w-3 h-3" /> },
+    { label: 'ALVO 2',  value: target2,  color: '#00cc55', icon: <Target      className="w-3 h-3" /> },
+  ];
+
+  return (
+    <div className="flex border-b border-border/50 overflow-x-auto">
+      {levels.map((l, i) => (
+        <div
+          key={i}
+          className="flex-1 min-w-[80px] flex flex-col gap-1 px-4 py-2.5 border-r border-border/40 last:border-r-0"
+          style={{ background: `${l.color}06` }}
+        >
+          <div className="flex items-center gap-1.5" style={{ color: l.color }}>
+            {l.icon}
+            <span className="text-[9px] font-mono uppercase tracking-[0.15em] opacity-70">{l.label}</span>
+          </div>
+          <span className="text-xs font-mono font-bold tabular-nums" style={{ color: l.color }}>
+            {l.value}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Motivos section ───────────────────────────────────────────────────────────
+
+function MotivosSection({ steps }: { steps: RuleStep[] }) {
+  const failed = steps.filter(s => s.status === 'FAIL' && s.number < 7);
+  if (failed.length === 0) return null;
+
+  return (
+    <div className="border border-[#ff4444]/25 bg-[#ff444408] relative overflow-hidden">
+      <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-[#ff4444]" />
+      <div className="p-4 pl-5 flex flex-col gap-3">
+        <div className="flex items-center gap-2">
+          <AlertCircle className="w-3.5 h-3.5 text-[#ff4444]" />
+          <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-[#ff4444]/80">
+            Motivos — {failed.length} regra{failed.length > 1 ? 's' : ''} reprovada{failed.length > 1 ? 's' : ''}
+          </span>
+        </div>
+        <div className="flex flex-col gap-3">
+          {failed.map(step => (
+            <div key={step.number} className="flex gap-3">
+              <span className="text-[10px] font-mono text-muted-foreground/40 mt-0.5 flex-shrink-0 tabular-nums">
+                {String(step.number).padStart(2, '0')}
+              </span>
+              <div className="flex flex-col gap-0.5">
+                <span className="text-[11px] font-mono text-[#ff4444]/80 uppercase tracking-[0.1em]">
+                  {step.name}
+                </span>
+                <span className="text-[11px] font-mono text-foreground/50 leading-relaxed">
+                  {step.reason}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── O que falta section ───────────────────────────────────────────────────────
+
+function OQueFaltaSection({ steps }: { steps: RuleStep[] }) {
+  const needItems = steps.filter(s => s.status === 'FAIL' && s.number < 7 && s.missing);
+  if (needItems.length === 0) return null;
+
+  return (
+    <div className="border border-[#ffaa00]/25 bg-[#ffaa0008] relative overflow-hidden">
+      <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-[#ffaa00]" />
+      <div className="p-4 pl-5 flex flex-col gap-3">
+        <div className="flex items-center gap-2">
+          <Lightbulb className="w-3.5 h-3.5 text-[#ffaa00]" />
+          <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-[#ffaa00]/80">
+            O que falta — {needItems.length} confirmação{needItems.length > 1 ? 'ões' : ''} pendente{needItems.length > 1 ? 's' : ''}
+          </span>
+        </div>
+        <div className="flex flex-col gap-2">
+          {needItems.map(step => (
+            <div key={step.number} className="flex items-start gap-2">
+              <span className="text-[#ffaa00]/60 text-[11px] font-mono mt-0.5 flex-shrink-0">→</span>
+              <span className="text-[11px] font-mono text-foreground/60 leading-relaxed">{step.missing}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Position parameters panel ─────────────────────────────────────────────────
+
+function PositionParamsPanel({ entry, stopLoss, target1, target2, riskReward, direction }: {
+  entry: string; stopLoss: string; target1: string; target2: string;
+  riskReward: string; direction: Decision;
+}) {
+  const accent = direction === 'BUY' ? '#00ff66' : '#ff4444';
+  return (
+    <div className="border border-primary/25 bg-card/30 p-5 relative overflow-hidden flex flex-col gap-4">
+      <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-primary/40 to-transparent" />
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.2em]">
+          Parâmetros da Operação
+        </span>
+        <span
+          className="text-[10px] font-mono font-bold px-2 py-0.5 border"
+          style={{ color: accent, borderColor: `${accent}44`, background: `${accent}12` }}
+        >
+          R/R {riskReward}
+        </span>
+      </div>
+      <div className="grid grid-cols-2 gap-5">
+        <PriceBlock label="Entrada"   value={entry}    accent="#00f0ff" icon={<Crosshair  className="w-3 h-3" />} />
+        <PriceBlock label="Stop Loss" value={stopLoss} accent="#ff4444" icon={<ShieldAlert className="w-3 h-3" />} />
+        <PriceBlock label="Alvo 1"    value={target1}  accent="#00ff66" icon={<Target      className="w-3 h-3" />} />
+        <PriceBlock label="Alvo 2"    value={target2}  accent="#00cc55" icon={<Target      className="w-3 h-3" />} />
+      </div>
+    </div>
+  );
+}
+
+// ── S/R levels panel ──────────────────────────────────────────────────────────
+
+function SRLevelsPanel({ support, resistance }: {
+  support: string | null; resistance: string | null;
+}) {
+  if (!support && !resistance) return null;
+  return (
+    <div className="border border-border/50 bg-card/30 p-4 flex flex-col gap-3">
+      <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.2em]">
+        Níveis Identificados (15M)
+      </span>
+      {resistance && (
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-xs font-mono text-[#ff4444]/80 uppercase tracking-wider">
+            <ArrowUpRight className="w-3 h-3" /> Resistência
+          </div>
+          <span className="font-mono font-bold text-[#ff4444]">{resistance}</span>
+        </div>
+      )}
+      {support && (
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-xs font-mono text-[#00ff66]/80 uppercase tracking-wider">
+            <ArrowDownRight className="w-3 h-3" /> Suporte
+          </div>
+          <span className="font-mono font-bold text-[#00ff66]">{support}</span>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -229,10 +392,8 @@ export default function Home() {
   const market = useBinanceData();
 
   // Chart controls
-  const [selectedPair, setSelectedPair] = useState<'BTCUSDT'>('BTCUSDT');
+  const [selectedPair, setSelectedPair] = useState<string>('BTCUSDT');
   const [tvInterval,   setTvInterval]   = useState<TVInterval>('5');
-
-  // Derived TV symbol
   const tvSymbol = `BINANCE:${selectedPair}`;
 
   // Manual analysis
@@ -242,6 +403,9 @@ export default function Home() {
 
   // Auto mode
   const [autoEnabled,  setAutoEnabled]  = useState(false);
+
+  // Steps expand/collapse
+  const [stepsExpanded, setStepsExpanded] = useState(false);
 
   // Alerts
   const [alerts,       setAlerts]       = useState<AlertMsg[]>([]);
@@ -279,19 +443,19 @@ export default function Home() {
     const curr = res.decision;
 
     if (prev !== null && prev !== curr) {
-      if (prev === 'NO TRADE' && curr === 'BUY') {
+      if (prev === 'SEM ENTRADA' && curr === 'BUY') {
         pushAlert({
           kind: 'buy',
           title: 'Sinal de Compra Detectado',
           body: 'O motor identificou um setup de COMPRA. Verifique os níveis e aplique gestão de risco.',
         });
-      } else if (prev === 'NO TRADE' && curr === 'SELL') {
+      } else if (prev === 'SEM ENTRADA' && curr === 'SELL') {
         pushAlert({
           kind: 'sell',
           title: 'Sinal de Venda Detectado',
           body: 'O motor identificou um setup de VENDA. Verifique os níveis e aplique gestão de risco.',
         });
-      } else if ((prev === 'BUY' || prev === 'SELL') && curr === 'NO TRADE') {
+      } else if ((prev === 'BUY' || prev === 'SELL') && curr === 'SEM ENTRADA') {
         const prevLabel = prev === 'BUY' ? 'COMPRA' : 'VENDA';
         pushAlert({
           kind: 'invalidated',
@@ -343,10 +507,6 @@ export default function Home() {
 
   const handleAutoToggle = (v: boolean) => {
     setAutoEnabled(v);
-    if (!v) {
-      // Clear auto result state when turning off so stale signals don't linger
-      // but keep the last result visible
-    }
   };
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -372,14 +532,14 @@ export default function Home() {
       </div>
 
       {/* ── Header ──────────────────────────────────────────────────────── */}
-      <header className="w-full max-w-4xl flex items-center justify-between mb-8 border-b border-border pb-6 pt-4 relative z-10">
+      <header className="w-full max-w-5xl flex items-center justify-between mb-8 border-b border-border pb-6 pt-4 relative z-10">
         <div className="flex items-center gap-4">
           <div className="relative flex items-center justify-center w-10 h-10">
             <div className="absolute inset-0 bg-primary/20 rounded-sm animate-pulse" />
             <div className="relative w-4 h-4 bg-primary shadow-[0_0_15px_var(--color-primary)] rotate-45" />
           </div>
           <h1 className="text-3xl sm:text-4xl font-mono font-bold tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-white to-white/70">
-            ORÁCULO<span className="text-primary ml-2">0.1</span>
+            ORÁCULO<span className="text-primary ml-2">0.3</span>
           </h1>
         </div>
         <div className="hidden sm:flex items-center gap-2 text-xs font-mono text-primary bg-primary/10 px-4 py-2 border-l-2 border-primary">
@@ -388,7 +548,7 @@ export default function Home() {
         </div>
       </header>
 
-      <main className="w-full max-w-4xl flex flex-col gap-5 relative z-10">
+      <main className="w-full max-w-5xl flex flex-col gap-5 relative z-10">
 
         {/* ── Live price ──────────────────────────────────────────────────── */}
         <section className="bg-card/50 backdrop-blur-md border border-border p-5 relative overflow-hidden">
@@ -407,7 +567,7 @@ export default function Home() {
             <div className="flex flex-col sm:flex-row sm:items-end gap-4 justify-between">
               <div className="flex flex-col gap-1">
                 <span className="text-[10px] font-mono uppercase tracking-[0.25em] text-muted-foreground">
-                  BTC / USDT · Preço Atual
+                  {selectedPair.replace('USDT','').replace('USDC','')} / {selectedPair.includes('USDC') ? 'USDC' : 'USDT'} · Preço Atual
                 </span>
                 <AnimatePresence mode="wait">
                   <motion.span
@@ -434,7 +594,7 @@ export default function Home() {
           )}
         </section>
 
-        {/* ── Controls: manual button + auto toggle ───────────────────────── */}
+        {/* ── Controls: pair selector + manual button + auto toggle ───────── */}
         <section className="bg-card/50 backdrop-blur-md border border-border p-6 relative overflow-hidden">
           <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-primary/50 to-transparent" />
 
@@ -448,7 +608,7 @@ export default function Home() {
                 <div className="relative">
                   <select
                     value={selectedPair}
-                    onChange={e => setSelectedPair(e.target.value as 'BTCUSDT')}
+                    onChange={e => setSelectedPair(e.target.value)}
                     className="w-full bg-background/50 border border-border py-4 px-5 appearance-none font-mono text-xl focus:outline-none focus:border-primary/50 transition-all cursor-pointer rounded-none"
                     disabled={analyzing || market.loading}
                   >
@@ -511,7 +671,6 @@ export default function Home() {
               transition={{ duration: 0.3, ease: 'easeInOut' }}
               className="overflow-hidden"
             >
-              {/* Operational hours guard */}
               {!autoState.isOperational ? (
                 <div className="bg-card/40 border border-border/50 p-5 relative overflow-hidden">
                   <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-[#ffaa00]" />
@@ -536,8 +695,6 @@ export default function Home() {
                 </div>
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-
-                  {/* Status */}
                   <div className="bg-card/40 border border-primary/20 p-4 flex flex-col gap-2 relative overflow-hidden col-span-2 sm:col-span-1">
                     <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-primary" />
                     <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] pl-2 flex items-center gap-1">
@@ -547,16 +704,12 @@ export default function Home() {
                       ● ATIVO
                     </span>
                   </div>
-
-                  {/* Market status */}
                   <div className="bg-card/40 border border-border/50 p-4 flex flex-col gap-2 relative overflow-hidden col-span-2 sm:col-span-1">
                     <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] flex items-center gap-1">
                       <Activity className="w-3 h-3" /> Mercado
                     </span>
                     <MarketStatusBadge decision={result?.decision ?? null} />
                   </div>
-
-                  {/* Last analysis */}
                   <div className="bg-card/40 border border-border/50 p-4 flex flex-col gap-2 relative overflow-hidden">
                     <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] flex items-center gap-1">
                       <Clock className="w-3 h-3" /> Última análise
@@ -565,8 +718,6 @@ export default function Home() {
                       {autoState.lastAnalysisTime ? fmtTimeSP(autoState.lastAnalysisTime) : '—'}
                     </span>
                   </div>
-
-                  {/* Countdown */}
                   <div className="bg-card/40 border border-border/50 p-4 flex flex-col gap-2 relative overflow-hidden">
                     <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] flex items-center gap-1">
                       <Timer className="w-3 h-3" /> Próximo candle
@@ -575,189 +726,214 @@ export default function Home() {
                       {autoState.countdown}
                     </span>
                   </div>
-
                 </div>
               )}
             </motion.section>
           )}
         </AnimatePresence>
 
-        {/* ── TradingView Chart ────────────────────────────────────────────── */}
-        <section className="bg-card/50 backdrop-blur-md border border-border relative overflow-hidden">
-          <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-primary/30 to-transparent" />
+        {/* ── Two-column grid: analysis (left) + chart (right) ────────────── */}
+        <div className="grid grid-cols-1 lg:grid-cols-[5fr_7fr] gap-5 items-start">
 
-          {/* Chart header */}
-          <div className="flex flex-col sm:flex-row sm:items-center gap-3 px-5 py-4 border-b border-border/50">
-            <div className="flex items-center gap-2 flex-1">
-              <BarChart2 className="w-4 h-4 text-primary flex-shrink-0" />
-              <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">
-                Gráfico Avançado
-              </span>
-              <span className="text-[10px] font-mono text-primary/50 ml-1">· TradingView</span>
-            </div>
+          {/* ── Left column: Analysis panel ─────────────────────────────── */}
+          <div className="order-2 lg:order-1 flex flex-col gap-4">
 
-            {/* EMA legend */}
-            <div className="hidden sm:flex items-center gap-4">
-              {[
-                { label: 'EMA 9',   color: '#00f0ff' },
-                { label: 'EMA 21',  color: '#ffaa00' },
-                { label: 'EMA 200', color: '#ff6644' },
-              ].map(e => (
-                <div key={e.label} className="flex items-center gap-1.5">
-                  <div className="w-6 h-[2px]" style={{ background: e.color }} />
-                  <span className="text-[10px] font-mono" style={{ color: e.color }}>{e.label}</span>
-                </div>
-              ))}
-            </div>
+            {/* Idle placeholder */}
+            {!result && !analyzing && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="flex flex-col items-center gap-3 py-14 border border-border/30 bg-card/20 text-center"
+              >
+                <Crosshair className="w-10 h-10 text-muted-foreground/20" />
+                <span className="text-xs font-mono uppercase tracking-[0.2em] text-muted-foreground/50">
+                  Aguardando análise
+                </span>
+                <span className="text-[11px] font-mono text-muted-foreground/30 max-w-[220px] leading-relaxed">
+                  Clique em "Analisar Agora" ou ative o modo automático
+                </span>
+              </motion.div>
+            )}
 
-            {/* Timeframe switcher */}
-            <div className="flex items-center gap-1 border border-border/60 p-0.5 bg-background/40">
-              {([ ['5', '5M'], ['15', '15M'], ['60', '1H'] ] as [TVInterval, string][]).map(([val, label]) => (
-                <button
-                  key={val}
-                  onClick={() => setTvInterval(val)}
-                  className={`px-3 py-1.5 text-[11px] font-mono uppercase tracking-[0.15em] transition-all duration-200
-                    ${tvInterval === val
-                      ? 'bg-primary text-primary-foreground shadow-[0_0_8px_var(--color-primary)]'
-                      : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
-                    }`}
+            {/* Analyzing spinner */}
+            {analyzing && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="flex flex-col items-center gap-3 py-14 border border-primary/20 bg-primary/5"
+              >
+                <Activity className="w-8 h-8 text-primary animate-pulse" />
+                <span className="text-xs font-mono uppercase tracking-[0.2em] text-primary/70">
+                  Executando motor de regras...
+                </span>
+              </motion.div>
+            )}
+
+            {/* Result */}
+            <AnimatePresence>
+              {result && !analyzing && (
+                <motion.div
+                  key="result"
+                  initial={{ opacity: 0, y: 16 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.35 }}
+                  className="flex flex-col gap-4"
                 >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Chart — key forces clean remount when symbol or interval changes */}
-          <TradingViewChart
-            key={`${tvSymbol}-${tvInterval}`}
-            symbol={tvSymbol}
-            interval={tvInterval}
-            height={540}
-          />
-        </section>
-
-        {/* ── Analysis result ──────────────────────────────────────────────── */}
-        <AnimatePresence>
-          {result && !analyzing && (
-            <motion.div
-              initial={{ opacity: 0, y: 30 }}
-              animate={{ opacity: 1, y: 0  }}
-              exit={{    opacity: 0, y: -20 }}
-              transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
-              className="flex flex-col gap-4"
-            >
-              {/* Result meta */}
-              {resultTime && (
-                <div className="flex items-center gap-2 text-[11px] font-mono text-muted-foreground/50">
-                  <Clock className="w-3 h-3" />
-                  <span>Análise em {fmtTimeSP(resultTime)} (SP)</span>
-                  {autoEnabled && autoState.isOperational && (
-                    <span className="text-primary/50 ml-1">· automática</span>
+                  {/* Timestamp */}
+                  {resultTime && (
+                    <div className="flex items-center gap-2 text-[11px] font-mono text-muted-foreground/50">
+                      <Clock className="w-3 h-3" />
+                      <span>Análise em {fmtTimeSP(resultTime)} (SP)</span>
+                      {autoEnabled && autoState.isOperational && (
+                        <span className="text-primary/50 ml-1">· automática</span>
+                      )}
+                    </div>
                   )}
-                </div>
-              )}
 
-              {/* Decision */}
-              <DecisionBanner decision={result.decision} />
+                  {/* Decision */}
+                  <DecisionBanner decision={result.decision} />
 
-              <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-4">
+                  {/* BUY / SELL → Position params */}
+                  {result.decision !== 'SEM ENTRADA' && result.entry && (
+                    <PositionParamsPanel
+                      entry={result.entry}
+                      stopLoss={result.stopLoss!}
+                      target1={result.target1!}
+                      target2={result.target2!}
+                      riskReward={result.riskReward!}
+                      direction={result.decision}
+                    />
+                  )}
 
-                {/* Steps */}
-                <div className="flex flex-col gap-0 border border-border/50 bg-card/30 overflow-hidden">
-                  <div className="px-5 py-3 border-b border-border/50 flex items-center gap-2">
-                    <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.2em]">
-                      Motor de Regras · 7 Etapas
-                    </span>
-                    <span className="ml-auto text-[10px] font-mono text-muted-foreground">
-                      {result.steps.filter(s => s.status === 'PASS').length}/7 aprovadas
-                    </span>
-                  </div>
-                  <div className="divide-y divide-border/30">
-                    {result.steps.map((step, i) => (
-                      <StepRow key={step.number} step={step} index={i} />
-                    ))}
-                  </div>
-                </div>
+                  {/* SEM ENTRADA → Motivos */}
+                  {result.decision === 'SEM ENTRADA' && (
+                    <MotivosSection steps={result.steps} />
+                  )}
 
-                {/* Right panel */}
-                <div className="flex flex-col gap-4">
+                  {/* SEM ENTRADA → O que falta */}
+                  {result.decision === 'SEM ENTRADA' && (
+                    <OQueFaltaSection steps={result.steps} />
+                  )}
 
                   {/* S/R levels */}
-                  {(result.nearestSupport || result.nearestResistance) && (
-                    <div className="border border-border/50 bg-card/30 p-5 flex flex-col gap-4">
-                      <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.2em]">
-                        Níveis Identificados (15M)
+                  <SRLevelsPanel
+                    support={result.nearestSupport}
+                    resistance={result.nearestResistance}
+                  />
+
+                  {/* Steps detail — collapsible */}
+                  <div className="flex flex-col gap-0 border border-border/50 bg-card/30 overflow-hidden">
+                    <button
+                      onClick={() => setStepsExpanded(e => !e)}
+                      className="px-5 py-3 flex items-center gap-2 hover:bg-white/[0.02] transition-colors"
+                    >
+                      <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.2em] flex-1">
+                        Motor de Regras · 7 Etapas
                       </span>
-                      {result.nearestResistance && (
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2 text-xs font-mono text-[#ff4444]/80 uppercase tracking-wider">
-                            <ArrowUpRight className="w-3 h-3" /> Resistência
-                          </div>
-                          <span className="font-mono font-bold text-[#ff4444]">{result.nearestResistance}</span>
-                        </div>
-                      )}
-                      {result.nearestSupport && (
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2 text-xs font-mono text-[#00ff66]/80 uppercase tracking-wider">
-                            <ArrowDownRight className="w-3 h-3" /> Suporte
-                          </div>
-                          <span className="font-mono font-bold text-[#00ff66]">{result.nearestSupport}</span>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Position levels — only for BUY or SELL */}
-                  {result.decision !== 'NO TRADE' && result.entry && (
-                    <div className="border border-primary/25 bg-card/30 p-5 relative">
-                      <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-primary/40 to-transparent" />
-                      <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.2em] block mb-4">
-                        Parâmetros da Operação
+                      <span className="text-[10px] font-mono text-muted-foreground">
+                        {result.steps.filter(s => s.status === 'PASS').length}/7 aprovadas
                       </span>
-                      <div className="grid grid-cols-2 gap-5">
-                        <PriceBlock label="Entrada"   value={result.entry}    accent="#ffffff" icon={<CheckCircle2 className="w-3 h-3" />} />
-                        <PriceBlock label="Stop Loss" value={result.stopLoss!} accent="#ff4444" icon={<ShieldAlert  className="w-3 h-3" />} />
-                        <PriceBlock label="Alvo 1"    value={result.target1!}  accent="#00ff66" icon={<Target       className="w-3 h-3" />} />
-                        <PriceBlock label="Alvo 2"    value={result.target2!}  accent="#00ff66" icon={<Crosshair    className="w-3 h-3" />} />
-                      </div>
-                      <div className="mt-4 pt-4 border-t border-border/40 flex items-center justify-between">
-                        <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.2em]">
-                          Risco/Retorno
-                        </span>
-                        <span className="font-mono font-bold text-2xl text-accent drop-shadow-[0_0_8px_rgba(255,170,0,0.4)]">
-                          {result.riskReward}
-                        </span>
-                      </div>
-                    </div>
-                  )}
+                      {stepsExpanded
+                        ? <ChevronUp  className="w-3.5 h-3.5 text-muted-foreground/50 ml-2" />
+                        : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground/50 ml-2" />
+                      }
+                    </button>
+                    <AnimatePresence>
+                      {stepsExpanded && (
+                        <motion.div
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: 'auto', opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          transition={{ duration: 0.25 }}
+                          className="overflow-hidden border-t border-border/50"
+                        >
+                          <div className="divide-y divide-border/30">
+                            {result.steps.map((step, i) => (
+                              <StepRow key={step.number} step={step} index={i} />
+                            ))}
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
 
-                  {/* No-trade explanation */}
-                  {result.decision === 'NO TRADE' && (
-                    <div className="border border-border/50 bg-card/20 p-5 flex flex-col gap-3">
-                      <div className="flex items-center gap-2 text-[#ffaa00]">
-                        <AlertTriangle className="w-4 h-4" />
-                        <span className="text-xs font-mono uppercase tracking-[0.15em]">Aguardando Setup</span>
-                      </div>
-                      <p className="text-xs font-mono text-foreground/50 leading-relaxed">
-                        O motor exige aprovação em todas as 7 etapas para emitir um sinal. Clique nas etapas acima para ver o motivo de cada decisão.
-                      </p>
-                    </div>
-                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
 
+          {/* ── Right column: TradingView Chart ─────────────────────────── */}
+          <div className="order-1 lg:order-2 flex flex-col">
+            <section className="bg-card/50 backdrop-blur-md border border-border relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-primary/30 to-transparent" />
+
+              {/* Chart header */}
+              <div className="flex flex-col sm:flex-row sm:items-center gap-3 px-5 py-4 border-b border-border/50">
+                <div className="flex items-center gap-2 flex-1">
+                  <BarChart2 className="w-4 h-4 text-primary flex-shrink-0" />
+                  <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">
+                    Gráfico Avançado
+                  </span>
+                  <span className="text-[10px] font-mono text-primary/50 ml-1">· TradingView</span>
+                </div>
+
+                {/* EMA legend */}
+                <div className="hidden sm:flex items-center gap-4">
+                  {[
+                    { label: 'EMA 9',   color: '#00f0ff' },
+                    { label: 'EMA 21',  color: '#ffaa00' },
+                    { label: 'EMA 200', color: '#ff6644' },
+                  ].map(e => (
+                    <div key={e.label} className="flex items-center gap-1.5">
+                      <div className="w-6 h-[2px]" style={{ background: e.color }} />
+                      <span className="text-[10px] font-mono" style={{ color: e.color }}>{e.label}</span>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Timeframe switcher */}
+                <div className="flex items-center gap-1 border border-border/60 p-0.5 bg-background/40">
+                  {([ ['5', '5M'], ['15', '15M'], ['60', '1H'] ] as [TVInterval, string][]).map(([val, label]) => (
+                    <button
+                      key={val}
+                      onClick={() => setTvInterval(val)}
+                      className={`px-3 py-1.5 text-[11px] font-mono uppercase tracking-[0.15em] transition-all duration-200
+                        ${tvInterval === val
+                          ? 'bg-primary text-primary-foreground shadow-[0_0_8px_var(--color-primary)]'
+                          : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
+                        }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
                 </div>
               </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+
+              {/* Price levels bar — only when BUY or SELL signal */}
+              {result && result.decision !== 'SEM ENTRADA' && result.entry && (
+                <PriceLevelsBar
+                  entry={result.entry}
+                  stopLoss={result.stopLoss!}
+                  target1={result.target1!}
+                  target2={result.target2!}
+                />
+              )}
+
+              {/* TradingView widget */}
+              <TradingViewChart
+                key={`${tvSymbol}-${tvInterval}`}
+                symbol={tvSymbol}
+                interval={tvInterval}
+                height="45vh"
+              />
+            </section>
+          </div>
+
+        </div>{/* end two-column grid */}
 
       </main>
-
-      {/* Noise overlay */}
-      <div
-        className="fixed inset-0 pointer-events-none opacity-[0.035] mix-blend-screen z-50"
-        style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")` }}
-      />
     </div>
   );
 }

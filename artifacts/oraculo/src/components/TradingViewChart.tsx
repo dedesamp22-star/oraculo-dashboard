@@ -115,8 +115,8 @@ interface Props {
   /** Full TradingView symbol, e.g. "BINANCE:BTCUSDT" */
   symbol: string;
   interval: TVInterval;
-  /** Container height in pixels (parent should constrain width) */
-  height?: number;
+  /** Container height — pixels (number) or any CSS value like "45vh" */
+  height?: number | string;
 }
 
 export function TradingViewChart({ symbol, interval, height = 540 }: Props) {
