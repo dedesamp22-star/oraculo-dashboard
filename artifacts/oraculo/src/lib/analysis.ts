@@ -47,6 +47,12 @@ export interface EngineResult {
   riskReward: string | null;
   nearestSupport: string | null;
   nearestResistance: string | null;
+  /** Raw numeric values — available when decision is BUY or SELL. Used for position sizing. */
+  entryNum: number | null;
+  stopLossNum: number | null;
+  target1Num: number | null;
+  target2Num: number | null;
+  rrRatioNum: number | null;
 }
 
 // ── Math helpers ──────────────────────────────────────────────────────────────
@@ -614,15 +620,23 @@ export function runEngine(
   const dir       = entryResult.direction;
   const decision: Decision = (allPassed && dir !== 'NONE') ? dir : 'SEM ENTRADA';
 
+  const hasSignal = decision !== 'SEM ENTRADA';
+
   return {
     decision,
     steps,
-    entry:      decision !== 'SEM ENTRADA' ? `$${fmt(rrResult.entry)}`  : null,
-    stopLoss:   decision !== 'SEM ENTRADA' ? `$${fmt(rrResult.sl)}`     : null,
-    target1:    decision !== 'SEM ENTRADA' ? `$${fmt(rrResult.t1)}`     : null,
-    target2:    decision !== 'SEM ENTRADA' ? `$${fmt(rrResult.t2)}`     : null,
-    riskReward: decision !== 'SEM ENTRADA' ? `1:${rrResult.rrRatio.toFixed(2)}` : null,
-    nearestSupport:    srResult.support    ? `$${fmt(srResult.support)}`    : null,
-    nearestResistance: srResult.resistance ? `$${fmt(srResult.resistance)}` : null,
+    entry:      hasSignal ? `${fmt(rrResult.entry)}`  : null,
+    stopLoss:   hasSignal ? `${fmt(rrResult.sl)}`     : null,
+    target1:    hasSignal ? `${fmt(rrResult.t1)}`     : null,
+    target2:    hasSignal ? `${fmt(rrResult.t2)}`     : null,
+    riskReward: hasSignal ? `1:${rrResult.rrRatio.toFixed(2)}` : null,
+    nearestSupport:    srResult.support    ? `${fmt(srResult.support)}`    : null,
+    nearestResistance: srResult.resistance ? `${fmt(srResult.resistance)}` : null,
+    // Raw numerics for downstream calculations (position sizing, demo trading)
+    entryNum:    hasSignal ? rrResult.entry       : null,
+    stopLossNum: hasSignal ? rrResult.sl          : null,
+    target1Num:  hasSignal ? rrResult.t1          : null,
+    target2Num:  hasSignal ? rrResult.t2          : null,
+    rrRatioNum:  hasSignal ? rrResult.rrRatio     : null,
   };
 }

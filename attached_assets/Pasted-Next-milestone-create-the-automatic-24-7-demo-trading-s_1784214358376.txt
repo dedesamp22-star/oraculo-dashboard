@@ -1,0 +1,106 @@
+Next milestone: create the automatic 24/7 demo trading simulator for Oraculo 0.3.
+
+Requirements:
+
+1. Keep all existing features unchanged.
+
+2. Add a switch called:
+"MODO DEMO AUTOMÁTICO 24H"
+
+3. When enabled:
+- Run the rule engine continuously, 24 hours a day, 7 days a week.
+- Analyze only when a new 5-minute candle closes.
+- Do not repeat analysis during the same candle.
+- Keep manual analysis available at all times.
+
+4. When the rule engine returns COMPRA or VENDA:
+- Open one simulated trade only.
+- Do not open duplicate trades.
+- Do not open a new trade while another trade is active.
+- Never place real orders.
+- Never request Binance API keys.
+
+5. Record for every simulated trade:
+- Pair
+- Direction
+- Entry price
+- Stop Loss
+- Target 1
+- Target 2
+- Risk/Reward
+- Date and time
+- Reasons for the signal
+- Market conditions at entry
+
+6. Position sizing:
+- Configurable simulated balance.
+- Default balance: 1000 USDC.
+- Risk per trade: 1% of current simulated balance.
+- Calculate position size automatically from entry and stop distance.
+- Show the exact amount at risk in USDC.
+
+7. Trade management:
+- Close the simulated trade when Stop Loss, Target 1 or Target 2 is reached.
+- After Target 1 is reached, move the simulated stop to breakeven.
+- Continue monitoring until Stop Loss, breakeven or Target 2.
+- Calculate realized and unrealized profit/loss.
+
+8. Add a panel called:
+"OPERAÇÃO DEMO ATIVA"
+
+Show:
+- Pair
+- Direction
+- Entry
+- Current price
+- Stop
+- Target 1
+- Target 2
+- Position size
+- Amount at risk
+- Unrealized profit/loss
+- Trade duration
+
+9. Add a panel called:
+"HISTÓRICO DEMO"
+
+Record:
+- Result
+- Profit or loss in USDC
+- Profit or loss in percentage
+- Exit reason
+- Opening time
+- Closing time
+- Trade duration
+
+10. Add daily statistics:
+- Total trades
+- Wins
+- Losses
+- Breakevens
+- Win rate
+- Total profit/loss
+- Maximum daily drawdown
+- Consecutive losses
+- Current simulated balance
+
+11. Add safety rules:
+- Maximum 8 demo trades per day.
+- Stop new trades after 3 consecutive losses.
+- Stop new trades after losing 3% of the simulated balance in one day.
+- Maximum one active trade at a time.
+- Do not force trades when the setup is incomplete.
+
+12. Add a clear status:
+- DEMO 24H ATIVO
+- DEMO PAUSADO POR LIMITE DE RISCO
+- DEMO DESATIVADO
+
+13. Save all demo data locally so it remains after refreshing the page.
+
+14. Keep all interface text in Portuguese.
+
+15. Keep the app completely read-only and simulation-only.
+
+16. Do not remove the current operational schedule from the manual mode.
+The 24-hour schedule applies only to the automatic demo mode.

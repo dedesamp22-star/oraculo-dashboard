@@ -5,13 +5,19 @@ import {
   Target, Zap, CheckCircle2, XCircle, Clock, AlertTriangle,
   RefreshCw, TrendingUp, TrendingDown, Bell,
   CalendarOff, Timer, BarChart2, AlertCircle, Lightbulb,
-  ChevronDown, ChevronUp,
+  ChevronDown, ChevronUp, Bot, Pause,
 } from 'lucide-react';
-import { useBinanceData }    from '../hooks/useBinanceData';
-import { useAutoAnalysis }   from '../hooks/useAutoAnalysis';
+import { useBinanceData }       from '../hooks/useBinanceData';
+import { useAutoAnalysis }      from '../hooks/useAutoAnalysis';
+import { useDemoAutoAnalysis }  from '../hooks/useDemoAutoAnalysis';
+import { useDemoTrading }       from '../hooks/useDemoTrading';
 import { runEngine, type EngineResult, type RuleStep, type StepStatus, type Decision } from '../lib/analysis';
 import { fmtTimeSP, fmtSPNow, isOperational as checkOperational } from '../lib/schedule';
+import { isSafetyLimited, safetyLimitReason } from '../lib/demo';
 import { TradingViewChart, type TVInterval } from '../components/TradingViewChart';
+import { DemoActivePanel }   from '../components/DemoActivePanel';
+import { DemoHistoryPanel }  from '../components/DemoHistoryPanel';
+import { DemoStatsPanel }    from '../components/DemoStatsPanel';
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 
@@ -23,7 +29,7 @@ function fmtPrice(n: number): string {
 
 interface AlertMsg {
   id: number;
-  kind: 'buy' | 'sell' | 'invalidated';
+  kind: 'buy' | 'sell' | 'invalidated' | 'demo';
   title: string;
   body: string;
 }
@@ -38,6 +44,7 @@ function AlertToast({ msg, onDismiss }: { msg: AlertMsg; onDismiss: () => void }
     buy:        { color: '#00ff66', border: '#00ff6655', bg: '#00ff6612', icon: <TrendingUp  className="w-5 h-5" /> },
     sell:       { color: '#ff4444', border: '#ff444455', bg: '#ff444412', icon: <TrendingDown className="w-5 h-5" /> },
     invalidated:{ color: '#ffaa00', border: '#ffaa0055', bg: '#ffaa0012', icon: <AlertTriangle className="w-5 h-5" /> },
+    demo:       { color: '#00f0ff', border: '#00f0ff55', bg: '#00f0ff12', icon: <Bot className="w-5 h-5" /> },
   }[msg.kind];
 
   return (
@@ -124,7 +131,7 @@ function StepRow({ step, index }: { step: RuleStep; index: number }) {
   );
 }
 
-// ── PriceBlock (used inside position panel) ───────────────────────────────────
+// ── PriceBlock ────────────────────────────────────────────────────────────────
 
 function PriceBlock({ label, value, accent, icon }: {
   label: string; value: string; accent: string; icon: React.ReactNode;
@@ -177,11 +184,12 @@ function DecisionBanner({ decision }: { decision: Decision }) {
   );
 }
 
-// ── Toggle switch ─────────────────────────────────────────────────────────────
+// ── Toggle ────────────────────────────────────────────────────────────────────
 
-function Toggle({ checked, onChange, disabled }: {
-  checked: boolean; onChange: (v: boolean) => void; disabled?: boolean;
+function Toggle({ checked, onChange, disabled, accentColor }: {
+  checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; accentColor?: string;
 }) {
+  const accent = accentColor ?? 'var(--color-primary)';
   return (
     <button
       role="switch"
@@ -189,15 +197,16 @@ function Toggle({ checked, onChange, disabled }: {
       disabled={disabled}
       onClick={() => !disabled && onChange(!checked)}
       className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full border-2 transition-all duration-300 focus:outline-none
-        ${disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}
-        ${checked
-          ? 'bg-primary/20 border-primary'
-          : 'bg-background border-border'
-        }`}
+        ${disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}
+      style={checked
+        ? { background: `${accentColor ?? 'var(--color-primary)'}1a`, borderColor: accentColor ?? 'var(--color-primary)' }
+        : { background: 'var(--color-background)', borderColor: 'var(--color-border)' }}
     >
       <span
-        className={`inline-block h-4 w-4 transform rounded-full transition-transform duration-300
-          ${checked ? 'translate-x-5 bg-primary shadow-[0_0_8px_var(--color-primary)]' : 'translate-x-0.5 bg-muted-foreground/40'}`}
+        className="inline-block h-4 w-4 transform rounded-full transition-transform duration-300"
+        style={checked
+          ? { transform: 'translateX(20px)', background: accentColor ?? 'var(--color-primary)', boxShadow: `0 0 8px ${accentColor ?? 'var(--color-primary)'}` }
+          : { transform: 'translateX(2px)', background: 'var(--color-muted-foreground)', opacity: 0.4 }}
       />
     </button>
   );
@@ -222,7 +231,7 @@ function MarketStatusBadge({ decision }: { decision: Decision | null }) {
   );
 }
 
-// ── Price levels bar (shown in chart header when signal exists) ───────────────
+// ── Price levels bar ──────────────────────────────────────────────────────────
 
 function PriceLevelsBar({ entry, stopLoss, target1, target2 }: {
   entry: string; stopLoss: string; target1: string; target2: string;
@@ -233,22 +242,17 @@ function PriceLevelsBar({ entry, stopLoss, target1, target2 }: {
     { label: 'ALVO 1',  value: target1,  color: '#00ff66', icon: <Target      className="w-3 h-3" /> },
     { label: 'ALVO 2',  value: target2,  color: '#00cc55', icon: <Target      className="w-3 h-3" /> },
   ];
-
   return (
     <div className="flex border-b border-border/50 overflow-x-auto">
       {levels.map((l, i) => (
-        <div
-          key={i}
+        <div key={i}
           className="flex-1 min-w-[80px] flex flex-col gap-1 px-4 py-2.5 border-r border-border/40 last:border-r-0"
-          style={{ background: `${l.color}06` }}
-        >
+          style={{ background: `${l.color}06` }}>
           <div className="flex items-center gap-1.5" style={{ color: l.color }}>
             {l.icon}
             <span className="text-[9px] font-mono uppercase tracking-[0.15em] opacity-70">{l.label}</span>
           </div>
-          <span className="text-xs font-mono font-bold tabular-nums" style={{ color: l.color }}>
-            {l.value}
-          </span>
+          <span className="text-xs font-mono font-bold tabular-nums" style={{ color: l.color }}>{l.value}</span>
         </div>
       ))}
     </div>
@@ -260,7 +264,6 @@ function PriceLevelsBar({ entry, stopLoss, target1, target2 }: {
 function MotivosSection({ steps }: { steps: RuleStep[] }) {
   const failed = steps.filter(s => s.status === 'FAIL' && s.number < 7);
   if (failed.length === 0) return null;
-
   return (
     <div className="border border-[#ff4444]/25 bg-[#ff444408] relative overflow-hidden">
       <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-[#ff4444]" />
@@ -278,12 +281,8 @@ function MotivosSection({ steps }: { steps: RuleStep[] }) {
                 {String(step.number).padStart(2, '0')}
               </span>
               <div className="flex flex-col gap-0.5">
-                <span className="text-[11px] font-mono text-[#ff4444]/80 uppercase tracking-[0.1em]">
-                  {step.name}
-                </span>
-                <span className="text-[11px] font-mono text-foreground/50 leading-relaxed">
-                  {step.reason}
-                </span>
+                <span className="text-[11px] font-mono text-[#ff4444]/80 uppercase tracking-[0.1em]">{step.name}</span>
+                <span className="text-[11px] font-mono text-foreground/50 leading-relaxed">{step.reason}</span>
               </div>
             </div>
           ))}
@@ -293,12 +292,11 @@ function MotivosSection({ steps }: { steps: RuleStep[] }) {
   );
 }
 
-// ── O que falta section ───────────────────────────────────────────────────────
+// ── O que falta ───────────────────────────────────────────────────────────────
 
 function OQueFaltaSection({ steps }: { steps: RuleStep[] }) {
   const needItems = steps.filter(s => s.status === 'FAIL' && s.number < 7 && s.missing);
   if (needItems.length === 0) return null;
-
   return (
     <div className="border border-[#ffaa00]/25 bg-[#ffaa0008] relative overflow-hidden">
       <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-[#ffaa00]" />
@@ -336,10 +334,8 @@ function PositionParamsPanel({ entry, stopLoss, target1, target2, riskReward, di
         <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.2em]">
           Parâmetros da Operação
         </span>
-        <span
-          className="text-[10px] font-mono font-bold px-2 py-0.5 border"
-          style={{ color: accent, borderColor: `${accent}44`, background: `${accent}12` }}
-        >
+        <span className="text-[10px] font-mono font-bold px-2 py-0.5 border"
+          style={{ color: accent, borderColor: `${accent}44`, background: `${accent}12` }}>
           R/R {riskReward}
         </span>
       </div>
@@ -355,9 +351,7 @@ function PositionParamsPanel({ entry, stopLoss, target1, target2, riskReward, di
 
 // ── S/R levels panel ──────────────────────────────────────────────────────────
 
-function SRLevelsPanel({ support, resistance }: {
-  support: string | null; resistance: string | null;
-}) {
+function SRLevelsPanel({ support, resistance }: { support: string | null; resistance: string | null }) {
   if (!support && !resistance) return null;
   return (
     <div className="border border-border/50 bg-card/30 p-4 flex flex-col gap-3">
@@ -384,6 +378,37 @@ function SRLevelsPanel({ support, resistance }: {
   );
 }
 
+// ── Demo status badge ─────────────────────────────────────────────────────────
+
+function DemoStatusBadge({ enabled, limited, reason }: {
+  enabled: boolean; limited: boolean; reason?: string;
+}) {
+  if (!enabled) return (
+    <span className="text-[10px] font-mono text-muted-foreground/50 uppercase tracking-[0.15em]">
+      DEMO DESATIVADO
+    </span>
+  );
+  if (limited) return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-[10px] font-mono font-bold text-[#ff4444] uppercase tracking-[0.1em] flex items-center gap-1">
+        <Pause className="w-3 h-3" /> DEMO PAUSADO POR LIMITE DE RISCO
+      </span>
+      {reason && <span className="text-[9px] font-mono text-[#ff4444]/60">{reason}</span>}
+    </div>
+  );
+  return (
+    <div className="flex items-center gap-2">
+      <div className="relative flex items-center justify-center">
+        <div className="absolute w-2.5 h-2.5 rounded-full animate-ping bg-[#00f0ff]/30" />
+        <div className="relative w-1.5 h-1.5 rounded-full bg-[#00f0ff]" />
+      </div>
+      <span className="text-[10px] font-mono font-bold text-[#00f0ff] uppercase tracking-[0.15em]">
+        DEMO 24H ATIVO
+      </span>
+    </div>
+  );
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 let alertIdCounter = 0;
@@ -401,17 +426,20 @@ export default function Home() {
   const [result,       setResult]       = useState<EngineResult | null>(null);
   const [resultTime,   setResultTime]   = useState<Date | null>(null);
 
-  // Auto mode
+  // Auto mode (schedule-gated, Mon–Fri 08:30–17:00 SP)
   const [autoEnabled,  setAutoEnabled]  = useState(false);
+
+  // Demo mode
+  const [demoEnabled, setDemoEnabled] = useState(false);
 
   // Steps expand/collapse
   const [stepsExpanded, setStepsExpanded] = useState(false);
 
   // Alerts
-  const [alerts,       setAlerts]       = useState<AlertMsg[]>([]);
+  const [alerts, setAlerts] = useState<AlertMsg[]>([]);
   const prevDecisionRef = useRef<Decision | null>(null);
 
-  // SP clock display (refreshes every second regardless of auto mode)
+  // SP clock
   const [spClock, setSpClock] = useState(fmtSPNow);
   const [isOp,    setIsOp]    = useState(checkOperational);
   useEffect(() => {
@@ -421,6 +449,24 @@ export default function Home() {
     }, 1_000);
     return () => clearInterval(id);
   }, []);
+
+  // ── Demo trading ──────────────────────────────────────────────────────────
+
+  const {
+    session: demoSession,
+    feedSignal,
+    updatePrice,
+    resetSession,
+    setConfiguredBalance,
+  } = useDemoTrading();
+
+  // Feed live price into demo state machine every time price updates
+  useEffect(() => {
+    if (market.price !== null) updatePrice(market.price);
+  }, [market.price, updatePrice]);
+
+  const safeLimited = isSafetyLimited(demoSession.dailyStats);
+  const safeReason  = safeLimited ? safetyLimitReason(demoSession.dailyStats) : undefined;
 
   // ── Alert emission ────────────────────────────────────────────────────────
 
@@ -433,7 +479,7 @@ export default function Home() {
     setAlerts(prev => prev.filter(a => a.id !== id));
   }, []);
 
-  // ── Result handler (shared by manual + auto) ──────────────────────────────
+  // ── Manual+Auto result handler ────────────────────────────────────────────
 
   const handleResult = useCallback((res: EngineResult, triggeredAt?: Date) => {
     setResult(res);
@@ -444,30 +490,44 @@ export default function Home() {
 
     if (prev !== null && prev !== curr) {
       if (prev === 'SEM ENTRADA' && curr === 'BUY') {
-        pushAlert({
-          kind: 'buy',
-          title: 'Sinal de Compra Detectado',
-          body: 'O motor identificou um setup de COMPRA. Verifique os níveis e aplique gestão de risco.',
-        });
+        pushAlert({ kind: 'buy',  title: 'Sinal de Compra Detectado',
+          body: 'O motor identificou um setup de COMPRA. Verifique os níveis e aplique gestão de risco.' });
       } else if (prev === 'SEM ENTRADA' && curr === 'SELL') {
-        pushAlert({
-          kind: 'sell',
-          title: 'Sinal de Venda Detectado',
-          body: 'O motor identificou um setup de VENDA. Verifique os níveis e aplique gestão de risco.',
-        });
+        pushAlert({ kind: 'sell', title: 'Sinal de Venda Detectado',
+          body: 'O motor identificou um setup de VENDA. Verifique os níveis e aplique gestão de risco.' });
       } else if ((prev === 'BUY' || prev === 'SELL') && curr === 'SEM ENTRADA') {
         const prevLabel = prev === 'BUY' ? 'COMPRA' : 'VENDA';
-        pushAlert({
-          kind: 'invalidated',
-          title: `Setup de ${prevLabel} Invalidado`,
-          body: 'As condições do setup anterior deixaram de ser satisfeitas. Sinal cancelado.',
-        });
+        pushAlert({ kind: 'invalidated', title: `Setup de ${prevLabel} Invalidado`,
+          body: 'As condições do setup anterior deixaram de ser satisfeitas. Sinal cancelado.' });
       }
     }
     prevDecisionRef.current = curr;
   }, [pushAlert]);
 
-  // ── Auto-analysis hook ────────────────────────────────────────────────────
+  // ── Demo signal handler (24/7, separate callback) ─────────────────────────
+
+  const prevDemoDecisionRef = useRef<Decision | null>(null);
+
+  const handleDemoSignal = useCallback((res: EngineResult) => {
+    // If signal changed to BUY/SELL, attempt to open a demo trade
+    if (res.decision !== 'SEM ENTRADA') {
+      const prev = prevDemoDecisionRef.current;
+      if (prev === 'SEM ENTRADA' || prev === null) {
+        feedSignal(res, selectedPair);
+        if (!safeLimited) {
+          const label = res.decision === 'BUY' ? 'COMPRA' : 'VENDA';
+          pushAlert({
+            kind: 'demo',
+            title: `Demo — Operação de ${label} Aberta`,
+            body: `Operação simulada de ${label} registrada em ${selectedPair}. Acompanhe no painel demo.`,
+          });
+        }
+      }
+    }
+    prevDemoDecisionRef.current = res.decision;
+  }, [feedSignal, selectedPair, safeLimited, pushAlert]);
+
+  // ── Auto-analysis hook (schedule-gated, Mon–Fri 08:30–17:00 SP) ──────────
 
   const autoState = useAutoAnalysis({
     enabled:    autoEnabled,
@@ -478,35 +538,32 @@ export default function Home() {
     onResult:   handleResult,
   });
 
+  // ── Demo auto-analysis hook (24/7, no schedule gate) ─────────────────────
+
+  const demoAutoState = useDemoAutoAnalysis({
+    enabled:    demoEnabled && !market.loading && !market.error,
+    candles1h:  market.candles1h,
+    candles15m: market.candles15m,
+    candles5m:  market.candles5m,
+    price:      market.price,
+    onResult:   handleDemoSignal,
+  });
+
   // ── Manual analysis ───────────────────────────────────────────────────────
 
   const canAnalyze =
-    !analyzing &&
-    !market.loading &&
-    !market.error &&
-    market.price !== null &&
-    market.candles1h.length > 20;
+    !analyzing && !market.loading && !market.error &&
+    market.price !== null && market.candles1h.length > 20;
 
   const handleManualAnalyze = () => {
     if (!canAnalyze) return;
     setAnalyzing(true);
     setResult(null);
     setTimeout(() => {
-      const res = runEngine(
-        market.candles1h,
-        market.candles15m,
-        market.candles5m,
-        market.price!,
-      );
+      const res = runEngine(market.candles1h, market.candles15m, market.candles5m, market.price!);
       handleResult(res);
       setAnalyzing(false);
     }, 900);
-  };
-
-  // ── Auto toggle ───────────────────────────────────────────────────────────
-
-  const handleAutoToggle = (v: boolean) => {
-    setAutoEnabled(v);
   };
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -520,7 +577,7 @@ export default function Home() {
       <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-primary/5 rounded-full blur-[120px] pointer-events-none" />
       <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-primary/5 rounded-full blur-[120px] pointer-events-none" />
 
-      {/* ── Alert toasts (top-right) ─────────────────────────────────────── */}
+      {/* ── Alert toasts ─────────────────────────────────────────────────── */}
       <div className="fixed top-6 right-6 z-[100] flex flex-col gap-2 items-end pointer-events-none">
         <AnimatePresence mode="popLayout">
           {alerts.map(msg => (
@@ -567,7 +624,7 @@ export default function Home() {
             <div className="flex flex-col sm:flex-row sm:items-end gap-4 justify-between">
               <div className="flex flex-col gap-1">
                 <span className="text-[10px] font-mono uppercase tracking-[0.25em] text-muted-foreground">
-                  {selectedPair.replace('USDT','').replace('USDC','')} / {selectedPair.includes('USDC') ? 'USDC' : 'USDT'} · Preço Atual
+                  BTC / USDT · Preço Atual
                 </span>
                 <AnimatePresence mode="wait">
                   <motion.span
@@ -594,12 +651,12 @@ export default function Home() {
           )}
         </section>
 
-        {/* ── Controls: pair selector + manual button + auto toggle ───────── */}
+        {/* ── Controls ────────────────────────────────────────────────────── */}
         <section className="bg-card/50 backdrop-blur-md border border-border p-6 relative overflow-hidden">
           <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-primary/50 to-transparent" />
 
           <div className="flex flex-col gap-5">
-            {/* Row 1: pair selector + manual button */}
+            {/* Pair selector + manual button */}
             <div className="flex flex-col sm:flex-row gap-5 items-end">
               <div className="flex-1 w-full space-y-2.5">
                 <label className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.2em]">
@@ -640,7 +697,7 @@ export default function Home() {
               </button>
             </div>
 
-            {/* Row 2: auto toggle */}
+            {/* Auto toggle (schedule-gated) */}
             <div className="flex items-center justify-between border border-border/50 bg-background/30 px-5 py-4 relative">
               <div className="absolute left-0 top-0 bottom-0 w-[2px]"
                 style={{ background: autoEnabled ? 'var(--color-primary)' : '#ffffff22' }} />
@@ -651,17 +708,50 @@ export default function Home() {
                 <span className={`text-[10px] font-mono uppercase tracking-[0.15em] ${autoEnabled ? 'text-primary' : 'text-muted-foreground/50'}`}>
                   {autoEnabled ? '● AUTOMÁTICO ATIVO' : '○ AUTOMÁTICO DESATIVADO'}
                 </span>
+                <span className="text-[9px] font-mono text-muted-foreground/30 mt-0.5">
+                  Seg–Sex 08:30–17:00 (Brasília)
+                </span>
               </div>
               <Toggle
                 checked={autoEnabled}
-                onChange={handleAutoToggle}
+                onChange={setAutoEnabled}
                 disabled={market.loading || !!market.error}
+              />
+            </div>
+
+            {/* Demo toggle (24/7) */}
+            <div className="flex items-center justify-between border px-5 py-4 relative transition-all"
+              style={{
+                borderColor: demoEnabled ? '#00f0ff33' : 'var(--color-border)',
+                background: demoEnabled ? '#00f0ff08' : 'rgba(0,0,0,0.3)',
+              }}>
+              <div className="absolute left-0 top-0 bottom-0 w-[2px]"
+                style={{ background: demoEnabled ? '#00f0ff' : '#ffffff22' }} />
+              <div className="flex flex-col gap-0.5 pl-2">
+                <span className="text-[11px] font-mono uppercase tracking-[0.2em]"
+                  style={{ color: demoEnabled ? '#00f0ff' : 'rgba(255,255,255,0.8)' }}>
+                  MODO DEMO AUTOMÁTICO 24H
+                </span>
+                <DemoStatusBadge
+                  enabled={demoEnabled}
+                  limited={safeLimited}
+                  reason={safeReason}
+                />
+                <span className="text-[9px] font-mono text-muted-foreground/30 mt-0.5">
+                  Simulação 24/7 · Sem ordens reais · Saldo fictício
+                </span>
+              </div>
+              <Toggle
+                checked={demoEnabled}
+                onChange={setDemoEnabled}
+                disabled={market.loading || !!market.error}
+                accentColor="#00f0ff"
               />
             </div>
           </div>
         </section>
 
-        {/* ── Auto-mode status panel ───────────────────────────────────────── */}
+        {/* ── Auto-mode status panel (schedule-gated) ──────────────────────── */}
         <AnimatePresence>
           {autoEnabled && (
             <motion.section
@@ -700,17 +790,15 @@ export default function Home() {
                     <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] pl-2 flex items-center gap-1">
                       <Bell className="w-3 h-3" /> Status
                     </span>
-                    <span className="text-xs font-mono font-bold text-primary uppercase tracking-[0.1em] pl-2">
-                      ● ATIVO
-                    </span>
+                    <span className="text-xs font-mono font-bold text-primary uppercase tracking-[0.1em] pl-2">● ATIVO</span>
                   </div>
-                  <div className="bg-card/40 border border-border/50 p-4 flex flex-col gap-2 relative overflow-hidden col-span-2 sm:col-span-1">
+                  <div className="bg-card/40 border border-border/50 p-4 flex flex-col gap-2">
                     <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] flex items-center gap-1">
                       <Activity className="w-3 h-3" /> Mercado
                     </span>
                     <MarketStatusBadge decision={result?.decision ?? null} />
                   </div>
-                  <div className="bg-card/40 border border-border/50 p-4 flex flex-col gap-2 relative overflow-hidden">
+                  <div className="bg-card/40 border border-border/50 p-4 flex flex-col gap-2">
                     <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] flex items-center gap-1">
                       <Clock className="w-3 h-3" /> Última análise
                     </span>
@@ -718,13 +806,11 @@ export default function Home() {
                       {autoState.lastAnalysisTime ? fmtTimeSP(autoState.lastAnalysisTime) : '—'}
                     </span>
                   </div>
-                  <div className="bg-card/40 border border-border/50 p-4 flex flex-col gap-2 relative overflow-hidden">
+                  <div className="bg-card/40 border border-border/50 p-4 flex flex-col gap-2">
                     <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] flex items-center gap-1">
                       <Timer className="w-3 h-3" /> Próximo candle
                     </span>
-                    <span className="text-xl font-mono font-bold text-primary tabular-nums">
-                      {autoState.countdown}
-                    </span>
+                    <span className="text-xl font-mono font-bold text-primary tabular-nums">{autoState.countdown}</span>
                   </div>
                 </div>
               )}
@@ -732,19 +818,66 @@ export default function Home() {
           )}
         </AnimatePresence>
 
+        {/* ── Demo auto status bar ─────────────────────────────────────────── */}
+        <AnimatePresence>
+          {demoEnabled && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{    opacity: 0, height: 0    }}
+              transition={{ duration: 0.3 }}
+              className="overflow-hidden"
+            >
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="bg-card/40 border p-4 flex flex-col gap-2 relative overflow-hidden col-span-2 sm:col-span-1"
+                  style={{ borderColor: '#00f0ff33', background: '#00f0ff08' }}>
+                  <div className="absolute left-0 top-0 bottom-0 w-[2px]" style={{ background: '#00f0ff' }} />
+                  <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] pl-2 flex items-center gap-1">
+                    <Bot className="w-3 h-3" /> Demo 24H
+                  </span>
+                  <DemoStatusBadge enabled={demoEnabled} limited={safeLimited} />
+                </div>
+
+                <div className="bg-card/40 border border-border/50 p-4 flex flex-col gap-2">
+                  <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] flex items-center gap-1">
+                    <Clock className="w-3 h-3" /> Última análise
+                  </span>
+                  <span className="text-sm font-mono text-foreground/80">
+                    {demoAutoState.lastAnalysisTime ? fmtTimeSP(demoAutoState.lastAnalysisTime) : '—'}
+                  </span>
+                </div>
+
+                <div className="bg-card/40 border border-border/50 p-4 flex flex-col gap-2">
+                  <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] flex items-center gap-1">
+                    <Timer className="w-3 h-3" /> Próximo candle 5M
+                  </span>
+                  <span className="text-xl font-mono font-bold tabular-nums" style={{ color: '#00f0ff' }}>
+                    {demoAutoState.countdown}
+                  </span>
+                </div>
+
+                <div className="bg-card/40 border border-border/50 p-4 flex flex-col gap-2">
+                  <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] flex items-center gap-1">
+                    <Activity className="w-3 h-3" /> Saldo Demo
+                  </span>
+                  <span className="text-base font-mono font-bold tabular-nums"
+                    style={{ color: demoSession.balance >= demoSession.configuredBalance ? '#00ff66' : '#ff4444' }}>
+                    ${demoSession.balance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </span>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* ── Two-column grid: analysis (left) + chart (right) ────────────── */}
         <div className="grid grid-cols-1 lg:grid-cols-[5fr_7fr] gap-5 items-start">
 
-          {/* ── Left column: Analysis panel ─────────────────────────────── */}
+          {/* Left — Analysis panel */}
           <div className="order-2 lg:order-1 flex flex-col gap-4">
-
-            {/* Idle placeholder */}
             {!result && !analyzing && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="flex flex-col items-center gap-3 py-14 border border-border/30 bg-card/20 text-center"
-              >
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+                className="flex flex-col items-center gap-3 py-14 border border-border/30 bg-card/20 text-center">
                 <Crosshair className="w-10 h-10 text-muted-foreground/20" />
                 <span className="text-xs font-mono uppercase tracking-[0.2em] text-muted-foreground/50">
                   Aguardando análise
@@ -755,14 +888,9 @@ export default function Home() {
               </motion.div>
             )}
 
-            {/* Analyzing spinner */}
             {analyzing && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="flex flex-col items-center gap-3 py-14 border border-primary/20 bg-primary/5"
-              >
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                className="flex flex-col items-center gap-3 py-14 border border-primary/20 bg-primary/5">
                 <Activity className="w-8 h-8 text-primary animate-pulse" />
                 <span className="text-xs font-mono uppercase tracking-[0.2em] text-primary/70">
                   Executando motor de regras...
@@ -770,18 +898,13 @@ export default function Home() {
               </motion.div>
             )}
 
-            {/* Result */}
             <AnimatePresence>
               {result && !analyzing && (
-                <motion.div
-                  key="result"
-                  initial={{ opacity: 0, y: 16 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.35 }}
-                  className="flex flex-col gap-4"
-                >
-                  {/* Timestamp */}
+                <motion.div key="result"
+                  initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }} transition={{ duration: 0.35 }}
+                  className="flex flex-col gap-4">
+
                   {resultTime && (
                     <div className="flex items-center gap-2 text-[11px] font-mono text-muted-foreground/50">
                       <Clock className="w-3 h-3" />
@@ -792,43 +915,24 @@ export default function Home() {
                     </div>
                   )}
 
-                  {/* Decision */}
                   <DecisionBanner decision={result.decision} />
 
-                  {/* BUY / SELL → Position params */}
                   {result.decision !== 'SEM ENTRADA' && result.entry && (
                     <PositionParamsPanel
-                      entry={result.entry}
-                      stopLoss={result.stopLoss!}
-                      target1={result.target1!}
-                      target2={result.target2!}
-                      riskReward={result.riskReward!}
-                      direction={result.decision}
-                    />
+                      entry={result.entry} stopLoss={result.stopLoss!}
+                      target1={result.target1!} target2={result.target2!}
+                      riskReward={result.riskReward!} direction={result.decision} />
                   )}
 
-                  {/* SEM ENTRADA → Motivos */}
-                  {result.decision === 'SEM ENTRADA' && (
-                    <MotivosSection steps={result.steps} />
-                  )}
+                  {result.decision === 'SEM ENTRADA' && <MotivosSection steps={result.steps} />}
+                  {result.decision === 'SEM ENTRADA' && <OQueFaltaSection steps={result.steps} />}
 
-                  {/* SEM ENTRADA → O que falta */}
-                  {result.decision === 'SEM ENTRADA' && (
-                    <OQueFaltaSection steps={result.steps} />
-                  )}
+                  <SRLevelsPanel support={result.nearestSupport} resistance={result.nearestResistance} />
 
-                  {/* S/R levels */}
-                  <SRLevelsPanel
-                    support={result.nearestSupport}
-                    resistance={result.nearestResistance}
-                  />
-
-                  {/* Steps detail — collapsible */}
+                  {/* Collapsible steps */}
                   <div className="flex flex-col gap-0 border border-border/50 bg-card/30 overflow-hidden">
-                    <button
-                      onClick={() => setStepsExpanded(e => !e)}
-                      className="px-5 py-3 flex items-center gap-2 hover:bg-white/[0.02] transition-colors"
-                    >
+                    <button onClick={() => setStepsExpanded(e => !e)}
+                      className="px-5 py-3 flex items-center gap-2 hover:bg-white/[0.02] transition-colors">
                       <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.2em] flex-1">
                         Motor de Regras · 7 Etapas
                       </span>
@@ -843,16 +947,11 @@ export default function Home() {
                     <AnimatePresence>
                       {stepsExpanded && (
                         <motion.div
-                          initial={{ height: 0, opacity: 0 }}
-                          animate={{ height: 'auto', opacity: 1 }}
-                          exit={{ height: 0, opacity: 0 }}
-                          transition={{ duration: 0.25 }}
-                          className="overflow-hidden border-t border-border/50"
-                        >
+                          initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.25 }}
+                          className="overflow-hidden border-t border-border/50">
                           <div className="divide-y divide-border/30">
-                            {result.steps.map((step, i) => (
-                              <StepRow key={step.number} step={step} index={i} />
-                            ))}
+                            {result.steps.map((step, i) => <StepRow key={step.number} step={step} index={i} />)}
                           </div>
                         </motion.div>
                       )}
@@ -864,7 +963,7 @@ export default function Home() {
             </AnimatePresence>
           </div>
 
-          {/* ── Right column: TradingView Chart ─────────────────────────── */}
+          {/* Right — TradingView Chart */}
           <div className="order-1 lg:order-2 flex flex-col">
             <section className="bg-card/50 backdrop-blur-md border border-border relative overflow-hidden">
               <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-primary/30 to-transparent" />
@@ -878,7 +977,6 @@ export default function Home() {
                   </span>
                   <span className="text-[10px] font-mono text-primary/50 ml-1">· TradingView</span>
                 </div>
-
                 {/* EMA legend */}
                 <div className="hidden sm:flex items-center gap-4">
                   {[
@@ -892,36 +990,28 @@ export default function Home() {
                     </div>
                   ))}
                 </div>
-
                 {/* Timeframe switcher */}
                 <div className="flex items-center gap-1 border border-border/60 p-0.5 bg-background/40">
                   {([ ['5', '5M'], ['15', '15M'], ['60', '1H'] ] as [TVInterval, string][]).map(([val, label]) => (
-                    <button
-                      key={val}
-                      onClick={() => setTvInterval(val)}
+                    <button key={val} onClick={() => setTvInterval(val)}
                       className={`px-3 py-1.5 text-[11px] font-mono uppercase tracking-[0.15em] transition-all duration-200
                         ${tvInterval === val
                           ? 'bg-primary text-primary-foreground shadow-[0_0_8px_var(--color-primary)]'
                           : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
-                        }`}
-                    >
+                        }`}>
                       {label}
                     </button>
                   ))}
                 </div>
               </div>
 
-              {/* Price levels bar — only when BUY or SELL signal */}
+              {/* Price levels bar */}
               {result && result.decision !== 'SEM ENTRADA' && result.entry && (
                 <PriceLevelsBar
-                  entry={result.entry}
-                  stopLoss={result.stopLoss!}
-                  target1={result.target1!}
-                  target2={result.target2!}
-                />
+                  entry={result.entry} stopLoss={result.stopLoss!}
+                  target1={result.target1!} target2={result.target2!} />
               )}
 
-              {/* TradingView widget */}
               <TradingViewChart
                 key={`${tvSymbol}-${tvInterval}`}
                 symbol={tvSymbol}
@@ -932,6 +1022,70 @@ export default function Home() {
           </div>
 
         </div>{/* end two-column grid */}
+
+        {/* ── Demo panels (visible when demo mode is enabled) ──────────────── */}
+        <AnimatePresence>
+          {demoEnabled && (
+            <motion.div
+              initial={{ opacity: 0, y: 24 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{    opacity: 0, y: 12 }}
+              transition={{ duration: 0.4, ease: 'easeOut' }}
+              className="flex flex-col gap-5"
+            >
+              {/* Divider */}
+              <div className="flex items-center gap-4">
+                <div className="flex-1 h-[1px] bg-gradient-to-r from-transparent to-[#00f0ff44]" />
+                <div className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-[0.2em]" style={{ color: '#00f0ff88' }}>
+                  <Bot className="w-3.5 h-3.5" />
+                  Painel Demo
+                </div>
+                <div className="flex-1 h-[1px] bg-gradient-to-l from-transparent to-[#00f0ff44]" />
+              </div>
+
+              {/* Active trade panel */}
+              {demoSession.activeTrade && (
+                <DemoActivePanel
+                  trade={demoSession.activeTrade}
+                  currentPrice={market.price}
+                />
+              )}
+
+              {/* No active trade placeholder */}
+              {!demoSession.activeTrade && (
+                <div className="flex flex-col items-center gap-2 py-8 border border-[#00f0ff]/15 bg-[#00f0ff]/[0.03]">
+                  <Bot className="w-8 h-8 text-[#00f0ff]/20" />
+                  <span className="text-xs font-mono text-[#00f0ff]/40 uppercase tracking-[0.2em]">
+                    {safeLimited
+                      ? 'Novas operações suspensas — limite de risco atingido'
+                      : 'Aguardando sinal 24/7 do motor de regras...'}
+                  </span>
+                  {!safeLimited && (
+                    <span className="text-[10px] font-mono text-muted-foreground/30">
+                      Próxima análise em {demoAutoState.countdown}
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {/* Stats + History in two columns on large screens */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                <DemoStatsPanel
+                  stats={demoSession.dailyStats}
+                  currentBalance={demoSession.balance}
+                  configuredBalance={demoSession.configuredBalance}
+                  onReset={() => resetSession(demoSession.configuredBalance)}
+                  onBalanceChange={b => {
+                    setConfiguredBalance(b);
+                    resetSession(b);
+                  }}
+                />
+                <DemoHistoryPanel history={demoSession.history} />
+              </div>
+
+            </motion.div>
+          )}
+        </AnimatePresence>
 
       </main>
     </div>
