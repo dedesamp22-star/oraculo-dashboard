@@ -8,6 +8,8 @@ import {
   ChevronDown, ChevronUp, Bot, Pause,
 } from 'lucide-react';
 import { useBinanceData }       from '../hooks/useBinanceData';
+import { useMarketRadar }       from '../hooks/useMarketRadar';
+import { useDemoAgents }        from '../hooks/useDemoAgents';
 import { useAutoAnalysis }      from '../hooks/useAutoAnalysis';
 import { useDemoAutoAnalysis }  from '../hooks/useDemoAutoAnalysis';
 import { useDemoTrading }       from '../hooks/useDemoTrading';
@@ -18,6 +20,8 @@ import { TradingViewChart, type TVInterval } from '../components/TradingViewChar
 import { DemoActivePanel }   from '../components/DemoActivePanel';
 import { DemoHistoryPanel }  from '../components/DemoHistoryPanel';
 import { DemoStatsPanel }    from '../components/DemoStatsPanel';
+import { MarketRadarPanel }  from '../components/MarketRadarPanel';
+import { DemoAgentsPanel }   from '../components/DemoAgentsPanel';
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 
@@ -415,6 +419,8 @@ let alertIdCounter = 0;
 
 export default function Home() {
   const market = useBinanceData();
+  const radar = useMarketRadar();
+  const demoAgents = useDemoAgents(radar.analysis);
 
   // Chart controls
   const [selectedPair, setSelectedPair] = useState<string>('BTCUSDT');
@@ -652,6 +658,24 @@ export default function Home() {
         </section>
 
         {/* ── Controls ────────────────────────────────────────────────────── */}
+        <MarketRadarPanel
+          analysis={radar.analysis}
+          loading={radar.loading}
+          error={radar.error}
+          lastUpdate={radar.lastUpdate}
+          symbol={radar.symbol}
+          onSymbolChange={radar.setSymbol}
+        />
+
+        <DemoAgentsPanel
+          agents={demoAgents.agents}
+          configs={demoAgents.configs}
+          portfolio={demoAgents.portfolio}
+          globalRisk={demoAgents.globalRisk}
+          selectedSymbol={radar.symbol}
+          onSelectSymbol={radar.setSymbol}
+        />
+
         <section className="bg-card/50 backdrop-blur-md border border-border p-6 relative overflow-hidden">
           <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-primary/50 to-transparent" />
 

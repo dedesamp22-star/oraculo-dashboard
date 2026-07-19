@@ -31,11 +31,17 @@ node_modules
 /.sass-cache
 /connect.lock
 /coverage
+/backups
+/.deploy
+/.tmp-*.log
+/.tmp-*.err.log
 /libpeerconnection.log
 npm-debug.log
 yarn-error.log
 testem.log
 /typings
+artifacts/api-server/data/
+artifacts/oraculo/test/.tmp/
 
 # System Files
 .DS_Store

@@ -10,16 +10,17 @@ if (!rawPort) {
 }
 
 const port = Number(rawPort);
+const host = process.env["ORACULO_API_HOST"] ?? "0.0.0.0";
 
 if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-app.listen(port, (err) => {
+app.listen({ host, port }, (err) => {
   if (err) {
     logger.error({ err }, "Error listening on port");
     process.exit(1);
   }
 
-  logger.info({ port }, "Server listening");
+  logger.info({ host, port }, "Server listening");
 });

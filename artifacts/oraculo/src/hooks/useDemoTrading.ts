@@ -26,6 +26,15 @@ import {
   todaySP,
   isSafetyLimited,
 } from '../lib/demo';
+import {
+  getAuth,
+  loadServerSession,
+  loginDemoAdmin,
+  migrateLocalSession,
+  persistAccount,
+  persistClosedTrade,
+  persistOpenPosition,
+} from '../lib/demoApi';
 
 // ── Position sizing ───────────────────────────────────────────────────────────
 
@@ -78,14 +87,83 @@ export function useDemoTrading(): DemoTradingState {
     return saved;
   });
 
+  const serverWritableRef = useRef(false);
+  const bootstrappedRef = useRef(false);
+  const previousSessionRef = useRef<DemoSession | null>(null);
+  const sessionRef = useRef(session);
+  useEffect(() => { sessionRef.current = session; }, [session]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function bootstrapServerState() {
+      const local = loadSession();
+      const hasLocalState = !!local && (
+        local.history.length > 0 ||
+        local.activeTrade !== null ||
+        local.balance !== local.configuredBalance ||
+        local.configuredBalance !== 1000
+      );
+
+      try {
+        let authenticated = await getAuth();
+        serverWritableRef.current = authenticated;
+
+        if (!authenticated && hasLocalState) {
+          const password = window.prompt('Senha administrativa para sincronizar o modo demo com o servidor:');
+          if (password) {
+            authenticated = await loginDemoAdmin(password);
+            serverWritableRef.current = authenticated;
+          }
+        }
+
+        if (authenticated && local) {
+          const migrated = await migrateLocalSession(local);
+          if (!cancelled) setSession(migrated);
+          return;
+        }
+
+        if (!hasLocalState) {
+          const remote = await loadServerSession(sessionRef.current);
+          if (!cancelled) setSession(remote);
+        }
+      } catch {
+        // API indisponivel ou login cancelado: mantém fluxo local atual.
+      } finally {
+        bootstrappedRef.current = true;
+      }
+    }
+
+    void bootstrapServerState();
+    return () => { cancelled = true; };
+  }, []);
+
   // Persist on every state change
   useEffect(() => {
     saveSession(session);
-  }, [session]);
+    if (!bootstrappedRef.current || !serverWritableRef.current) {
+      previousSessionRef.current = session;
+      return;
+    }
 
-  // Stable ref so callbacks don't capture stale session
-  const sessionRef = useRef(session);
-  useEffect(() => { sessionRef.current = session; }, [session]);
+    const previous = previousSessionRef.current;
+    previousSessionRef.current = session;
+
+    async function persistRemote() {
+      try {
+        if (previous?.activeTrade && !session.activeTrade) {
+          const closed = session.history.find(t => t.id === previous.activeTrade?.id);
+          if (closed) await persistClosedTrade(closed);
+        } else if (session.activeTrade) {
+          await persistOpenPosition(session.activeTrade);
+        }
+        await persistAccount(session);
+      } catch {
+        // Mantém fallback local se a API ficar indisponível ou a sessão expirar.
+      }
+    }
+
+    void persistRemote();
+  }, [session]);
 
   // ── Day-rollover watchdog ─────────────────────────────────────────────────
 
