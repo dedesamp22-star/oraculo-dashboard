@@ -301,7 +301,7 @@ export function MarketRadarPanel({
       {error && (
         <div className="m-4 mb-0 border border-[#ff4444]/30 bg-[#ff4444]/10 p-2 text-xs font-mono text-[#ff8888] flex items-start gap-2">
           <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-          <span>Erro no Radar: {error}</span>
+          <span className="min-w-0 whitespace-normal break-all">Erro no Radar: {error}</span>
         </div>
       )}
 

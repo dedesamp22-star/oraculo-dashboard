@@ -437,6 +437,8 @@ export default function Home() {
 
   // Steps expand/collapse
   const [stepsExpanded, setStepsExpanded] = useState(false);
+  const [mobileTab, setMobileTab] = useState<'operation' | 'panel'>('operation');
+  const [mobileChartOpen, setMobileChartOpen] = useState(false);
 
   // Alerts
   const [alerts, setAlerts] = useState<AlertMsg[]>([]);
@@ -617,9 +619,9 @@ export default function Home() {
         <section className="bg-card/50 backdrop-blur-md border border-border p-5 relative overflow-hidden">
           <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-primary/30 to-transparent" />
           {market.error ? (
-            <div className="flex items-center gap-3 text-destructive font-mono text-sm">
+            <div className="flex items-center gap-3 text-destructive font-mono text-sm min-w-0">
               <AlertTriangle className="w-5 h-5 flex-shrink-0" />
-              <span>Falha ao conectar com Binance: {market.error}</span>
+              <span className="min-w-0 whitespace-normal break-all">Falha Binance: {market.error}</span>
             </div>
           ) : market.loading ? (
             <div className="flex items-center gap-3 text-muted-foreground font-mono text-sm">
@@ -658,6 +660,26 @@ export default function Home() {
         </section>
 
         {/* ── Controls ────────────────────────────────────────────────────── */}
+        <div className="lg:hidden grid grid-cols-2 gap-2 border border-border/60 bg-card/40 p-1">
+          {([
+            ['operation', 'Operacao'],
+            ['panel', 'Painel'],
+          ] as const).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setMobileTab(key)}
+              className={`py-2.5 text-[11px] font-mono uppercase tracking-[0.18em] transition-all ${
+                mobileTab === key
+                  ? 'bg-primary text-primary-foreground shadow-[0_0_10px_var(--color-primary)]'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div className={`${mobileTab === 'panel' ? 'block' : 'hidden'} lg:block`}>
         <MarketRadarPanel
           analysis={radar.analysis}
           loading={radar.loading}
@@ -666,7 +688,9 @@ export default function Home() {
           symbol={radar.symbol}
           onSymbolChange={radar.setSymbol}
         />
+        </div>
 
+        <div className={`${mobileTab === 'panel' ? 'block' : 'hidden'} lg:block`}>
         <DemoAgentsPanel
           agents={demoAgents.agents}
           configs={demoAgents.configs}
@@ -675,8 +699,9 @@ export default function Home() {
           selectedSymbol={radar.symbol}
           onSelectSymbol={radar.setSymbol}
         />
+        </div>
 
-        <section className="bg-card/50 backdrop-blur-md border border-border p-6 relative overflow-hidden">
+        <section className={`${mobileTab === 'operation' ? 'block' : 'hidden'} lg:block bg-card/50 backdrop-blur-md border border-border p-4 sm:p-6 relative overflow-hidden`}>
           <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-primary/50 to-transparent" />
 
           <div className="flex flex-col gap-5">
@@ -765,7 +790,7 @@ export default function Home() {
                   Simulação 24/7 · Sem ordens reais · Saldo fictício
                 </span>
                 {demoServerError && (
-                  <span className="text-[9px] font-mono text-[#ff4444]/70 mt-0.5">
+                  <span className="text-[9px] font-mono text-[#ff4444]/70 mt-0.5 min-w-0 whitespace-normal break-all">
                     API demo: {demoServerError}
                   </span>
                 )}
@@ -788,7 +813,7 @@ export default function Home() {
               animate={{ opacity: 1, height: 'auto' }}
               exit={{    opacity: 0, height: 0    }}
               transition={{ duration: 0.3, ease: 'easeInOut' }}
-              className="overflow-hidden"
+              className={`${mobileTab === 'operation' ? 'block' : 'hidden'} lg:block overflow-hidden`}
             >
               {!autoState.isOperational ? (
                 <div className="bg-card/40 border border-border/50 p-5 relative overflow-hidden">
@@ -855,7 +880,7 @@ export default function Home() {
               animate={{ opacity: 1, height: 'auto' }}
               exit={{    opacity: 0, height: 0    }}
               transition={{ duration: 0.3 }}
-              className="overflow-hidden"
+              className={`${mobileTab === 'operation' ? 'block' : 'hidden'} lg:block overflow-hidden`}
             >
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div className="bg-card/40 border p-4 flex flex-col gap-2 relative overflow-hidden col-span-2 sm:col-span-1"
@@ -900,7 +925,7 @@ export default function Home() {
         </AnimatePresence>
 
         {/* ── Two-column grid: analysis (left) + chart (right) ────────────── */}
-        <div className="grid grid-cols-1 lg:grid-cols-[5fr_7fr] gap-5 items-start">
+        <div className={`${mobileTab === 'operation' ? 'grid' : 'hidden'} lg:grid grid-cols-1 lg:grid-cols-[5fr_7fr] gap-5 items-start`}>
 
           {/* Left — Analysis panel */}
           <div className="order-2 lg:order-1 flex flex-col gap-4">
@@ -994,7 +1019,20 @@ export default function Home() {
 
           {/* Right — TradingView Chart */}
           <div className="order-1 lg:order-2 flex flex-col">
-            <section className="bg-card/50 backdrop-blur-md border border-border relative overflow-hidden">
+            <button
+              onClick={() => setMobileChartOpen(open => !open)}
+              className="lg:hidden mb-3 flex items-center justify-between border border-border/60 bg-card/40 px-4 py-3"
+            >
+              <span className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-[0.18em] text-muted-foreground">
+                <BarChart2 className="w-3.5 h-3.5 text-primary" />
+                Grafico
+              </span>
+              {mobileChartOpen
+                ? <ChevronUp className="w-4 h-4 text-muted-foreground/60" />
+                : <ChevronDown className="w-4 h-4 text-muted-foreground/60" />
+              }
+            </button>
+            <section className={`${mobileChartOpen ? 'block' : 'hidden'} lg:block bg-card/50 backdrop-blur-md border border-border relative overflow-hidden`}>
               <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-primary/30 to-transparent" />
 
               {/* Chart header */}
@@ -1072,6 +1110,7 @@ export default function Home() {
                 <div className="flex-1 h-[1px] bg-gradient-to-l from-transparent to-[#00f0ff44]" />
               </div>
 
+              <div className={`${mobileTab === 'operation' ? 'block' : 'hidden'} lg:block`}>
               {/* Active trade panel */}
               {demoSession.activeTrade && (
                 <DemoActivePanel
@@ -1096,9 +1135,10 @@ export default function Home() {
                   )}
                 </div>
               )}
+              </div>
 
               {/* Stats + History in two columns on large screens */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+              <div className={`${mobileTab === 'panel' ? 'grid' : 'hidden'} lg:grid grid-cols-1 lg:grid-cols-2 gap-5`}>
                 <DemoStatsPanel
                   stats={demoSession.dailyStats}
                   currentBalance={demoSession.balance}
