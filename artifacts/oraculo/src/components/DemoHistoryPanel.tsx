@@ -12,6 +12,10 @@ const EXIT_LABELS: Record<string, string> = {
   BREAKEVEN: 'Breakeven',
   TARGET_1:  'Alvo 1',
   TARGET_2:  'Alvo 2',
+  TIME_EXIT: 'Tempo máximo',
+  TRAILING_STOP: 'Trailing stop',
+  LOSS_OF_STRENGTH: 'Perda de força',
+  SESSION_END: 'Fim do horário',
 };
 
 const STATUS_CFG = {

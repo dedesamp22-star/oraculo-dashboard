@@ -30,7 +30,10 @@ function handle(res: Response, fn: () => unknown): void {
       res.status(err.status).json({ error: err.message });
       return;
     }
-    res.status(500).json({ error: "Internal server error" });
+    res.status(500).json({
+      error: "Internal server error",
+      ...(process.env["NODE_ENV"] === "production" ? {} : { detail: err instanceof Error ? err.message : String(err) }),
+    });
   }
 }
 

@@ -29,11 +29,14 @@ export function DemoActivePanel({ trade, currentPrice }: Props) {
   const dirLabel = isBuy ? 'COMPRA' : 'VENDA';
   const DirIcon  = isBuy ? TrendingUp : TrendingDown;
 
-  // Unrealized P&L
+  const remainingSize = trade.remainingPositionSize ?? trade.positionSize;
+  const realizedPnl = trade.realizedPnlUSDC ?? 0;
+
+  // Unrealized P&L uses only the remaining quantity after real partials.
   const unrealized = currentPrice !== null
     ? (isBuy
-        ? (currentPrice - trade.entry) * trade.positionSize
-        : (trade.entry - currentPrice) * trade.positionSize)
+        ? (currentPrice - trade.entry) * remainingSize
+        : (trade.entry - currentPrice) * remainingSize)
     : null;
   const unrealizedPct = unrealized !== null ? (unrealized / trade.balanceAtOpen) * 100 : null;
 
@@ -108,8 +111,8 @@ export function DemoActivePanel({ trade, currentPrice }: Props) {
 
         {/* Position size */}
         <Cell
-          label="Tamanho da Posição"
-          value={`${trade.positionSize.toFixed(6)} ${trade.pair.replace('USDT','').replace('USDC','')}`}
+          label="Quantidade Restante"
+          value={`${remainingSize.toFixed(6)} ${trade.pair.replace('USDT','').replace('USDC','')}`}
           accent="#cccccc"
           icon={<BarChart2 className="w-3 h-3" />}
         />
@@ -121,6 +124,13 @@ export function DemoActivePanel({ trade, currentPrice }: Props) {
           accent="#ffaa00"
           icon={<DollarSign className="w-3 h-3" />}
           note="1% do saldo"
+        />
+
+        {/* Realized P&L */}
+        <Cell
+          label="P&L Realizado"
+          value={fmtSign(realizedPnl)}
+          accent={realizedPnl >= 0 ? '#00ff66' : '#ff4444'}
         />
 
         {/* Unrealized P&L */}
@@ -165,3 +175,4 @@ function Cell({
     </div>
   );
 }
+

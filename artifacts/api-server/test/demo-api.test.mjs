@@ -22,6 +22,7 @@ function sampleTrade(overrides = {}) {
     balanceAtOpen: 1000,
     riskAmount: 10,
     positionSize: 2,
+    remainingPositionSize: 2,
     riskReward: "1:2",
     status: "OPEN",
     target1Hit: false,
@@ -289,7 +290,9 @@ test("server session is authoritative and demo signal/price events are idempoten
     }
     const afterTarget1 = await json(await fetch(`${server.base}/api/demo/session`));
     assert.equal(afterTarget1.activeTrade.target1Hit, true);
-    assert.equal(afterTarget1.activeTrade.stopLoss, 100);
+    assert.ok(afterTarget1.activeTrade.stopLoss >= 100.02);
+    assert.equal(afterTarget1.activeTrade.remainingPositionSize, 1);
+    assert.equal(afterTarget1.activeTrade.realizedPnlUSDC, 5);
     assert.equal(afterTarget1.history.length, 0);
 
     await Promise.all([
@@ -309,7 +312,7 @@ test("server session is authoritative and demo signal/price events are idempoten
     assert.equal(finalSession.activeTrade, null);
     assert.equal(finalSession.history.filter((item) => item.id === sessionA.activeTrade.id).length, 1);
     assert.equal(finalSession.dailyStats.wins, 1);
-    assert.equal(finalSession.dailyStats.dailyPnL, 20);
+    assert.equal(finalSession.dailyStats.dailyPnL, 15);
 
     await stopServer(server.child);
     const restarted = await startServer({ port, dbPath });
@@ -320,6 +323,41 @@ test("server session is authoritative and demo signal/price events are idempoten
     } finally {
       await stopServer(restarted.child);
     }
+  } finally {
+    await stopServer(server.child);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("operation management realizes partial and closes stale scalps by max duration", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "oraculo-demo-management-"));
+  const dbPath = path.join(dir, "oraculo.sqlite");
+  const port = 5126;
+  const server = await startServer({ port, dbPath });
+  try {
+    const cookie = await login(server.base);
+    const oldTrade = sampleTrade({
+      id: "timeout_1",
+      openTime: Date.now() - 91 * 60 * 1000,
+      maxDurationMs: 90 * 60 * 1000,
+    });
+    const opened = await fetch(`${server.base}/api/demo/positions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify(oldTrade),
+    });
+    assert.equal(opened.status, 200);
+
+    const updated = await fetch(`${server.base}/api/demo/price`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({ pair: "BTCUSDT", price: 101 }),
+    });
+    assert.equal(updated.status, 200);
+    const session = await json(updated);
+    assert.equal(session.activeTrade, null);
+    assert.equal(session.history[0].exitReason, "TIME_EXIT");
+    assert.equal(session.history[0].pnlUSDC, 2);
   } finally {
     await stopServer(server.child);
     rmSync(dir, { recursive: true, force: true });

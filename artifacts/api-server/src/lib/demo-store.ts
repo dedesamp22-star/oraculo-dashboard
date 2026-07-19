@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 export type TradeDirection = "BUY" | "SELL";
 export type TradeStatus = "OPEN" | "WIN" | "LOSS" | "BREAKEVEN";
 export type TradeExitReason = "STOP_LOSS" | "BREAKEVEN" | "TARGET_1" | "TARGET_2";
+export type ManagedTradeExitReason = TradeExitReason | "TIME_EXIT" | "TRAILING_STOP" | "LOSS_OF_STRENGTH" | "SESSION_END";
 export type DemoDecision = "BUY" | "SELL" | "SEM ENTRADA";
 
 export interface DailyStats {
@@ -37,14 +38,19 @@ export interface DemoTrade {
   balanceAtOpen: number;
   riskAmount: number;
   positionSize: number;
+  remainingPositionSize: number;
   riskReward: string;
   status: TradeStatus;
   target1Hit: boolean;
   isBreakevenStop: boolean;
   closePrice?: number;
-  exitReason?: TradeExitReason;
+  exitReason?: ManagedTradeExitReason;
   pnlUSDC?: number;
   pnlPct?: number;
+  realizedPnlUSDC?: number;
+  partialPnlUSDC?: number;
+  target1ClosePrice?: number;
+  maxDurationMs?: number;
   signalReasons: string[];
   marketConditions: string;
 }
@@ -79,6 +85,10 @@ const DEFAULT_BALANCE = 1000;
 const MAX_PRICE = 1_000_000_000;
 const MAX_BALANCE = 1_000_000_000;
 const MAX_POSITION_SIZE = 1_000_000_000;
+const DEFAULT_MAX_DURATION_MS = 90 * 60 * 1000;
+const DEFAULT_BREAKEVEN_BUFFER_PCT = 0.0002;
+const DEFAULT_TRAILING_STOP_PCT = 0.002;
+const DEFAULT_LOSS_OF_STRENGTH_PCT = 0.004;
 
 function todaySP(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
@@ -205,12 +215,17 @@ function tradeFromRow(row: Record<string, unknown>): DemoTrade {
     balanceAtOpen: Number(row.balance_at_open),
     riskAmount: Number(row.risk_amount),
     positionSize: Number(row.position_size),
+    remainingPositionSize: row.remaining_position_size == null ? Number(row.position_size) : Number(row.remaining_position_size),
     riskReward: String(row.risk_reward),
     pnlUSDC: row.pnl_usdc == null ? undefined : Number(row.pnl_usdc),
     pnlPct: row.pnl_pct == null ? undefined : Number(row.pnl_pct),
-    exitReason: row.exit_reason == null ? undefined : String(row.exit_reason) as TradeExitReason,
+    exitReason: row.exit_reason == null ? undefined : String(row.exit_reason) as ManagedTradeExitReason,
     target1Hit: Boolean(row.target1_hit),
     isBreakevenStop: Boolean(row.is_breakeven_stop),
+    realizedPnlUSDC: row.realized_pnl_usdc == null ? undefined : Number(row.realized_pnl_usdc),
+    partialPnlUSDC: row.partial_pnl_usdc == null ? undefined : Number(row.partial_pnl_usdc),
+    target1ClosePrice: row.target1_close_price == null ? undefined : Number(row.target1_close_price),
+    maxDurationMs: row.max_duration_ms == null ? undefined : Number(row.max_duration_ms),
     signalReasons: jsonParse(String(row.signal_reasons_json), []),
     marketConditions: String(row.market_conditions),
   };
@@ -268,9 +283,14 @@ export class DemoStore {
             balance_at_open REAL NOT NULL,
             risk_amount REAL NOT NULL,
             position_size REAL NOT NULL,
+            remaining_position_size REAL NOT NULL,
             risk_reward TEXT NOT NULL,
             target1_hit INTEGER NOT NULL DEFAULT 0,
             is_breakeven_stop INTEGER NOT NULL DEFAULT 0,
+            realized_pnl_usdc REAL NOT NULL DEFAULT 0,
+            partial_pnl_usdc REAL NOT NULL DEFAULT 0,
+            target1_close_price REAL,
+            max_duration_ms INTEGER NOT NULL DEFAULT 5400000,
             signal_reasons_json TEXT NOT NULL,
             market_conditions TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -293,9 +313,14 @@ export class DemoStore {
             balance_at_open REAL NOT NULL,
             risk_amount REAL NOT NULL,
             position_size REAL NOT NULL,
+            remaining_position_size REAL NOT NULL,
             risk_reward TEXT NOT NULL,
             pnl_usdc REAL,
             pnl_pct REAL,
+            realized_pnl_usdc REAL,
+            partial_pnl_usdc REAL,
+            target1_close_price REAL,
+            max_duration_ms INTEGER,
             exit_reason TEXT,
             target1_hit INTEGER NOT NULL DEFAULT 0,
             is_breakeven_stop INTEGER NOT NULL DEFAULT 0,
@@ -332,6 +357,30 @@ export class DemoStore {
           );
         `);
         this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (2, 'demo_idempotency_events', ?)").run(nowIso());
+      });
+    }
+    const v3 = this.db.prepare("SELECT version FROM schema_migrations WHERE version = 3").get();
+    if (!v3) {
+      this.transaction(() => {
+        const addColumn = (table: string, definition: string) => {
+          const column = definition.split(/\s+/)[0];
+          const exists = (this.db.prepare(`PRAGMA table_info(${table})`).all() as Record<string, unknown>[])
+            .some((row) => row.name === column);
+          if (!exists) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+        };
+        addColumn("demo_positions", "remaining_position_size REAL NOT NULL DEFAULT 0");
+        addColumn("demo_positions", "realized_pnl_usdc REAL NOT NULL DEFAULT 0");
+        addColumn("demo_positions", "partial_pnl_usdc REAL NOT NULL DEFAULT 0");
+        addColumn("demo_positions", "target1_close_price REAL");
+        addColumn("demo_positions", "max_duration_ms INTEGER NOT NULL DEFAULT 5400000");
+        addColumn("demo_trades", "remaining_position_size REAL NOT NULL DEFAULT 0");
+        addColumn("demo_trades", "realized_pnl_usdc REAL");
+        addColumn("demo_trades", "partial_pnl_usdc REAL");
+        addColumn("demo_trades", "target1_close_price REAL");
+        addColumn("demo_trades", "max_duration_ms INTEGER");
+        this.db.prepare("UPDATE demo_positions SET remaining_position_size = position_size WHERE remaining_position_size = 0").run();
+        this.db.prepare("UPDATE demo_trades SET remaining_position_size = position_size WHERE remaining_position_size = 0").run();
+        this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (3, 'demo_trade_management_fields', ?)").run(nowIso());
       });
     }
   }
@@ -378,6 +427,16 @@ export class DemoStore {
 
   getAutomation() {
     return this.getSetting("demo.automation", { enabled: false, symbol: "BTCUSDT" });
+  }
+
+  tradeManagementSettings() {
+    return this.getSetting("demo.tradeManagement", {
+      maxDurationMs: DEFAULT_MAX_DURATION_MS,
+      breakevenBufferPct: DEFAULT_BREAKEVEN_BUFFER_PCT,
+      trailingStopPct: DEFAULT_TRAILING_STOP_PCT,
+      lossOfStrengthPct: DEFAULT_LOSS_OF_STRENGTH_PCT,
+      closeAtOperationalEnd: false,
+    });
   }
 
   setAutomation(body: unknown) {
@@ -440,10 +499,15 @@ export class DemoStore {
       balanceAtOpen: finiteNumber(input.balanceAtOpen, "balanceAtOpen", 0, MAX_BALANCE),
       riskAmount: finiteNumber(input.riskAmount, "riskAmount", 0, MAX_BALANCE),
       positionSize: finiteNumber(input.positionSize, "positionSize", 0, MAX_POSITION_SIZE),
+      remainingPositionSize: finiteNumber(input.remainingPositionSize ?? input.positionSize, "remainingPositionSize", 0, MAX_POSITION_SIZE),
       riskReward: nonEmptyString(input.riskReward, "riskReward", 32),
       status: "OPEN",
       target1Hit: bool(input.target1Hit),
       isBreakevenStop: bool(input.isBreakevenStop),
+      realizedPnlUSDC: finiteNumber(input.realizedPnlUSDC ?? 0, "realizedPnlUSDC", -MAX_BALANCE, MAX_BALANCE),
+      partialPnlUSDC: finiteNumber(input.partialPnlUSDC ?? 0, "partialPnlUSDC", -MAX_BALANCE, MAX_BALANCE),
+      target1ClosePrice: input.target1ClosePrice === undefined ? undefined : finiteNumber(input.target1ClosePrice, "target1ClosePrice", 0.00000001, MAX_PRICE),
+      maxDurationMs: finiteNumber(input.maxDurationMs ?? DEFAULT_MAX_DURATION_MS, "maxDurationMs", 60_000, 24 * 60 * 60 * 1000),
       signalReasons: stringArray(input.signalReasons ?? [], "signalReasons"),
       marketConditions: nonEmptyString(input.marketConditions, "marketConditions", 5000),
     };
@@ -456,13 +520,15 @@ export class DemoStore {
       this.db.prepare(`
         INSERT INTO demo_positions
           (id, pair, direction, status, open_time, entry, stop_loss, stop_loss_original, target1, target2,
-           balance_at_open, risk_amount, position_size, risk_reward, target1_hit, is_breakeven_stop,
+           balance_at_open, risk_amount, position_size, remaining_position_size, risk_reward, target1_hit, is_breakeven_stop,
+           realized_pnl_usdc, partial_pnl_usdc, target1_close_price, max_duration_ms,
            signal_reasons_json, market_conditions, updated_at)
-        VALUES (?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         position.id, position.pair, position.direction, position.openTime, position.entry, position.stopLoss,
         position.stopLossOriginal, position.target1, position.target2, position.balanceAtOpen, position.riskAmount,
-        position.positionSize, position.riskReward, Number(position.target1Hit), Number(position.isBreakevenStop),
+        position.positionSize, position.remainingPositionSize, position.riskReward, Number(position.target1Hit), Number(position.isBreakevenStop),
+        position.realizedPnlUSDC ?? 0, position.partialPnlUSDC ?? 0, position.target1ClosePrice ?? null, position.maxDurationMs ?? DEFAULT_MAX_DURATION_MS,
         JSON.stringify(position.signalReasons), position.marketConditions, now,
       );
     } catch (err) {
@@ -512,10 +578,14 @@ export class DemoStore {
         balanceAtOpen: account.balance,
         riskAmount,
         positionSize,
+        remainingPositionSize: positionSize,
         riskReward: input.riskReward ?? "-",
         status: "OPEN",
         target1Hit: false,
         isBreakevenStop: false,
+        realizedPnlUSDC: 0,
+        partialPnlUSDC: 0,
+        maxDurationMs: this.tradeManagementSettings().maxDurationMs,
         signalReasons,
         marketConditions: signalReasons.join(" | "),
       };
@@ -547,8 +617,8 @@ export class DemoStore {
       const input = body as Record<string, unknown>;
       if (input.status && input.status !== "OPEN") {
         const closePrice = finiteNumber(input.closePrice, "closePrice", 0.00000001, MAX_PRICE);
-        const reason = nonEmptyString(input.exitReason, "exitReason") as TradeExitReason;
-        if (!["STOP_LOSS", "BREAKEVEN", "TARGET_1", "TARGET_2"].includes(reason)) throw new HttpError(400, "invalid exitReason");
+        const reason = nonEmptyString(input.exitReason, "exitReason") as ManagedTradeExitReason;
+        if (!["STOP_LOSS", "BREAKEVEN", "TARGET_1", "TARGET_2", "TIME_EXIT", "TRAILING_STOP", "LOSS_OF_STRENGTH", "SESSION_END"].includes(reason)) throw new HttpError(400, "invalid exitReason");
         return this.closePosition(current, closePrice, reason);
       }
 
@@ -574,6 +644,13 @@ export class DemoStore {
 
   private applyPriceToPosition(trade: DemoTrade, price: number): void {
     const isBuy = trade.direction === "BUY";
+    const settings = this.tradeManagementSettings();
+    if (Date.now() - trade.openTime >= (trade.maxDurationMs ?? settings.maxDurationMs)) {
+      const key = `close:${trade.id}:TIME_EXIT`;
+      if (this.recordEvent(key, "close", trade.id)) this.closePosition(trade, price, "TIME_EXIT");
+      return;
+    }
+
     if (isBuy ? price >= trade.target2 : price <= trade.target2) {
       const key = `close:${trade.id}:TARGET_2`;
       if (this.recordEvent(key, "close", trade.id)) this.closePosition(trade, trade.target2, "TARGET_2");
@@ -584,32 +661,104 @@ export class DemoStore {
     if (!trade.target1Hit && (isBuy ? price >= trade.target1 : price <= trade.target1)) {
       const key = `target1:${trade.id}`;
       if (this.recordEvent(key, "target1", trade.id)) {
-        current = { ...trade, target1Hit: true, stopLoss: trade.entry, isBreakevenStop: true };
-        this.db.prepare(`
-          UPDATE demo_positions
-          SET stop_loss = ?, target1_hit = 1, is_breakeven_stop = 1, updated_at = ?
-          WHERE id = ? AND status = 'OPEN'
-        `).run(current.stopLoss, nowIso(), current.id);
+        current = this.realizeTarget1(trade, settings.breakevenBufferPct);
+      }
+    }
+
+    if (current.target1Hit) {
+      current = this.updateTrailingStop(current, price, settings.trailingStopPct);
+      if (this.lossOfStrengthReached(current, price, settings.lossOfStrengthPct)) {
+        const key = `close:${current.id}:LOSS_OF_STRENGTH`;
+        if (this.recordEvent(key, "close", current.id)) this.closePosition(current, price, "LOSS_OF_STRENGTH");
+        return;
       }
     }
 
     if (isBuy ? price <= current.stopLoss : price >= current.stopLoss) {
-      const reason: TradeExitReason = current.isBreakevenStop ? "BREAKEVEN" : "STOP_LOSS";
+      const reason: ManagedTradeExitReason = current.isBreakevenStop ? "BREAKEVEN" : "STOP_LOSS";
       const key = `close:${current.id}:${reason}`;
       if (this.recordEvent(key, "close", current.id)) this.closePosition(current, current.stopLoss, reason);
     }
   }
 
-  private closePosition(position: DemoTrade, closePrice: number, exitReason: TradeExitReason) {
-    const pnlUSDC = position.direction === "BUY"
-      ? (closePrice - position.entry) * position.positionSize
-      : (position.entry - closePrice) * position.positionSize;
+  private realizeTarget1(trade: DemoTrade, bufferPct: number): DemoTrade {
+    const closedSize = trade.positionSize * 0.5;
+    const remainingPositionSize = Math.max(0, trade.positionSize - closedSize);
+    const partialPnlUSDC = trade.direction === "BUY"
+      ? (trade.target1 - trade.entry) * closedSize
+      : (trade.entry - trade.target1) * closedSize;
+    const stopLoss = trade.direction === "BUY"
+      ? trade.entry * (1 + bufferPct)
+      : trade.entry * (1 - bufferPct);
+    const realizedPnlUSDC = (trade.realizedPnlUSDC ?? 0) + partialPnlUSDC;
+    const next = {
+      ...trade,
+      target1Hit: true,
+      stopLoss,
+      isBreakevenStop: true,
+      remainingPositionSize,
+      realizedPnlUSDC,
+      partialPnlUSDC,
+      target1ClosePrice: trade.target1,
+    };
+    this.db.prepare(`
+      UPDATE demo_positions
+      SET stop_loss = ?, target1_hit = 1, is_breakeven_stop = 1,
+          remaining_position_size = ?, realized_pnl_usdc = ?, partial_pnl_usdc = ?,
+          target1_close_price = ?, updated_at = ?
+      WHERE id = ? AND status = 'OPEN'
+    `).run(stopLoss, remainingPositionSize, realizedPnlUSDC, partialPnlUSDC, trade.target1, nowIso(), trade.id);
+
+    const account = this.getAccount();
+    const stats = { ...account.dailyStats };
+    stats.dailyPnL += partialPnlUSDC;
+    const newBalance = account.balance + partialPnlUSDC;
+    stats.peakBalance = Math.max(stats.peakBalance, newBalance);
+    stats.maxDrawdown = Math.max(stats.maxDrawdown, stats.peakBalance - newBalance);
+    stats.safetyLimited = isSafetyLimited(stats);
+    this.putAccount({ balance: newBalance, configuredBalance: account.configuredBalance, dailyStats: stats });
+    return next;
+  }
+
+  private updateTrailingStop(trade: DemoTrade, price: number, trailingPct: number): DemoTrade {
+    if (!Number.isFinite(trailingPct) || trailingPct <= 0) return trade;
+    const nextStop = trade.direction === "BUY"
+      ? Math.max(trade.stopLoss, price * (1 - trailingPct))
+      : Math.min(trade.stopLoss, price * (1 + trailingPct));
+    if (nextStop === trade.stopLoss) return trade;
+    this.db.prepare("UPDATE demo_positions SET stop_loss = ?, updated_at = ? WHERE id = ? AND status = 'OPEN'")
+      .run(nextStop, nowIso(), trade.id);
+    return { ...trade, stopLoss: nextStop };
+  }
+
+  private lossOfStrengthReached(trade: DemoTrade, price: number, thresholdPct: number): boolean {
+    if (!trade.target1Hit || !Number.isFinite(thresholdPct) || thresholdPct <= 0) return false;
+    return trade.direction === "BUY"
+      ? price <= trade.target1 * (1 - thresholdPct)
+      : price >= trade.target1 * (1 + thresholdPct);
+  }
+
+  private closePosition(position: DemoTrade, closePrice: number, exitReason: ManagedTradeExitReason) {
+    const remainingSize = position.remainingPositionSize ?? position.positionSize;
+    const remainingPnl = position.direction === "BUY"
+      ? (closePrice - position.entry) * remainingSize
+      : (position.entry - closePrice) * remainingSize;
+    const realizedBeforeClose = position.realizedPnlUSDC ?? 0;
+    const pnlUSDC = realizedBeforeClose + remainingPnl;
     const pnlPct = position.balanceAtOpen > 0 ? (pnlUSDC / position.balanceAtOpen) * 100 : 0;
-    const status: TradeStatus = exitReason === "TARGET_1" || exitReason === "TARGET_2"
-      ? "WIN"
-      : exitReason === "BREAKEVEN" ? "BREAKEVEN" : "LOSS";
+    const status: TradeStatus = pnlUSDC > 0.00000001 ? "WIN" : pnlUSDC < -0.00000001 ? "LOSS" : "BREAKEVEN";
     const closeTime = Date.now();
-    const closed: DemoTrade = { ...position, status, closeTime, closePrice, exitReason, pnlUSDC, pnlPct };
+    const closed: DemoTrade = {
+      ...position,
+      status,
+      closeTime,
+      closePrice,
+      exitReason,
+      remainingPositionSize: 0,
+      realizedPnlUSDC: pnlUSDC,
+      pnlUSDC,
+      pnlPct,
+    };
     this.upsertTrade(closed);
     this.db.prepare("DELETE FROM demo_positions WHERE id = ?").run(position.id);
     const account = this.getAccount();
@@ -620,8 +769,8 @@ export class DemoStore {
     stats.breakevens += status === "BREAKEVEN" ? 1 : 0;
     stats.consecutiveLosses = status === "LOSS" ? stats.consecutiveLosses + 1 : 0;
     stats.maxConsecutiveLosses = Math.max(stats.maxConsecutiveLosses, stats.consecutiveLosses);
-    stats.dailyPnL += pnlUSDC;
-    const newBalance = account.balance + pnlUSDC;
+    stats.dailyPnL += remainingPnl;
+    const newBalance = account.balance + remainingPnl;
     stats.peakBalance = Math.max(stats.peakBalance, newBalance);
     stats.maxDrawdown = Math.max(stats.maxDrawdown, stats.peakBalance - newBalance);
     stats.safetyLimited = stats.totalTrades >= 8 || stats.consecutiveLosses >= 3 || stats.dailyPnL <= -(stats.startOfDayBalance * 0.03);
@@ -640,7 +789,7 @@ export class DemoStore {
       status,
       closeTime: input.closeTime === undefined ? undefined : finiteNumber(input.closeTime, "closeTime", 1),
       closePrice,
-      exitReason: input.exitReason as TradeExitReason | undefined,
+      exitReason: input.exitReason as ManagedTradeExitReason | undefined,
       pnlUSDC: closePrice === undefined ? undefined : (trade.direction === "BUY" ? (closePrice - trade.entry) : (trade.entry - closePrice)) * trade.positionSize,
       pnlPct: undefined,
     };
@@ -654,19 +803,25 @@ export class DemoStore {
     this.db.prepare(`
       INSERT INTO demo_trades
         (id, pair, direction, status, open_time, close_time, entry, close_price, stop_loss, stop_loss_original,
-         target1, target2, balance_at_open, risk_amount, position_size, risk_reward, pnl_usdc, pnl_pct,
+         target1, target2, balance_at_open, risk_amount, position_size, remaining_position_size, risk_reward, pnl_usdc, pnl_pct,
+         realized_pnl_usdc, partial_pnl_usdc, target1_close_price, max_duration_ms,
          exit_reason, target1_hit, is_breakeven_stop, signal_reasons_json, market_conditions, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         status = excluded.status, close_time = excluded.close_time, close_price = excluded.close_price,
         pnl_usdc = excluded.pnl_usdc, pnl_pct = excluded.pnl_pct, exit_reason = excluded.exit_reason,
+        remaining_position_size = excluded.remaining_position_size,
+        realized_pnl_usdc = excluded.realized_pnl_usdc, partial_pnl_usdc = excluded.partial_pnl_usdc,
+        target1_close_price = excluded.target1_close_price, max_duration_ms = excluded.max_duration_ms,
         stop_loss = excluded.stop_loss, target1_hit = excluded.target1_hit,
         is_breakeven_stop = excluded.is_breakeven_stop, updated_at = excluded.updated_at
     `).run(
       trade.id, trade.pair, trade.direction, trade.status, trade.openTime, trade.closeTime ?? null,
       trade.entry, trade.closePrice ?? null, trade.stopLoss, trade.stopLossOriginal, trade.target1, trade.target2,
-      trade.balanceAtOpen, trade.riskAmount, trade.positionSize, trade.riskReward, trade.pnlUSDC ?? null,
-      trade.pnlPct ?? null, trade.exitReason ?? null, Number(trade.target1Hit), Number(trade.isBreakevenStop),
+      trade.balanceAtOpen, trade.riskAmount, trade.positionSize, trade.remainingPositionSize ?? trade.positionSize,
+      trade.riskReward, trade.pnlUSDC ?? null, trade.pnlPct ?? null,
+      trade.realizedPnlUSDC ?? null, trade.partialPnlUSDC ?? null, trade.target1ClosePrice ?? null, trade.maxDurationMs ?? null,
+      trade.exitReason ?? null, Number(trade.target1Hit), Number(trade.isBreakevenStop),
       JSON.stringify(trade.signalReasons), trade.marketConditions, now, now,
     );
   }
