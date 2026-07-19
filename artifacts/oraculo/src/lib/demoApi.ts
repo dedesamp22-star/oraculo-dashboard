@@ -1,4 +1,5 @@
 import type { DemoSession, DemoTrade } from './demo';
+import type { EngineResult } from './analysis';
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(`${import.meta.env.BASE_URL}${path.replace(/^\//, '')}`, {
@@ -26,19 +27,8 @@ export async function loginDemoAdmin(password: string): Promise<boolean> {
   return data.authenticated;
 }
 
-export async function loadServerSession(fallback: DemoSession): Promise<DemoSession> {
-  const [account, positions, trades] = await Promise.all([
-    request<{ balance: number; configuredBalance: number; dailyStats: DemoSession['dailyStats'] }>('/api/demo/account'),
-    request<DemoTrade[]>('/api/demo/positions'),
-    request<DemoTrade[]>('/api/demo/trades'),
-  ]);
-  return {
-    balance: account.balance,
-    configuredBalance: account.configuredBalance,
-    dailyStats: account.dailyStats,
-    activeTrade: positions[0] ?? null,
-    history: trades.length > 0 ? trades : fallback.history,
-  };
+export async function loadServerSession(): Promise<DemoSession> {
+  return await request<DemoSession>('/api/demo/session');
 }
 
 export async function migrateLocalSession(session: DemoSession): Promise<DemoSession> {
@@ -67,6 +57,48 @@ export async function persistAccount(session: DemoSession): Promise<void> {
       configuredBalance: session.configuredBalance,
       dailyStats: session.dailyStats,
     }),
+  });
+}
+
+export async function resetServerSession(configuredBalance: number): Promise<DemoSession> {
+  return await request<DemoSession>('/api/demo/reset', {
+    method: 'POST',
+    body: JSON.stringify({ configuredBalance }),
+  });
+}
+
+export async function getDemoAutomation(): Promise<{ enabled: boolean; symbol: string }> {
+  return await request<{ enabled: boolean; symbol: string }>('/api/demo/automation');
+}
+
+export async function setDemoAutomation(enabled: boolean, symbol: string): Promise<{ enabled: boolean; symbol: string }> {
+  return await request<{ enabled: boolean; symbol: string }>('/api/demo/automation', {
+    method: 'PUT',
+    body: JSON.stringify({ enabled, symbol }),
+  });
+}
+
+export async function submitDemoSignal(result: EngineResult, pair: string): Promise<DemoSession> {
+  return await request<DemoSession>('/api/demo/signal', {
+    method: 'POST',
+    body: JSON.stringify({
+      pair,
+      decision: result.decision,
+      entryNum: result.entryNum,
+      stopLossNum: result.stopLossNum,
+      target1Num: result.target1Num,
+      target2Num: result.target2Num,
+      riskReward: result.riskReward,
+      signalKey: `${pair}:${result.decision}:${result.entryNum}:${result.stopLossNum}:${result.target1Num}:${result.target2Num}`,
+      steps: result.steps,
+    }),
+  });
+}
+
+export async function submitDemoPrice(price: number, pair?: string): Promise<DemoSession> {
+  return await request<DemoSession>('/api/demo/price', {
+    method: 'POST',
+    body: JSON.stringify({ price, pair }),
   });
 }
 

@@ -1,9 +1,9 @@
 import { Router, type IRouter, type RequestHandler, type Response } from "express";
-import { DemoStore, HttpError, verifySessionCookie } from "../lib/demo-store";
+import { HttpError, verifySessionCookie } from "../lib/demo-store";
+import { demoStore as store } from "../lib/demo-store-instance";
 import { requiresHttpsError } from "./auth";
 
 const router: IRouter = Router();
-const store = new DemoStore();
 
 function cookieValue(header: string | undefined, name: string): string | undefined {
   return header?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`))?.slice(name.length + 1);
@@ -36,10 +36,16 @@ function handle(res: Response, fn: () => unknown): void {
 
 router.get("/demo/account", (_req, res) => handle(res, () => store.getAccount()));
 router.put("/demo/account", requireAuth, (req, res) => handle(res, () => store.putAccount(req.body)));
+router.get("/demo/session", (_req, res) => handle(res, () => store.getSession()));
+router.post("/demo/reset", requireAuth, (req, res) => handle(res, () => store.resetSession(req.body)));
+router.get("/demo/automation", (_req, res) => handle(res, () => store.getAutomation()));
+router.put("/demo/automation", requireAuth, (req, res) => handle(res, () => store.setAutomation(req.body)));
 
 router.get("/demo/positions", (_req, res) => handle(res, () => store.getPositions()));
 router.post("/demo/positions", requireAuth, (req, res) => handle(res, () => store.postPosition(req.body)));
 router.patch("/demo/positions/:id", requireAuth, (req, res) => handle(res, () => store.patchPosition(String(req.params.id), req.body)));
+router.post("/demo/signal", requireAuth, (req, res) => handle(res, () => store.openFromSignal(req.body)));
+router.post("/demo/price", requireAuth, (req, res) => handle(res, () => store.updatePrices(req.body)));
 
 router.get("/demo/trades", (_req, res) => handle(res, () => store.getTrades()));
 router.post("/demo/trades", requireAuth, (req, res) => handle(res, () => store.postTrade(req.body)));

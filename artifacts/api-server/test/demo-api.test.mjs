@@ -239,3 +239,89 @@ test("HTTPS lock blocks auth and writes over HTTP", async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("server session is authoritative and demo signal/price events are idempotent", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "oraculo-demo-authoritative-"));
+  const dbPath = path.join(dir, "oraculo.sqlite");
+  const port = 5125;
+  const server = await startServer({ port, dbPath });
+  try {
+    const cookie = await login(server.base);
+    const signal = {
+      pair: "BTCUSDT",
+      decision: "BUY",
+      entryNum: 100,
+      stopLossNum: 95,
+      target1Num: 105,
+      target2Num: 110,
+      riskReward: "1:2",
+      signalKey: "same-candle-same-signal",
+      steps: [{ number: 1, name: "test", value: "ok", reason: "unit test signal" }],
+    };
+
+    const browserAOpen = await fetch(`${server.base}/api/demo/signal`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify(signal),
+    });
+    assert.equal(browserAOpen.status, 200);
+    const sessionA = await json(browserAOpen);
+    assert.equal(sessionA.activeTrade.pair, "BTCUSDT");
+
+    const browserBDuplicate = await fetch(`${server.base}/api/demo/signal`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify(signal),
+    });
+    assert.equal(browserBDuplicate.status, 200);
+
+    const browserBSession = await json(await fetch(`${server.base}/api/demo/session`));
+    assert.equal(browserBSession.activeTrade.id, sessionA.activeTrade.id);
+    assert.equal((await json(await fetch(`${server.base}/api/demo/positions`))).length, 1);
+
+    for (let i = 0; i < 2; i++) {
+      const target1 = await fetch(`${server.base}/api/demo/price`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: cookie },
+        body: JSON.stringify({ pair: "BTCUSDT", price: 105 }),
+      });
+      assert.equal(target1.status, 200);
+    }
+    const afterTarget1 = await json(await fetch(`${server.base}/api/demo/session`));
+    assert.equal(afterTarget1.activeTrade.target1Hit, true);
+    assert.equal(afterTarget1.activeTrade.stopLoss, 100);
+    assert.equal(afterTarget1.history.length, 0);
+
+    await Promise.all([
+      fetch(`${server.base}/api/demo/price`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: cookie },
+        body: JSON.stringify({ pair: "BTCUSDT", price: 110 }),
+      }),
+      fetch(`${server.base}/api/demo/price`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: cookie },
+        body: JSON.stringify({ pair: "BTCUSDT", price: 110 }),
+      }),
+    ]);
+
+    const finalSession = await json(await fetch(`${server.base}/api/demo/session`));
+    assert.equal(finalSession.activeTrade, null);
+    assert.equal(finalSession.history.filter((item) => item.id === sessionA.activeTrade.id).length, 1);
+    assert.equal(finalSession.dailyStats.wins, 1);
+    assert.equal(finalSession.dailyStats.dailyPnL, 20);
+
+    await stopServer(server.child);
+    const restarted = await startServer({ port, dbPath });
+    try {
+      const persisted = await json(await fetch(`${restarted.base}/api/demo/session`));
+      assert.equal(persisted.history.filter((item) => item.id === sessionA.activeTrade.id).length, 1);
+      assert.equal(persisted.activeTrade, null);
+    } finally {
+      await stopServer(restarted.child);
+    }
+  } finally {
+    await stopServer(server.child);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

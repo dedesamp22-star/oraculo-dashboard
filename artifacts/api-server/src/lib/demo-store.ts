@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 export type TradeDirection = "BUY" | "SELL";
 export type TradeStatus = "OPEN" | "WIN" | "LOSS" | "BREAKEVEN";
 export type TradeExitReason = "STOP_LOSS" | "BREAKEVEN" | "TARGET_1" | "TARGET_2";
+export type DemoDecision = "BUY" | "SELL" | "SEM ENTRADA";
 
 export interface DailyStats {
   date: string;
@@ -54,6 +55,18 @@ export interface DemoSession {
   activeTrade: DemoTrade | null;
   history: DemoTrade[];
   dailyStats: DailyStats;
+}
+
+export interface DemoSignalInput {
+  pair: string;
+  decision: DemoDecision;
+  entryNum: number | null;
+  stopLossNum: number | null;
+  target1Num: number | null;
+  target2Num: number | null;
+  riskReward: string | null;
+  signalKey?: string;
+  steps?: Array<{ number?: number; name?: string; value?: string; reason?: string }>;
 }
 
 export class HttpError extends Error {
@@ -134,6 +147,35 @@ function canonical(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function newTradeId(): string {
+  return `demo_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function isSafetyLimited(stats: DailyStats): boolean {
+  return stats.safetyLimited ||
+    stats.totalTrades >= 8 ||
+    stats.consecutiveLosses >= 3 ||
+    stats.dailyPnL <= -(stats.startOfDayBalance * 0.03);
+}
+
+function calcPositionSize(balance: number, entry: number, stop: number): { riskAmount: number; positionSize: number } {
+  const riskAmount = balance * 0.01;
+  const dist = Math.abs(entry - stop);
+  return { riskAmount, positionSize: dist > 0 ? riskAmount / dist : 0 };
+}
+
+function signalKey(input: DemoSignalInput): string {
+  return createHash("sha256").update(canonical({
+    pair: input.pair.toUpperCase(),
+    decision: input.decision,
+    entry: input.entryNum,
+    stop: input.stopLossNum,
+    target1: input.target1Num,
+    target2: input.target2Num,
+    provided: input.signalKey ?? null,
+  })).digest("hex");
+}
+
 export function migrationHash(session: unknown): string {
   return createHash("sha256").update(canonical(session)).digest("hex");
 }
@@ -201,82 +243,97 @@ export class DemoStore {
       );
     `);
     const applied = this.db.prepare("SELECT version FROM schema_migrations WHERE version = 1").get();
-    if (applied) return;
-    this.transaction(() => {
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS demo_account (
-          id INTEGER PRIMARY KEY CHECK (id = 1),
-          balance REAL NOT NULL,
-          configured_balance REAL NOT NULL,
-          daily_stats_json TEXT NOT NULL,
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS demo_positions (
-          id TEXT PRIMARY KEY,
-          pair TEXT NOT NULL,
-          direction TEXT NOT NULL CHECK (direction IN ('BUY','SELL')),
-          status TEXT NOT NULL DEFAULT 'OPEN',
-          open_time INTEGER NOT NULL,
-          entry REAL NOT NULL,
-          stop_loss REAL NOT NULL,
-          stop_loss_original REAL NOT NULL,
-          target1 REAL NOT NULL,
-          target2 REAL NOT NULL,
-          balance_at_open REAL NOT NULL,
-          risk_amount REAL NOT NULL,
-          position_size REAL NOT NULL,
-          risk_reward TEXT NOT NULL,
-          target1_hit INTEGER NOT NULL DEFAULT 0,
-          is_breakeven_stop INTEGER NOT NULL DEFAULT 0,
-          signal_reasons_json TEXT NOT NULL,
-          market_conditions TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        );
-        CREATE UNIQUE INDEX IF NOT EXISTS demo_positions_open_pair_idx
-          ON demo_positions(pair) WHERE status = 'OPEN';
-        CREATE TABLE IF NOT EXISTS demo_trades (
-          id TEXT PRIMARY KEY,
-          pair TEXT NOT NULL,
-          direction TEXT NOT NULL CHECK (direction IN ('BUY','SELL')),
-          status TEXT NOT NULL CHECK (status IN ('OPEN','WIN','LOSS','BREAKEVEN')),
-          open_time INTEGER NOT NULL,
-          close_time INTEGER,
-          entry REAL NOT NULL,
-          close_price REAL,
-          stop_loss REAL NOT NULL,
-          stop_loss_original REAL NOT NULL,
-          target1 REAL NOT NULL,
-          target2 REAL NOT NULL,
-          balance_at_open REAL NOT NULL,
-          risk_amount REAL NOT NULL,
-          position_size REAL NOT NULL,
-          risk_reward TEXT NOT NULL,
-          pnl_usdc REAL,
-          pnl_pct REAL,
-          exit_reason TEXT,
-          target1_hit INTEGER NOT NULL DEFAULT 0,
-          is_breakeven_stop INTEGER NOT NULL DEFAULT 0,
-          signal_reasons_json TEXT NOT NULL,
-          market_conditions TEXT NOT NULL,
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS app_settings (
-          key TEXT PRIMARY KEY,
-          value TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        );
-      `);
-      const now = nowIso();
-      const stats = makeDailyStats(DEFAULT_BALANCE);
-      this.db.prepare(`
-        INSERT OR IGNORE INTO demo_account
-          (id, balance, configured_balance, daily_stats_json, created_at, updated_at)
-        VALUES (1, ?, ?, ?, ?, ?)
-      `).run(DEFAULT_BALANCE, DEFAULT_BALANCE, JSON.stringify(stats), now, now);
-      this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (1, 'initial_demo_sqlite', ?)").run(now);
-    });
+    if (!applied) {
+      this.transaction(() => {
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS demo_account (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            balance REAL NOT NULL,
+            configured_balance REAL NOT NULL,
+            daily_stats_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          CREATE TABLE IF NOT EXISTS demo_positions (
+            id TEXT PRIMARY KEY,
+            pair TEXT NOT NULL,
+            direction TEXT NOT NULL CHECK (direction IN ('BUY','SELL')),
+            status TEXT NOT NULL DEFAULT 'OPEN',
+            open_time INTEGER NOT NULL,
+            entry REAL NOT NULL,
+            stop_loss REAL NOT NULL,
+            stop_loss_original REAL NOT NULL,
+            target1 REAL NOT NULL,
+            target2 REAL NOT NULL,
+            balance_at_open REAL NOT NULL,
+            risk_amount REAL NOT NULL,
+            position_size REAL NOT NULL,
+            risk_reward TEXT NOT NULL,
+            target1_hit INTEGER NOT NULL DEFAULT 0,
+            is_breakeven_stop INTEGER NOT NULL DEFAULT 0,
+            signal_reasons_json TEXT NOT NULL,
+            market_conditions TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          CREATE UNIQUE INDEX IF NOT EXISTS demo_positions_open_pair_idx
+            ON demo_positions(pair) WHERE status = 'OPEN';
+          CREATE TABLE IF NOT EXISTS demo_trades (
+            id TEXT PRIMARY KEY,
+            pair TEXT NOT NULL,
+            direction TEXT NOT NULL CHECK (direction IN ('BUY','SELL')),
+            status TEXT NOT NULL CHECK (status IN ('OPEN','WIN','LOSS','BREAKEVEN')),
+            open_time INTEGER NOT NULL,
+            close_time INTEGER,
+            entry REAL NOT NULL,
+            close_price REAL,
+            stop_loss REAL NOT NULL,
+            stop_loss_original REAL NOT NULL,
+            target1 REAL NOT NULL,
+            target2 REAL NOT NULL,
+            balance_at_open REAL NOT NULL,
+            risk_amount REAL NOT NULL,
+            position_size REAL NOT NULL,
+            risk_reward TEXT NOT NULL,
+            pnl_usdc REAL,
+            pnl_pct REAL,
+            exit_reason TEXT,
+            target1_hit INTEGER NOT NULL DEFAULT 0,
+            is_breakeven_stop INTEGER NOT NULL DEFAULT 0,
+            signal_reasons_json TEXT NOT NULL,
+            market_conditions TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+        `);
+        const now = nowIso();
+        const stats = makeDailyStats(DEFAULT_BALANCE);
+        this.db.prepare(`
+          INSERT OR IGNORE INTO demo_account
+            (id, balance, configured_balance, daily_stats_json, created_at, updated_at)
+          VALUES (1, ?, ?, ?, ?, ?)
+        `).run(DEFAULT_BALANCE, DEFAULT_BALANCE, JSON.stringify(stats), now, now);
+        this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (1, 'initial_demo_sqlite', ?)").run(now);
+      });
+    }
+    const v2 = this.db.prepare("SELECT version FROM schema_migrations WHERE version = 2").get();
+    if (!v2) {
+      this.transaction(() => {
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS demo_events (
+            event_key TEXT PRIMARY KEY,
+            event_type TEXT NOT NULL,
+            trade_id TEXT,
+            created_at TEXT NOT NULL
+          );
+        `);
+        this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (2, 'demo_idempotency_events', ?)").run(nowIso());
+      });
+    }
   }
 
   transaction<T>(fn: () => T): T {
@@ -297,6 +354,41 @@ export class DemoStore {
     return accountFromRow(row);
   }
 
+  getSession(): DemoSession {
+    return {
+      ...this.getAccount(),
+      activeTrade: this.getPositions()[0] ?? null,
+      history: this.getTrades(),
+    };
+  }
+
+  getSetting<T>(key: string, fallback: T): T {
+    const row = this.db.prepare("SELECT value FROM app_settings WHERE key = ?").get(key) as Record<string, unknown> | undefined;
+    if (!row) return fallback;
+    return jsonParse<T>(row.value, fallback);
+  }
+
+  setSetting(key: string, value: unknown): void {
+    this.db.prepare(`
+      INSERT INTO app_settings (key, value, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).run(key, JSON.stringify(value), nowIso());
+  }
+
+  getAutomation() {
+    return this.getSetting("demo.automation", { enabled: false, symbol: "BTCUSDT" });
+  }
+
+  setAutomation(body: unknown) {
+    const input = body as Record<string, unknown>;
+    const enabled = input.enabled === true;
+    const symbol = typeof input.symbol === "string" && input.symbol.trim() ? input.symbol.toUpperCase() : "BTCUSDT";
+    const next = { enabled, symbol };
+    this.setSetting("demo.automation", next);
+    return next;
+  }
+
   putAccount(body: unknown) {
     const input = body as Record<string, unknown>;
     const balance = finiteNumber(input.balance, "balance", 0, MAX_BALANCE);
@@ -309,6 +401,18 @@ export class DemoStore {
       WHERE id = 1
     `).run(balance, configuredBalance, JSON.stringify(dailyStats), now);
     return this.getAccount();
+  }
+
+  resetSession(body: unknown) {
+    const input = body as Record<string, unknown>;
+    const configuredBalance = finiteNumber(input.configuredBalance ?? DEFAULT_BALANCE, "configuredBalance", 100, MAX_BALANCE);
+    return this.transaction(() => {
+      this.db.prepare("DELETE FROM demo_positions").run();
+      this.db.prepare("DELETE FROM demo_trades").run();
+      this.db.prepare("DELETE FROM demo_events").run();
+      this.putAccount({ balance: configuredBalance, configuredBalance, dailyStats: makeDailyStats(configuredBalance) });
+      return this.getSession();
+    });
   }
 
   getPositions() {
@@ -368,6 +472,73 @@ export class DemoStore {
     return position;
   }
 
+  openFromSignal(body: unknown) {
+    const input = body as DemoSignalInput;
+    const pair = nonEmptyString(input.pair, "pair", 32).toUpperCase();
+    const decision = input.decision;
+    if (decision !== "BUY" && decision !== "SELL") return this.getSession();
+    const entry = finiteNumber(input.entryNum, "entryNum", 0.00000001, MAX_PRICE);
+    const stop = finiteNumber(input.stopLossNum, "stopLossNum", 0.00000001, MAX_PRICE);
+    const target1 = finiteNumber(input.target1Num, "target1Num", 0.00000001, MAX_PRICE);
+    const target2 = finiteNumber(input.target2Num, "target2Num", 0.00000001, MAX_PRICE);
+    const key = `signal:${signalKey({ ...input, pair })}`;
+    return this.transaction(() => {
+      const existingEvent = this.db.prepare("SELECT event_key FROM demo_events WHERE event_key = ?").get(key);
+      if (existingEvent) return this.getSession();
+      if (this.getPositions().some((position) => position.pair === pair)) {
+        this.recordEvent(key, "duplicate_signal_blocked", null);
+        return this.getSession();
+      }
+      const account = this.getAccount();
+      if (isSafetyLimited(account.dailyStats)) {
+        this.recordEvent(key, "risk_limited_signal_blocked", null);
+        return this.getSession();
+      }
+      const { riskAmount, positionSize } = calcPositionSize(account.balance, entry, stop);
+      const steps = Array.isArray(input.steps) ? input.steps : [];
+      const signalReasons = steps.slice(0, 10).map((step) =>
+        `[${step.number ?? "?"}] ${step.name ?? "Regra"}: ${step.value ?? "-"} - ${step.reason ?? ""}`,
+      );
+      const trade: DemoTrade = {
+        id: newTradeId(),
+        pair,
+        direction: decision,
+        openTime: Date.now(),
+        entry,
+        stopLoss: stop,
+        stopLossOriginal: stop,
+        target1,
+        target2,
+        balanceAtOpen: account.balance,
+        riskAmount,
+        positionSize,
+        riskReward: input.riskReward ?? "-",
+        status: "OPEN",
+        target1Hit: false,
+        isBreakevenStop: false,
+        signalReasons,
+        marketConditions: signalReasons.join(" | "),
+      };
+      this.postPosition(trade);
+      const stats = { ...account.dailyStats, totalTrades: account.dailyStats.totalTrades + 1 };
+      stats.safetyLimited = isSafetyLimited(stats);
+      this.putAccount({ balance: account.balance, configuredBalance: account.configuredBalance, dailyStats: stats });
+      this.recordEvent(key, "signal_opened", trade.id);
+      return this.getSession();
+    });
+  }
+
+  updatePrices(body: unknown) {
+    const input = body as Record<string, unknown>;
+    const price = finiteNumber(input.price, "price", 0.00000001, MAX_PRICE);
+    const pair = typeof input.pair === "string" ? input.pair.toUpperCase() : undefined;
+    return this.transaction(() => {
+      const positions = this.getPositions().filter((position) => !pair || position.pair === pair);
+      for (const trade of positions) this.applyPriceToPosition(trade, price);
+      return this.getSession();
+    });
+  }
+
   patchPosition(id: string, body: unknown) {
     return this.transaction(() => {
       const row = this.db.prepare("SELECT * FROM demo_positions WHERE id = ? AND status = 'OPEN'").get(id) as Record<string, unknown> | undefined;
@@ -391,6 +562,42 @@ export class DemoStore {
       `).run(stopLoss, Number(target1Hit), Number(isBreakevenStop), nowIso(), id);
       return { ...current, stopLoss, target1Hit, isBreakevenStop };
     });
+  }
+
+  private recordEvent(key: string, type: string, tradeId: string | null): boolean {
+    const result = this.db.prepare(`
+      INSERT OR IGNORE INTO demo_events (event_key, event_type, trade_id, created_at)
+      VALUES (?, ?, ?, ?)
+    `).run(key, type, tradeId, nowIso());
+    return result.changes > 0;
+  }
+
+  private applyPriceToPosition(trade: DemoTrade, price: number): void {
+    const isBuy = trade.direction === "BUY";
+    if (isBuy ? price >= trade.target2 : price <= trade.target2) {
+      const key = `close:${trade.id}:TARGET_2`;
+      if (this.recordEvent(key, "close", trade.id)) this.closePosition(trade, trade.target2, "TARGET_2");
+      return;
+    }
+
+    let current = trade;
+    if (!trade.target1Hit && (isBuy ? price >= trade.target1 : price <= trade.target1)) {
+      const key = `target1:${trade.id}`;
+      if (this.recordEvent(key, "target1", trade.id)) {
+        current = { ...trade, target1Hit: true, stopLoss: trade.entry, isBreakevenStop: true };
+        this.db.prepare(`
+          UPDATE demo_positions
+          SET stop_loss = ?, target1_hit = 1, is_breakeven_stop = 1, updated_at = ?
+          WHERE id = ? AND status = 'OPEN'
+        `).run(current.stopLoss, nowIso(), current.id);
+      }
+    }
+
+    if (isBuy ? price <= current.stopLoss : price >= current.stopLoss) {
+      const reason: TradeExitReason = current.isBreakevenStop ? "BREAKEVEN" : "STOP_LOSS";
+      const key = `close:${current.id}:${reason}`;
+      if (this.recordEvent(key, "close", current.id)) this.closePosition(current, current.stopLoss, reason);
+    }
   }
 
   private closePosition(position: DemoTrade, closePrice: number, exitReason: TradeExitReason) {

@@ -13,7 +13,8 @@ const { build } = require('esbuild');
 mkdirSync(new URL('./.tmp/', import.meta.url), { recursive: true });
 
 await build({
-  entryPoints: [fileURLToPath(new URL('../src/lib/demoAgents.ts', import.meta.url))],
+  absWorkingDir: fileURLToPath(new URL('../', import.meta.url)),
+  entryPoints: ['src/lib/demoAgents.ts'],
   outfile: fileURLToPath(new URL('./.tmp/demoAgents.mjs', import.meta.url)),
   bundle: true,
   format: 'esm',

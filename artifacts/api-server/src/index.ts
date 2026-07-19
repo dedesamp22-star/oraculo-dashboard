@@ -1,5 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { startDemoWorker } from "./lib/demo-worker";
 
 const rawPort = process.env["PORT"];
 
@@ -23,4 +24,5 @@ app.listen({ host, port }, (err) => {
   }
 
   logger.info({ host, port }, "Server listening");
+  startDemoWorker();
 });

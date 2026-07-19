@@ -435,9 +435,6 @@ export default function Home() {
   // Auto mode (schedule-gated, Mon–Fri 08:30–17:00 SP)
   const [autoEnabled,  setAutoEnabled]  = useState(false);
 
-  // Demo mode
-  const [demoEnabled, setDemoEnabled] = useState(false);
-
   // Steps expand/collapse
   const [stepsExpanded, setStepsExpanded] = useState(false);
 
@@ -464,12 +461,15 @@ export default function Home() {
     updatePrice,
     resetSession,
     setConfiguredBalance,
+    automationEnabled: demoEnabled,
+    serverError: demoServerError,
+    setAutomationEnabled,
   } = useDemoTrading();
 
   // Feed live price into demo state machine every time price updates
   useEffect(() => {
-    if (market.price !== null) updatePrice(market.price);
-  }, [market.price, updatePrice]);
+    if (market.price !== null) updatePrice(market.price, selectedPair);
+  }, [market.price, selectedPair, updatePrice]);
 
   const safeLimited = isSafetyLimited(demoSession.dailyStats);
   const safeReason  = safeLimited ? safetyLimitReason(demoSession.dailyStats) : undefined;
@@ -764,10 +764,15 @@ export default function Home() {
                 <span className="text-[9px] font-mono text-muted-foreground/30 mt-0.5">
                   Simulação 24/7 · Sem ordens reais · Saldo fictício
                 </span>
+                {demoServerError && (
+                  <span className="text-[9px] font-mono text-[#ff4444]/70 mt-0.5">
+                    API demo: {demoServerError}
+                  </span>
+                )}
               </div>
               <Toggle
                 checked={demoEnabled}
-                onChange={setDemoEnabled}
+                onChange={(enabled) => setAutomationEnabled(enabled, selectedPair)}
                 disabled={market.loading || !!market.error}
                 accentColor="#00f0ff"
               />
