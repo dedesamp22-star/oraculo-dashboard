@@ -1,6 +1,6 @@
 import { logger } from "./logger";
 import { demoStore } from "./demo-store-instance";
-import { analyzeLegacyDemoSignal, fetchDisplayPrice } from "./demo-worker-engine";
+import { analyzeDemoSignal, fetchDisplayPrice } from "./demo-worker-engine";
 
 const TICK_MS = 30_000;
 
@@ -17,7 +17,7 @@ async function tick(): Promise<void> {
     const price = await fetchDisplayPrice(symbol);
     demoStore.updatePrices({ pair: symbol, price });
 
-    const { signal } = await analyzeLegacyDemoSignal(symbol);
+    const { signal } = await analyzeDemoSignal(symbol);
     if (signal.decision !== "SEM ENTRADA") {
       demoStore.openFromSignal(signal);
     }
