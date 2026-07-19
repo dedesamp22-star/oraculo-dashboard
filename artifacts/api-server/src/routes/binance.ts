@@ -1,17 +1,9 @@
 // Read-only Binance public market-data proxy.
 // No API key required. Spot endpoints only — no futures, no orders.
 import { Router, type IRouter } from "express";
+import { binanceFetch } from "../lib/binance-client";
 
 const router: IRouter = Router();
-const BINANCE_BASE = "https://api.binance.us/api/v3";
-
-async function binanceFetch(path: string): Promise<Response> {
-  const res = await fetch(`${BINANCE_BASE}${path}`);
-  if (!res.ok) {
-    throw new Error(`Binance upstream error ${res.status}: ${res.statusText}`);
-  }
-  return res;
-}
 
 // GET /api/binance/price?symbol=BTCUSDT
 router.get("/binance/price", async (req, res): Promise<void> => {

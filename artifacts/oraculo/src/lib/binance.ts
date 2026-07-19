@@ -1,6 +1,8 @@
 // Binance market data – routed through the local API proxy to avoid CORS.
 // The proxy forwards to https://api.binance.com/api/v3 (read-only, no auth).
 
+import { apiJson } from './apiClient';
+
 const PROXY = `${import.meta.env.BASE_URL}api/binance`.replace(/\/+/g, '/');
 
 export interface Candle {
@@ -17,9 +19,7 @@ export type Interval = '1h' | '15m' | '5m';
 
 /** Current price for a symbol, e.g. BTCUSDT */
 export async function fetchPrice(symbol: string): Promise<number> {
-  const res = await fetch(`${PROXY}/price?symbol=${symbol}`);
-  if (!res.ok) throw new Error(`Price fetch failed: ${res.status}`);
-  const data = await res.json();
+  const data = await apiJson<{ price: string }>(`${PROXY}/price?symbol=${symbol}`);
   return parseFloat(data.price);
 }
 
@@ -30,9 +30,7 @@ export async function fetchKlines(
   limit = 50,
 ): Promise<Candle[]> {
   const url = `${PROXY}/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Klines fetch failed: ${res.status}`);
-  const raw: unknown[][] = await res.json();
+  const raw = await apiJson<unknown[][]>(url);
   return raw.map((row) => ({
     openTime:  Number(row[0]),
     open:      parseFloat(row[1] as string),

@@ -1,8 +1,9 @@
 import type { DemoSession, DemoTrade } from './demo';
 import type { EngineResult } from './analysis';
+import { apiJson } from './apiClient';
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${import.meta.env.BASE_URL}${path.replace(/^\//, '')}`, {
+  return await apiJson<T>(path, {
     ...init,
     credentials: 'include',
     headers: {
@@ -10,8 +11,6 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       ...(init.headers ?? {}),
     },
   });
-  if (!res.ok) throw new Error(`API ${path} failed: ${res.status}`);
-  return await res.json() as T;
 }
 
 export async function getAuth(): Promise<boolean> {

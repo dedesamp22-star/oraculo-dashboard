@@ -241,6 +241,26 @@ test("HTTPS lock blocks auth and writes over HTTP", async () => {
   }
 });
 
+test("health endpoint reports API and Binance state", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "oraculo-demo-health-"));
+  const dbPath = path.join(dir, "oraculo.sqlite");
+  const port = 5127;
+  const server = await startServer({ port, dbPath });
+  try {
+    const res = await fetch(`${server.base}/api/health`);
+    assert.equal(res.status, 200);
+    const health = await json(res);
+    assert.equal(health.api.ok, true);
+    assert.ok(["ok", "degraded"].includes(health.status));
+    assert.equal(typeof health.api.uptimeSec, "number");
+    assert.equal(typeof health.binance.ok, "boolean");
+    assert.equal(typeof health.generatedAt, "string");
+  } finally {
+    await stopServer(server.child);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("server session is authoritative and demo signal/price events are idempotent", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "oraculo-demo-authoritative-"));
   const dbPath = path.join(dir, "oraculo.sqlite");

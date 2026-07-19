@@ -8,6 +8,7 @@ import {
   ChevronDown, ChevronUp, Bot, Pause,
 } from 'lucide-react';
 import { useBinanceData }       from '../hooks/useBinanceData';
+import { useApiHealth }         from '../hooks/useApiHealth';
 import { useMarketRadar }       from '../hooks/useMarketRadar';
 import { useDemoAgents }        from '../hooks/useDemoAgents';
 import { useAutoAnalysis }      from '../hooks/useAutoAnalysis';
@@ -419,6 +420,7 @@ let alertIdCounter = 0;
 
 export default function Home() {
   const market = useBinanceData();
+  const apiHealth = useApiHealth();
   const radar = useMarketRadar();
   const demoAgents = useDemoAgents(radar.analysis);
 
@@ -660,6 +662,39 @@ export default function Home() {
         </section>
 
         {/* ── Controls ────────────────────────────────────────────────────── */}
+        <section className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <div className="border border-border/50 bg-card/30 px-4 py-3">
+            <span className="text-[9px] font-mono uppercase tracking-[0.18em] text-muted-foreground">API</span>
+            <div className="mt-1 flex items-center gap-2">
+              {apiHealth.error
+                ? <AlertTriangle className="w-3.5 h-3.5 text-[#ff4444]" />
+                : <Activity className="w-3.5 h-3.5 text-[#00ff66]" />
+              }
+              <span className={`text-[11px] font-mono font-bold uppercase ${apiHealth.error ? 'text-[#ff4444]' : 'text-[#00ff66]'}`}>
+                {apiHealth.error ? 'Indisponivel' : apiHealth.loading ? 'Verificando' : 'Online'}
+              </span>
+            </div>
+          </div>
+          <div className="border border-border/50 bg-card/30 px-4 py-3">
+            <span className="text-[9px] font-mono uppercase tracking-[0.18em] text-muted-foreground">Binance</span>
+            <div className="mt-1 flex items-center gap-2 min-w-0">
+              {apiHealth.health?.binance.ok
+                ? <Activity className="w-3.5 h-3.5 text-[#00ff66]" />
+                : <AlertTriangle className="w-3.5 h-3.5 text-[#ffaa00]" />
+              }
+              <span className={`text-[11px] font-mono font-bold uppercase min-w-0 truncate ${apiHealth.health?.binance.ok ? 'text-[#00ff66]' : 'text-[#ffaa00]'}`}>
+                {apiHealth.health?.binance.ok ? `${apiHealth.health.binance.latencyMs ?? 0}ms` : 'Degradada'}
+              </span>
+            </div>
+          </div>
+          <div className="border border-border/50 bg-card/30 px-4 py-3">
+            <span className="text-[9px] font-mono uppercase tracking-[0.18em] text-muted-foreground">Falhas</span>
+            <p className="mt-1 text-[10px] font-mono text-muted-foreground/80 min-w-0 break-words">
+              {apiHealth.error ?? (apiHealth.health?.binance.error ? 'Binance instavel; dados podem atrasar.' : 'Sem falhas criticas.')}
+            </p>
+          </div>
+        </section>
+
         <div className="lg:hidden grid grid-cols-2 gap-2 border border-border/60 bg-card/40 p-1">
           {([
             ['operation', 'Operacao'],
