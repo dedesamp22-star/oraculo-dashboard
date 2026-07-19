@@ -81,6 +81,10 @@ export interface DemoSession {
   activeTrade: DemoTrade | null;
   history: DemoTrade[];      // closed trades, newest first
   dailyStats: DailyStats;
+  realizedPnlUSDC?: number;
+  unrealizedPnlUSDC?: number;
+  partialPnlUSDC?: number;
+  openRiskUSDC?: number;
 }
 
 // ── Defaults ──────────────────────────────────────────────────────────────────
@@ -112,6 +116,10 @@ export function makeSession(configuredBalance = DEFAULT_BALANCE): DemoSession {
     activeTrade: null,
     history: [],
     dailyStats: makeDailyStats(today, configuredBalance),
+    realizedPnlUSDC: 0,
+    unrealizedPnlUSDC: 0,
+    partialPnlUSDC: 0,
+    openRiskUSDC: 0,
   };
 }
 

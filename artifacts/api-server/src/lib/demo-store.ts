@@ -61,6 +61,10 @@ export interface DemoSession {
   activeTrade: DemoTrade | null;
   history: DemoTrade[];
   dailyStats: DailyStats;
+  realizedPnlUSDC: number;
+  unrealizedPnlUSDC: number;
+  partialPnlUSDC: number;
+  openRiskUSDC: number;
 }
 
 export interface DemoSignalInput {
@@ -404,10 +408,26 @@ export class DemoStore {
   }
 
   getSession(): DemoSession {
+    const activeTrade = this.getPositions()[0] ?? null;
+    const history = this.getTrades();
+    const lastPrice = activeTrade
+      ? this.getSetting<number | null>(`demo.lastPrice.${activeTrade.pair}`, null)
+      : null;
+    const unrealizedPnlUSDC = activeTrade && lastPrice !== null
+      ? this.unrealizedFor(activeTrade, lastPrice)
+      : 0;
+    const partialPnlUSDC = (activeTrade?.partialPnlUSDC ?? 0) +
+      history.reduce((sum, trade) => sum + (trade.partialPnlUSDC ?? 0), 0);
+    const realizedPnlUSDC = history.reduce((sum, trade) => sum + (trade.pnlUSDC ?? 0), 0) +
+      (activeTrade?.realizedPnlUSDC ?? 0);
     return {
       ...this.getAccount(),
-      activeTrade: this.getPositions()[0] ?? null,
-      history: this.getTrades(),
+      activeTrade,
+      history,
+      realizedPnlUSDC,
+      unrealizedPnlUSDC,
+      partialPnlUSDC,
+      openRiskUSDC: activeTrade ? Math.abs(activeTrade.entry - activeTrade.stopLoss) * (activeTrade.remainingPositionSize ?? activeTrade.positionSize) : 0,
     };
   }
 
@@ -604,6 +624,7 @@ export class DemoStore {
     const pair = typeof input.pair === "string" ? input.pair.toUpperCase() : undefined;
     return this.transaction(() => {
       const positions = this.getPositions().filter((position) => !pair || position.pair === pair);
+      for (const position of positions) this.setSetting(`demo.lastPrice.${position.pair}`, price);
       for (const trade of positions) this.applyPriceToPosition(trade, price);
       return this.getSession();
     });
@@ -640,6 +661,13 @@ export class DemoStore {
       VALUES (?, ?, ?, ?)
     `).run(key, type, tradeId, nowIso());
     return result.changes > 0;
+  }
+
+  private unrealizedFor(trade: DemoTrade, price: number): number {
+    const size = trade.remainingPositionSize ?? trade.positionSize;
+    return trade.direction === "BUY"
+      ? (price - trade.entry) * size
+      : (trade.entry - price) * size;
   }
 
   private applyPriceToPosition(trade: DemoTrade, price: number): void {

@@ -1103,6 +1103,10 @@ export default function Home() {
                   stats={demoSession.dailyStats}
                   currentBalance={demoSession.balance}
                   configuredBalance={demoSession.configuredBalance}
+                  realizedPnl={demoSession.realizedPnlUSDC ?? 0}
+                  unrealizedPnl={demoSession.unrealizedPnlUSDC ?? 0}
+                  partialPnl={demoSession.partialPnlUSDC ?? 0}
+                  openRisk={demoSession.openRiskUSDC ?? 0}
                   onReset={() => resetSession(demoSession.configuredBalance)}
                   onBalanceChange={b => {
                     setConfiguredBalance(b);

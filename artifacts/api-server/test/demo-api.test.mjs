@@ -293,6 +293,10 @@ test("server session is authoritative and demo signal/price events are idempoten
     assert.ok(afterTarget1.activeTrade.stopLoss >= 100.02);
     assert.equal(afterTarget1.activeTrade.remainingPositionSize, 1);
     assert.equal(afterTarget1.activeTrade.realizedPnlUSDC, 5);
+    assert.equal(afterTarget1.realizedPnlUSDC, 5);
+    assert.equal(afterTarget1.unrealizedPnlUSDC, 5);
+    assert.equal(afterTarget1.partialPnlUSDC, 5);
+    assert.ok(afterTarget1.openRiskUSDC > 0);
     assert.equal(afterTarget1.history.length, 0);
 
     await Promise.all([
@@ -313,6 +317,8 @@ test("server session is authoritative and demo signal/price events are idempoten
     assert.equal(finalSession.history.filter((item) => item.id === sessionA.activeTrade.id).length, 1);
     assert.equal(finalSession.dailyStats.wins, 1);
     assert.equal(finalSession.dailyStats.dailyPnL, 15);
+    assert.equal(finalSession.realizedPnlUSDC, 15);
+    assert.equal(finalSession.unrealizedPnlUSDC, 0);
 
     await stopServer(server.child);
     const restarted = await startServer({ port, dbPath });
@@ -320,6 +326,7 @@ test("server session is authoritative and demo signal/price events are idempoten
       const persisted = await json(await fetch(`${restarted.base}/api/demo/session`));
       assert.equal(persisted.history.filter((item) => item.id === sessionA.activeTrade.id).length, 1);
       assert.equal(persisted.activeTrade, null);
+      assert.equal(persisted.realizedPnlUSDC, 15);
     } finally {
       await stopServer(restarted.child);
     }

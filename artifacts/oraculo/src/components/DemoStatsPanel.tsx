@@ -5,6 +5,10 @@ interface Props {
   stats: DailyStats;
   currentBalance: number;
   configuredBalance: number;
+  realizedPnl?: number;
+  unrealizedPnl?: number;
+  partialPnl?: number;
+  openRisk?: number;
   onReset: () => void;
   onBalanceChange: (b: number) => void;
 }
@@ -17,6 +21,10 @@ export function DemoStatsPanel({
   stats,
   currentBalance,
   configuredBalance,
+  realizedPnl = 0,
+  unrealizedPnl = 0,
+  partialPnl = 0,
+  openRisk = 0,
   onReset,
   onBalanceChange,
 }: Props) {
@@ -53,6 +61,10 @@ export function DemoStatsPanel({
           <StatCell label="Perd. Consec." value={`${stats.consecutiveLosses} / 3`} color={stats.consecutiveLosses >= 2 ? '#ff4444' : '#aaaaaa'} />
           <StatCell label="P&L do Dia" value={`${stats.dailyPnL >= 0 ? '+' : ''}$${fmt(stats.dailyPnL)}`} color={pnlColor} />
           <StatCell label="Drawdown Máx." value={`$${fmt(stats.maxDrawdown)}`} color="#ffaa00" />
+          <StatCell label="Realizado" value={`${realizedPnl >= 0 ? '+' : ''}$${fmt(realizedPnl)}`} color={realizedPnl >= 0 ? '#00ff66' : '#ff4444'} />
+          <StatCell label="Flutuante" value={`${unrealizedPnl >= 0 ? '+' : ''}$${fmt(unrealizedPnl)}`} color={unrealizedPnl >= 0 ? '#00ff66' : '#ff4444'} />
+          <StatCell label="Parcial" value={`${partialPnl >= 0 ? '+' : ''}$${fmt(partialPnl)}`} color={partialPnl >= 0 ? '#00ff66' : '#ff4444'} />
+          <StatCell label="Risco Aberto" value={`$${fmt(openRisk)}`} color="#ffaa00" />
           <StatCell
             label="Saldo Demo"
             value={`$${fmt(currentBalance)}`}
