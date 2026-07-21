@@ -14,6 +14,7 @@ import { useDemoAgents }        from '../hooks/useDemoAgents';
 import { useAutoAnalysis }      from '../hooks/useAutoAnalysis';
 import { useDemoAutoAnalysis }  from '../hooks/useDemoAutoAnalysis';
 import { useDemoTrading }       from '../hooks/useDemoTrading';
+import { useOnlineStatus }      from '../hooks/useOnlineStatus';
 import { runEngine, type EngineResult, type RuleStep, type StepStatus, type Decision } from '../lib/analysis';
 import { fmtTimeSP, fmtSPNow, isOperational as checkOperational } from '../lib/schedule';
 import { isSafetyLimited, safetyLimitReason, type DemoSession } from '../lib/demo';
@@ -24,7 +25,7 @@ import { DemoStatsPanel }    from '../components/DemoStatsPanel';
 import { MarketRadarPanel }  from '../components/MarketRadarPanel';
 import { DemoAgentsPanel }   from '../components/DemoAgentsPanel';
 import { getAuth, loginUser, logoutUser, type AuthUser } from '../lib/demoApi';
-import { APP_NAME, APP_VERSION } from '@shared/appVersion';
+import { APP_DISPLAY_NAME, APP_NAME, APP_VERSION } from '@shared/appVersion';
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 
@@ -70,7 +71,7 @@ function LoginScreen({ loading, error, onLogin }: {
         <div className="flex items-center gap-3">
           <ShieldAlert className="w-5 h-5 text-primary" />
           <div>
-            <h1 className="text-lg font-mono font-bold uppercase tracking-[0.18em]">Oraculo</h1>
+            <h1 className="text-lg font-mono font-bold uppercase tracking-[0.18em]">{APP_DISPLAY_NAME}</h1>
             <p className="text-[11px] font-mono text-muted-foreground">Acesso seguro ao modo demo</p>
           </div>
         </div>
@@ -101,6 +102,31 @@ function LoginScreen({ loading, error, onLogin }: {
           {loading ? 'Entrando...' : 'Entrar'}
         </button>
       </form>
+    </div>
+  );
+}
+
+function OfflineScreen() {
+  return (
+    <div className="min-h-screen w-full bg-background text-foreground font-sans flex items-center justify-center p-4">
+      <section className="w-full max-w-sm border border-[#ffaa00]/35 bg-[#ffaa00]/[0.04] p-5 flex flex-col gap-4">
+        <div className="flex items-center gap-3">
+          <AlertTriangle className="w-5 h-5 text-[#ffaa00] flex-shrink-0" />
+          <div className="min-w-0">
+            <h1 className="text-sm font-mono font-bold uppercase tracking-[0.18em] text-[#ffaa00]">Sem conexao</h1>
+            <p className="mt-1 text-xs font-mono text-muted-foreground leading-relaxed">
+              Dados demo, sessao, posicoes e historico nao sao exibidos offline. Reconecte para carregar o estado oficial do servidor.
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="min-h-11 border border-[#ffaa00]/45 px-4 py-3 text-[10px] font-mono font-bold uppercase tracking-[0.14em] text-[#ffaa00] hover:bg-[#ffaa00]/10"
+        >
+          Tentar novamente
+        </button>
+      </section>
     </div>
   );
 }
@@ -623,6 +649,7 @@ function MobilePanelOverview({ session }: { session: DemoSession }) {
 let alertIdCounter = 0;
 
 export default function Home() {
+  const online = useOnlineStatus();
   // Chart controls
   const [selectedPair, setSelectedPair] = useState<string>('BTCUSDT');
   const [tvInterval,   setTvInterval]   = useState<TVInterval>('5');
@@ -856,6 +883,10 @@ export default function Home() {
       manualAnalyzeTimeoutRef.current = null;
     }
   }, []);
+
+  if (!online) {
+    return <OfflineScreen />;
+  }
 
   if (!authUser) {
     return <LoginScreen loading={authLoading} error={authError} onLogin={handleLogin} />;
