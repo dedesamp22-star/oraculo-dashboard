@@ -25,7 +25,7 @@ interface ApiHealthState {
 
 const POLL_MS = 30_000;
 
-export function useApiHealth(): ApiHealthState {
+export function useApiHealth(enabled = true): ApiHealthState {
   const [state, setState] = useState<ApiHealthState>({
     health: null,
     loading: true,
@@ -34,6 +34,7 @@ export function useApiHealth(): ApiHealthState {
   });
 
   const refresh = useCallback(async () => {
+    if (!enabled) return;
     try {
       const health = await apiJson<ApiHealth>('/api/health', {}, { timeoutMs: 5_000, retries: 1 });
       setState({ health, loading: false, error: null, lastUpdate: new Date() });
@@ -45,13 +46,22 @@ export function useApiHealth(): ApiHealthState {
         lastUpdate: new Date(),
       }));
     }
-  }, []);
+  }, [enabled]);
 
   useEffect(() => {
+    if (!enabled) {
+      setState({
+        health: null,
+        loading: false,
+        error: null,
+        lastUpdate: null,
+      });
+      return;
+    }
     refresh();
     const id = window.setInterval(refresh, POLL_MS);
     return () => window.clearInterval(id);
-  }, [refresh]);
+  }, [enabled, refresh]);
 
   return state;
 }

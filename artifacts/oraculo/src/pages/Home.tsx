@@ -600,11 +600,6 @@ function MobilePanelOverview({ session }: { session: DemoSession }) {
 let alertIdCounter = 0;
 
 export default function Home() {
-  const market = useBinanceData();
-  const apiHealth = useApiHealth();
-  const radar = useMarketRadar();
-  const demoAgents = useDemoAgents(radar.analysis);
-
   // Chart controls
   const [selectedPair, setSelectedPair] = useState<string>('BTCUSDT');
   const [tvInterval,   setTvInterval]   = useState<TVInterval>('5');
@@ -622,6 +617,7 @@ export default function Home() {
   const [stepsExpanded, setStepsExpanded] = useState(false);
   const [mobileTab, setMobileTab] = useState<'operation' | 'panel'>('operation');
   const [mobileChartOpen, setMobileChartOpen] = useState(false);
+  const manualAnalyzeTimeoutRef = useRef<number | null>(null);
 
   // Alerts
   const [alerts, setAlerts] = useState<AlertMsg[]>([]);
@@ -633,6 +629,7 @@ export default function Home() {
   const [authLoading, setAuthLoading] = useState(true);
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
+  const isAuthenticated = !!authUser;
   useEffect(() => {
     const id = setInterval(() => {
       setSpClock(fmtSPNow());
@@ -677,13 +674,31 @@ export default function Home() {
 
   const handleLogout = useCallback(() => {
     setAuthLoading(true);
+    if (manualAnalyzeTimeoutRef.current !== null) {
+      window.clearTimeout(manualAnalyzeTimeoutRef.current);
+      manualAnalyzeTimeoutRef.current = null;
+    }
+    setAutoEnabled(false);
+    setAnalyzing(false);
+    setResult(null);
+    setResultTime(null);
+    setStepsExpanded(false);
+    setMobileChartOpen(false);
+    setAlerts([]);
+    prevDecisionRef.current = null;
+    prevDemoDecisionRef.current = null;
+    setAuthUser(null);
     void logoutUser()
       .catch(() => undefined)
       .finally(() => {
-        setAuthUser(null);
         setAuthLoading(false);
       });
   }, []);
+
+  const market = useBinanceData(isAuthenticated);
+  const apiHealth = useApiHealth(isAuthenticated);
+  const radar = useMarketRadar(isAuthenticated);
+  const demoAgents = useDemoAgents(radar.analysis);
 
   // ── Demo trading ──────────────────────────────────────────────────────────
 
@@ -696,12 +711,12 @@ export default function Home() {
     automationEnabled: demoEnabled,
     serverError: demoServerError,
     setAutomationEnabled,
-  } = useDemoTrading(!!authUser);
+  } = useDemoTrading(isAuthenticated);
 
   // Feed live price into demo state machine every time price updates
   useEffect(() => {
-    if (market.price !== null) updatePrice(market.price, selectedPair);
-  }, [market.price, selectedPair, updatePrice]);
+    if (isAuthenticated && market.price !== null) updatePrice(market.price, selectedPair);
+  }, [isAuthenticated, market.price, selectedPair, updatePrice]);
 
   const safeLimited = isSafetyLimited(demoSession.dailyStats);
   const safeReason  = safeLimited ? safetyLimitReason(demoSession.dailyStats) : undefined;
@@ -768,7 +783,7 @@ export default function Home() {
   // ── Auto-analysis hook (schedule-gated, Mon–Fri 08:30–17:00 SP) ──────────
 
   const autoState = useAutoAnalysis({
-    enabled:    autoEnabled,
+    enabled:    isAuthenticated && autoEnabled,
     candles1h:  market.candles1h,
     candles15m: market.candles15m,
     candles5m:  market.candles5m,
@@ -779,7 +794,7 @@ export default function Home() {
   // ── Demo auto-analysis hook (24/7, no schedule gate) ─────────────────────
 
   const demoAutoState = useDemoAutoAnalysis({
-    enabled:    demoEnabled && !market.loading && !market.error,
+    enabled:    isAuthenticated && demoEnabled && !market.loading && !market.error,
     candles1h:  market.candles1h,
     candles15m: market.candles15m,
     candles5m:  market.candles5m,
@@ -790,24 +805,34 @@ export default function Home() {
   // ── Manual analysis ───────────────────────────────────────────────────────
 
   const canAnalyze =
-    !analyzing && !market.loading && !market.error &&
+    isAuthenticated && !analyzing && !market.loading && !market.error &&
     market.price !== null && market.candles1h.length > 20;
 
   const handleManualAnalyze = () => {
     if (!canAnalyze) return;
+    if (manualAnalyzeTimeoutRef.current !== null) window.clearTimeout(manualAnalyzeTimeoutRef.current);
     setAnalyzing(true);
     setResult(null);
-    setTimeout(() => {
+    manualAnalyzeTimeoutRef.current = window.setTimeout(() => {
       const res = runEngine(market.candles1h, market.candles15m, market.candles5m, market.price!);
       handleResult(res);
       setAnalyzing(false);
+      manualAnalyzeTimeoutRef.current = null;
     }, 900);
   };
 
   const handleRefreshMobile = () => {
+    if (!isAuthenticated) return;
     void market.refresh();
     void radar.refresh();
   };
+
+  useEffect(() => () => {
+    if (manualAnalyzeTimeoutRef.current !== null) {
+      window.clearTimeout(manualAnalyzeTimeoutRef.current);
+      manualAnalyzeTimeoutRef.current = null;
+    }
+  }, []);
 
   if (!authUser) {
     return <LoginScreen loading={authLoading} error={authError} onLogin={handleLogin} />;

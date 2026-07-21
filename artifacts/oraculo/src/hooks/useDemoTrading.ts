@@ -32,19 +32,22 @@ export function useDemoTrading(authenticated: boolean): DemoTradingState {
   const [serverError, setServerError] = useState<string | null>(null);
   const sessionRef = useRef(session);
   const writeInFlightRef = useRef(false);
+  const generationRef = useRef(0);
 
   useEffect(() => { sessionRef.current = session; }, [session]);
 
   const applyRemoteSession = useCallback((next: DemoSession) => {
+    if (!authenticated) return;
     setSession(next);
     setServerAvailable(true);
     setServerError(null);
-  }, []);
+  }, [authenticated]);
 
   const markError = useCallback((err: unknown) => {
+    if (!authenticated) return;
     setServerAvailable(false);
     setServerError(err instanceof Error ? err.message : 'API demo indisponivel.');
-  }, []);
+  }, [authenticated]);
 
   const ensureWritable = useCallback(async (): Promise<boolean> => {
     if (authenticated) return true;
@@ -54,20 +57,28 @@ export function useDemoTrading(authenticated: boolean): DemoTradingState {
 
   const refreshSession = useCallback(() => {
     if (!authenticated) return;
+    const generation = generationRef.current;
     void loadServerSession()
-      .then(applyRemoteSession)
-      .catch(markError);
+      .then((next) => {
+        if (generation === generationRef.current) applyRemoteSession(next);
+      })
+      .catch((err) => {
+        if (generation === generationRef.current) markError(err);
+      });
   }, [authenticated, applyRemoteSession, markError]);
 
   useEffect(() => {
+    generationRef.current += 1;
     if (!authenticated) {
       setSession(makeSession());
       setAutomationEnabledState(false);
       setServerAvailable(false);
       setServerError(null);
+      writeInFlightRef.current = false;
       return;
     }
     let cancelled = false;
+    const generation = generationRef.current;
     async function bootstrap() {
       try {
         const local = loadSession();
@@ -80,16 +91,16 @@ export function useDemoTrading(authenticated: boolean): DemoTradingState {
 
         if (hasLocalState && local) {
           const migrated = await migrateLocalSession(local);
-          if (!cancelled) applyRemoteSession(migrated);
+          if (!cancelled && generation === generationRef.current) applyRemoteSession(migrated);
         } else {
           const remote = await loadServerSession();
-          if (!cancelled) applyRemoteSession(remote);
+          if (!cancelled && generation === generationRef.current) applyRemoteSession(remote);
         }
 
         const automation = await getDemoAutomation();
-        if (!cancelled) setAutomationEnabledState(automation.enabled);
+        if (!cancelled && generation === generationRef.current) setAutomationEnabledState(automation.enabled);
       } catch (err) {
-        if (!cancelled) markError(err);
+        if (!cancelled && generation === generationRef.current) markError(err);
       }
     }
     void bootstrap();
@@ -106,11 +117,12 @@ export function useDemoTrading(authenticated: boolean): DemoTradingState {
     if (result.decision === 'SEM ENTRADA') return;
     void (async () => {
       if (!(await ensureWritable())) return;
+      const generation = generationRef.current;
       try {
         const next = await submitDemoSignal(result, pair);
-        applyRemoteSession(next);
+        if (generation === generationRef.current) applyRemoteSession(next);
       } catch (err) {
-        markError(err);
+        if (generation === generationRef.current) markError(err);
       }
     })();
   }, [applyRemoteSession, ensureWritable, markError]);
@@ -119,14 +131,15 @@ export function useDemoTrading(authenticated: boolean): DemoTradingState {
     if (!Number.isFinite(price) || price <= 0 || writeInFlightRef.current) return;
     writeInFlightRef.current = true;
     void (async () => {
+      const generation = generationRef.current;
       try {
         if (!(await ensureWritable())) return;
         const next = await submitDemoPrice(price, pair ?? sessionRef.current.activeTrade?.pair);
-        applyRemoteSession(next);
+        if (generation === generationRef.current) applyRemoteSession(next);
       } catch (err) {
-        markError(err);
+        if (generation === generationRef.current) markError(err);
       } finally {
-        writeInFlightRef.current = false;
+        if (generation === generationRef.current) writeInFlightRef.current = false;
       }
     })();
   }, [applyRemoteSession, ensureWritable, markError]);
@@ -134,11 +147,12 @@ export function useDemoTrading(authenticated: boolean): DemoTradingState {
   const resetSession = useCallback((startingBalance: number) => {
     void (async () => {
       if (!(await ensureWritable())) return;
+      const generation = generationRef.current;
       try {
         const next = await resetServerSession(startingBalance);
-        applyRemoteSession(next);
+        if (generation === generationRef.current) applyRemoteSession(next);
       } catch (err) {
-        markError(err);
+        if (generation === generationRef.current) markError(err);
       }
     })();
   }, [applyRemoteSession, ensureWritable, markError]);
@@ -146,11 +160,12 @@ export function useDemoTrading(authenticated: boolean): DemoTradingState {
   const setConfiguredBalance = useCallback((balance: number) => {
     void (async () => {
       if (!(await ensureWritable())) return;
+      const generation = generationRef.current;
       try {
         await persistAccount({ ...sessionRef.current, configuredBalance: balance });
-        refreshSession();
+        if (generation === generationRef.current) refreshSession();
       } catch (err) {
-        markError(err);
+        if (generation === generationRef.current) markError(err);
       }
     })();
   }, [ensureWritable, markError, refreshSession]);
@@ -158,12 +173,15 @@ export function useDemoTrading(authenticated: boolean): DemoTradingState {
   const setAutomationEnabled = useCallback((enabled: boolean, symbol = 'BTCUSDT') => {
     void (async () => {
       if (!(await ensureWritable())) return;
+      const generation = generationRef.current;
       try {
         const next = await setDemoAutomation(enabled, symbol);
-        setAutomationEnabledState(next.enabled);
-        refreshSession();
+        if (generation === generationRef.current) {
+          setAutomationEnabledState(next.enabled);
+          refreshSession();
+        }
       } catch (err) {
-        markError(err);
+        if (generation === generationRef.current) markError(err);
       }
     })();
   }, [ensureWritable, markError, refreshSession]);

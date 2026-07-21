@@ -30,7 +30,7 @@ function initialSymbol(): RadarSymbol {
   return isRadarSymbol(stored) ? stored : DEFAULT_SYMBOL;
 }
 
-export function useMarketRadar(): MarketRadarState {
+export function useMarketRadar(enabled = true): MarketRadarState {
   const [symbol, setSymbolState] = useState<RadarSymbol>(() => initialSymbol());
   const [state, setState] = useState<MarketRadarDataState>({
     analysis: null,
@@ -40,6 +40,7 @@ export function useMarketRadar(): MarketRadarState {
   });
   const lastSignalKeyRef = useRef<string | null>(null);
   const requestIdRef = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
 
   const setSymbol = useCallback((nextSymbol: RadarSymbol) => {
     setSymbolState((current) => {
@@ -59,7 +60,11 @@ export function useMarketRadar(): MarketRadarState {
   }, []);
 
   const refresh = useCallback(async (activeSymbol: RadarSymbol) => {
+    if (!enabled) return;
     const requestId = ++requestIdRef.current;
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     setState((prev) => ({
       ...prev,
       loading: true,
@@ -69,13 +74,13 @@ export function useMarketRadar(): MarketRadarState {
 
     try {
       const [displayPrice, candles1h, candles15m, candles5m] = await Promise.all([
-        fetchPrice(activeSymbol),
-        fetchKlines(activeSymbol, '1h', 240),
-        fetchKlines(activeSymbol, '15m', 120),
-        fetchKlines(activeSymbol, '5m', 80),
+        fetchPrice(activeSymbol, controller.signal),
+        fetchKlines(activeSymbol, '1h', 240, controller.signal),
+        fetchKlines(activeSymbol, '15m', 120, controller.signal),
+        fetchKlines(activeSymbol, '5m', 80, controller.signal),
       ]);
 
-      if (requestId !== requestIdRef.current) return;
+      if (controller.signal.aborted || requestId !== requestIdRef.current) return;
 
       const next = analyzeMarketRadar({ symbol: activeSymbol, displayPrice, candles1h, candles15m, candles5m });
       const lastUpdate = new Date();
@@ -96,24 +101,44 @@ export function useMarketRadar(): MarketRadarState {
         return { analysis: next, loading: false, error: null, lastUpdate };
       });
     } catch (err) {
-      if (requestId !== requestIdRef.current) return;
+      if (controller.signal.aborted || requestId !== requestIdRef.current) return;
       setState((prev) => ({
         ...prev,
         loading: false,
         error: err instanceof Error ? err.message : 'Falha ao atualizar o Radar do Mercado.',
         lastUpdate: new Date(),
       }));
+    } finally {
+      if (abortRef.current === controller) abortRef.current = null;
     }
-  }, []);
+  }, [enabled]);
 
   useEffect(() => {
+    if (!enabled) {
+      requestIdRef.current += 1;
+      abortRef.current?.abort();
+      abortRef.current = null;
+      lastSignalKeyRef.current = null;
+      setState({
+        analysis: null,
+        loading: false,
+        error: null,
+        lastUpdate: null,
+      });
+      return;
+    }
     if (typeof window !== 'undefined') {
       window.localStorage.setItem(STORAGE_KEY, symbol);
     }
     refresh(symbol);
     const id = window.setInterval(() => refresh(symbol), POLL_MS);
-    return () => window.clearInterval(id);
-  }, [refresh, symbol]);
+    return () => {
+      window.clearInterval(id);
+      requestIdRef.current += 1;
+      abortRef.current?.abort();
+      abortRef.current = null;
+    };
+  }, [enabled, refresh, symbol]);
 
   return { ...state, symbol, setSymbol, refresh: () => refresh(symbol) };
 }

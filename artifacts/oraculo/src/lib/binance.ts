@@ -18,8 +18,8 @@ export interface Candle {
 export type Interval = '1h' | '15m' | '5m';
 
 /** Current price for a symbol, e.g. BTCUSDT */
-export async function fetchPrice(symbol: string): Promise<number> {
-  const data = await apiJson<{ price: string }>(`${PROXY}/price?symbol=${symbol}`);
+export async function fetchPrice(symbol: string, signal?: AbortSignal): Promise<number> {
+  const data = await apiJson<{ price: string }>(`${PROXY}/price?symbol=${symbol}`, { signal });
   return parseFloat(data.price);
 }
 
@@ -28,9 +28,10 @@ export async function fetchKlines(
   symbol: string,
   interval: Interval,
   limit = 50,
+  signal?: AbortSignal,
 ): Promise<Candle[]> {
   const url = `${PROXY}/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
-  const raw = await apiJson<unknown[][]>(url);
+  const raw = await apiJson<unknown[][]>(url, { signal });
   return raw.map((row) => ({
     openTime:  Number(row[0]),
     open:      parseFloat(row[1] as string),
