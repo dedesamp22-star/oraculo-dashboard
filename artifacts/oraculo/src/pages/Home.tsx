@@ -23,11 +23,66 @@ import { DemoHistoryPanel }  from '../components/DemoHistoryPanel';
 import { DemoStatsPanel }    from '../components/DemoStatsPanel';
 import { MarketRadarPanel }  from '../components/MarketRadarPanel';
 import { DemoAgentsPanel }   from '../components/DemoAgentsPanel';
+import { getAuth, loginUser, logoutUser, type AuthUser } from '../lib/demoApi';
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 
 function fmtPrice(n: number): string {
   return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function LoginScreen({ loading, error, onLogin }: {
+  loading: boolean;
+  error: string | null;
+  onLogin: (username: string, password: string) => void;
+}) {
+  const [username, setUsername] = useState('admin');
+  const [password, setPassword] = useState('');
+  return (
+    <div className="min-h-screen w-full bg-background text-foreground font-sans flex items-center justify-center p-4">
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          onLogin(username, password);
+        }}
+        className="w-full max-w-sm border border-border bg-card/60 p-5 flex flex-col gap-4"
+      >
+        <div className="flex items-center gap-3">
+          <ShieldAlert className="w-5 h-5 text-primary" />
+          <div>
+            <h1 className="text-lg font-mono font-bold uppercase tracking-[0.18em]">Oraculo</h1>
+            <p className="text-[11px] font-mono text-muted-foreground">Acesso seguro ao modo demo</p>
+          </div>
+        </div>
+        <label className="flex flex-col gap-1.5">
+          <span className="text-[10px] font-mono uppercase tracking-[0.18em] text-muted-foreground">Usuario</span>
+          <input
+            value={username}
+            onChange={(event) => setUsername(event.target.value)}
+            autoComplete="username"
+            className="bg-background border border-border px-3 py-3 font-mono text-sm outline-none focus:border-primary"
+          />
+        </label>
+        <label className="flex flex-col gap-1.5">
+          <span className="text-[10px] font-mono uppercase tracking-[0.18em] text-muted-foreground">Senha</span>
+          <input
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            type="password"
+            autoComplete="current-password"
+            className="bg-background border border-border px-3 py-3 font-mono text-sm outline-none focus:border-primary"
+          />
+        </label>
+        {error && <p className="text-[11px] font-mono text-[#ff4444]">{error}</p>}
+        <button
+          disabled={loading || password.length === 0 || username.trim().length === 0}
+          className="min-h-11 bg-primary text-primary-foreground font-mono font-bold uppercase tracking-[0.14em] disabled:opacity-40"
+        >
+          {loading ? 'Entrando...' : 'Entrar'}
+        </button>
+      </form>
+    </div>
+  );
 }
 
 // ── Alert toast ───────────────────────────────────────────────────────────────
@@ -575,12 +630,59 @@ export default function Home() {
   // SP clock
   const [spClock, setSpClock] = useState(fmtSPNow);
   const [isOp,    setIsOp]    = useState(checkOperational);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
   useEffect(() => {
     const id = setInterval(() => {
       setSpClock(fmtSPNow());
       setIsOp(checkOperational());
     }, 1_000);
     return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getAuth()
+      .then((auth) => {
+        if (cancelled) return;
+        setAuthUser(auth.authenticated ? auth.user ?? null : null);
+        setAuthError(null);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setAuthUser(null);
+        setAuthError(err instanceof Error ? err.message : 'Falha ao verificar sessao.');
+      })
+      .finally(() => {
+        if (!cancelled) setAuthLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleLogin = useCallback((username: string, password: string) => {
+    setAuthLoading(true);
+    setAuthError(null);
+    void loginUser(username, password)
+      .then((auth) => {
+        setAuthUser(auth.authenticated ? auth.user ?? null : null);
+        if (!auth.authenticated) setAuthError('Credenciais invalidas.');
+      })
+      .catch((err) => {
+        setAuthUser(null);
+        setAuthError(err instanceof Error ? err.message : 'Credenciais invalidas.');
+      })
+      .finally(() => setAuthLoading(false));
+  }, []);
+
+  const handleLogout = useCallback(() => {
+    setAuthLoading(true);
+    void logoutUser()
+      .catch(() => undefined)
+      .finally(() => {
+        setAuthUser(null);
+        setAuthLoading(false);
+      });
   }, []);
 
   // ── Demo trading ──────────────────────────────────────────────────────────
@@ -594,7 +696,7 @@ export default function Home() {
     automationEnabled: demoEnabled,
     serverError: demoServerError,
     setAutomationEnabled,
-  } = useDemoTrading();
+  } = useDemoTrading(!!authUser);
 
   // Feed live price into demo state machine every time price updates
   useEffect(() => {
@@ -707,6 +809,10 @@ export default function Home() {
     void radar.refresh();
   };
 
+  if (!authUser) {
+    return <LoginScreen loading={authLoading} error={authError} onLogin={handleLogin} />;
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
   // RENDER
   // ─────────────────────────────────────────────────────────────────────────
@@ -740,9 +846,15 @@ export default function Home() {
             ORÁCULO<span className="text-primary ml-2">0.3</span>
           </h1>
         </div>
-        <div className="hidden sm:flex items-center gap-2 text-xs font-mono text-primary bg-primary/10 px-4 py-2 border-l-2 border-primary">
+        <div className="hidden sm:flex items-center gap-3 text-xs font-mono text-primary bg-primary/10 px-4 py-2 border-l-2 border-primary">
           <Activity className="w-4 h-4" />
-          <span className="tracking-widest">SYSTEM ONLINE</span>
+          <span className="tracking-widest">{authUser.username}</span>
+          <button
+            onClick={handleLogout}
+            className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground hover:text-foreground"
+          >
+            Sair
+          </button>
         </div>
       </header>
 

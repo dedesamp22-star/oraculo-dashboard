@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import test from "node:test";
+import { DatabaseSync } from "node:sqlite";
 
 const root = path.resolve(import.meta.dirname, "..");
 const node = process.execPath;
@@ -42,6 +43,9 @@ async function startServer({ port, dbPath }) {
       NODE_ENV: "test",
       ORACULO_DB_PATH: dbPath,
       ORACULO_ADMIN_PASSWORD: "local-test-password",
+      ORACULO_INITIAL_ADMIN_USERNAME: "admin",
+      ORACULO_INITIAL_ADMIN_NAME: "Admin Teste",
+      ORACULO_INITIAL_ADMIN_PASSWORD: "local-test-password",
       ORACULO_SESSION_SECRET: "local-test-session-secret-32-bytes",
       ORACULO_REQUIRE_HTTPS: process.env.ORACULO_REQUIRE_HTTPS ?? "false",
     },
@@ -75,12 +79,38 @@ async function login(base) {
   const res = await fetch(`${base}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ password: "local-test-password" }),
+    body: JSON.stringify({ username: "admin", password: "local-test-password" }),
   });
   assert.equal(res.status, 200);
   const cookie = res.headers.get("set-cookie")?.split(";")[0];
   assert.ok(cookie?.startsWith("oraculo_session="));
   return cookie;
+}
+
+async function loginAs(base, username, password) {
+  const res = await fetch(`${base}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  assert.equal(res.status, 200);
+  const cookie = res.headers.get("set-cookie")?.split(";")[0];
+  assert.ok(cookie?.startsWith("oraculo_session="));
+  return cookie;
+}
+
+async function authedJson(base, cookie, path) {
+  return await json(await fetch(`${base}${path}`, { headers: { Cookie: cookie } }));
+}
+
+async function createUser(base, adminCookie, body) {
+  const res = await fetch(`${base}/api/auth/users`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: adminCookie },
+    body: JSON.stringify(body),
+  });
+  assert.equal(res.status, 200);
+  return await json(res);
 }
 
 async function json(res) {
@@ -106,6 +136,138 @@ async function postPrice(base, cookie, pair, price) {
   assert.equal(res.status, 200);
   return await json(res);
 }
+
+test("multiuser auth isolates demo data and protects sessions", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "oraculo-demo-auth-"));
+  const dbPath = path.join(dir, "oraculo.sqlite");
+  const port = 5132;
+  const server = await startServer({ port, dbPath });
+  try {
+    const privateRead = await fetch(`${server.base}/api/demo/session`);
+    assert.equal(privateRead.status, 401);
+
+    const invalidPassword = await fetch(`${server.base}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: "wrong-password" }),
+    });
+    const unknownUser = await fetch(`${server.base}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: "nobody", password: "wrong-password" }),
+    });
+    assert.equal(invalidPassword.status, 401);
+    assert.equal(unknownUser.status, 401);
+    assert.deepEqual(await json(invalidPassword), await json(unknownUser));
+
+    const adminCookie = await login(server.base);
+    const me = await authedJson(server.base, adminCookie, "/api/auth/me");
+    assert.equal(me.authenticated, true);
+    assert.equal(me.user.username, "admin");
+    assert.equal(me.user.password_hash, undefined);
+    assert.equal(me.user.password_salt, undefined);
+
+    const alice = await createUser(server.base, adminCookie, {
+      username: "alice",
+      name: "Alice",
+      password: "same-safe-password-123",
+      role: "user",
+    });
+    const bob = await createUser(server.base, adminCookie, {
+      username: "bob",
+      name: "Bob",
+      password: "same-safe-password-123",
+      role: "user",
+    });
+    assert.equal(alice.user.password_hash, undefined);
+    assert.equal(bob.user.password_salt, undefined);
+
+    const db = new DatabaseSync(dbPath);
+    try {
+      const hashes = db.prepare("SELECT username, password_hash, password_salt FROM users WHERE username IN ('alice','bob') ORDER BY username").all();
+      assert.equal(hashes.length, 2);
+      assert.notEqual(hashes[0].password_salt, hashes[1].password_salt);
+      assert.notEqual(hashes[0].password_hash, hashes[1].password_hash);
+    } finally {
+      db.close();
+    }
+
+    const aliceCookie = await loginAs(server.base, "alice", "same-safe-password-123");
+    const bobCookie = await loginAs(server.base, "bob", "same-safe-password-123");
+
+    await postPosition(server.base, aliceCookie, sampleTrade({ id: "alice_btc", pair: "BTCUSDT" }));
+    await postPosition(server.base, bobCookie, sampleTrade({ id: "bob_eth", pair: "ETHUSDT" }));
+
+    const alicePositions = await authedJson(server.base, aliceCookie, "/api/demo/positions");
+    const bobPositions = await authedJson(server.base, bobCookie, "/api/demo/positions");
+    assert.deepEqual(alicePositions.map((item) => item.id), ["alice_btc"]);
+    assert.deepEqual(bobPositions.map((item) => item.id), ["bob_eth"]);
+
+    const crossPatch = await fetch(`${server.base}/api/demo/positions/bob_eth`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Cookie: aliceCookie },
+      body: JSON.stringify({ stopLoss: 99 }),
+    });
+    assert.equal(crossPatch.status, 404);
+
+    const bobClosedTrade = sampleTrade({ id: "bob_closed", pair: "SOLUSDT", status: "WIN", closeTime: Date.now(), closePrice: 110, exitReason: "TARGET_2" });
+    assert.equal((await fetch(`${server.base}/api/demo/trades`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: bobCookie },
+      body: JSON.stringify(bobClosedTrade),
+    })).status, 200);
+    assert.equal((await fetch(`${server.base}/api/demo/trades`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: aliceCookie },
+      body: JSON.stringify(bobClosedTrade),
+    })).status, 404);
+
+    const aliceAutomation = await fetch(`${server.base}/api/demo/automation`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Cookie: aliceCookie },
+      body: JSON.stringify({ enabled: true, symbol: "SOLUSDT" }),
+    });
+    assert.equal(aliceAutomation.status, 200);
+    assert.equal((await authedJson(server.base, aliceCookie, "/api/demo/automation")).enabled, true);
+    assert.equal((await authedJson(server.base, bobCookie, "/api/demo/automation")).enabled, false);
+
+    const adminCreate = await fetch(`${server.base}/api/auth/users`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: aliceCookie },
+      body: JSON.stringify({ username: "mallory", password: "safe-password-1234" }),
+    });
+    assert.equal(adminCreate.status, 403);
+
+    const publicBinanceValidation = await fetch(`${server.base}/api/binance/klines?symbol=BTCUSDT&interval=bad&limit=1`);
+    assert.equal(publicBinanceValidation.status, 400);
+
+    const db2 = new DatabaseSync(dbPath);
+    try {
+      db2.prepare("UPDATE users SET active = 0 WHERE username = 'bob'").run();
+      const aliceSessionId = aliceCookie.split("=")[1].split(".")[0];
+      db2.prepare("UPDATE auth_sessions SET expires_at = ? WHERE id = ?").run(Date.now() - 1000, aliceSessionId);
+    } finally {
+      db2.close();
+    }
+    const expiredAlice = await fetch(`${server.base}/api/demo/session`, { headers: { Cookie: aliceCookie } });
+    assert.equal(expiredAlice.status, 401);
+
+    const inactiveBob = await fetch(`${server.base}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: "bob", password: "same-safe-password-123" }),
+    });
+    assert.equal(inactiveBob.status, 401);
+
+    const logout = await fetch(`${server.base}/api/auth/logout`, { method: "POST", headers: { Cookie: aliceCookie } });
+    assert.equal(logout.status, 200);
+    const afterLogout = await fetch(`${server.base}/api/demo/session`, { headers: { Cookie: aliceCookie } });
+    assert.equal(afterLogout.status, 401);
+  } finally {
+    await stopServer(server.child);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("demo API auth, validation, migration, persistence, and trade lifecycle", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "oraculo-demo-"));
@@ -196,12 +358,12 @@ test("demo API auth, validation, migration, persistence, and trade lifecycle", a
       });
       assert.equal(migrated.status, 200);
     }
-    const tradesAfterMigration = await json(await fetch(`${server.base}/api/demo/trades`));
+    const tradesAfterMigration = await authedJson(server.base, cookie, "/api/demo/trades");
     assert.equal(tradesAfterMigration.filter((item) => item.id === "migrated_1").length, 1);
 
     await stopServer(server.child);
     server = await startServer({ port, dbPath });
-    const persistedTrades = await json(await fetch(`${server.base}/api/demo/trades`));
+    const persistedTrades = await authedJson(server.base, cookie, "/api/demo/trades");
     assert.ok(persistedTrades.some((item) => item.id === "cycle_1"));
     assert.ok(persistedTrades.some((item) => item.id === "migrated_1"));
 
@@ -236,7 +398,7 @@ test("HTTPS lock blocks auth and writes over HTTP", async () => {
     const blockedLogin = await fetch(`${server.base}/api/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password: "local-test-password" }),
+      body: JSON.stringify({ username: "admin", password: "local-test-password" }),
     });
     assert.equal(blockedLogin.status, 403);
     assert.match((await blockedLogin.text()), /HTTPS is required/);
@@ -244,16 +406,19 @@ test("HTTPS lock blocks auth and writes over HTTP", async () => {
     const blockedSpoof = await fetch(`${server.base}/api/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Forwarded-Proto": "http" },
-      body: JSON.stringify({ password: "local-test-password" }),
+      body: JSON.stringify({ username: "admin", password: "local-test-password" }),
     });
     assert.equal(blockedSpoof.status, 403);
 
     const allowedLocalHttps = await fetch(`${server.base}/api/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Forwarded-Proto": "https" },
-      body: JSON.stringify({ password: "local-test-password" }),
+      body: JSON.stringify({ username: "admin", password: "local-test-password" }),
     });
     assert.equal(allowedLocalHttps.status, 200);
+    assert.match(allowedLocalHttps.headers.get("set-cookie") ?? "", /HttpOnly/);
+    assert.match(allowedLocalHttps.headers.get("set-cookie") ?? "", /Secure/);
+    assert.match(allowedLocalHttps.headers.get("set-cookie") ?? "", /SameSite=Lax/);
   } finally {
     delete process.env.ORACULO_REQUIRE_HTTPS;
     await stopServer(server.child);
@@ -317,9 +482,9 @@ test("server session is authoritative and demo signal/price events are idempoten
     });
     assert.equal(browserBDuplicate.status, 200);
 
-    const browserBSession = await json(await fetch(`${server.base}/api/demo/session`));
+    const browserBSession = await authedJson(server.base, cookie, "/api/demo/session");
     assert.equal(browserBSession.activeTrade.id, sessionA.activeTrade.id);
-    assert.equal((await json(await fetch(`${server.base}/api/demo/positions`))).length, 1);
+    assert.equal((await authedJson(server.base, cookie, "/api/demo/positions")).length, 1);
 
     for (let i = 0; i < 2; i++) {
       const target1 = await fetch(`${server.base}/api/demo/price`, {
@@ -329,7 +494,7 @@ test("server session is authoritative and demo signal/price events are idempoten
       });
       assert.equal(target1.status, 200);
     }
-    const afterTarget1 = await json(await fetch(`${server.base}/api/demo/session`));
+    const afterTarget1 = await authedJson(server.base, cookie, "/api/demo/session");
     assert.equal(afterTarget1.activeTrade.target1Hit, true);
     assert.ok(afterTarget1.activeTrade.stopLoss >= 100.02);
     assert.equal(afterTarget1.activeTrade.remainingPositionSize, 1);
@@ -356,7 +521,7 @@ test("server session is authoritative and demo signal/price events are idempoten
       }),
     ]);
 
-    const finalSession = await json(await fetch(`${server.base}/api/demo/session`));
+    const finalSession = await authedJson(server.base, cookie, "/api/demo/session");
     assert.equal(finalSession.activeTrade, null);
     assert.equal(finalSession.history.filter((item) => item.id === sessionA.activeTrade.id).length, 1);
     assert.equal(finalSession.dailyStats.totalTrades, 1);
@@ -368,7 +533,7 @@ test("server session is authoritative and demo signal/price events are idempoten
     await stopServer(server.child);
     const restarted = await startServer({ port, dbPath });
     try {
-      const persisted = await json(await fetch(`${restarted.base}/api/demo/session`));
+      const persisted = await authedJson(restarted.base, cookie, "/api/demo/session");
       assert.equal(persisted.history.filter((item) => item.id === sessionA.activeTrade.id).length, 1);
       assert.equal(persisted.activeTrade, null);
       assert.equal(persisted.realizedPnlUSDC, 15);

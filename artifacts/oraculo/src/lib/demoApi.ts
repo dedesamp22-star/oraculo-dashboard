@@ -2,6 +2,18 @@ import type { DemoSession, DemoTrade } from './demo';
 import type { EngineResult } from './analysis';
 import { apiJson } from './apiClient';
 
+export interface AuthUser {
+  id: string;
+  name: string;
+  username: string;
+  role: 'admin' | 'user';
+}
+
+export interface AuthState {
+  authenticated: boolean;
+  user?: AuthUser;
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return await apiJson<T>(path, {
     ...init,
@@ -13,17 +25,19 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   });
 }
 
-export async function getAuth(): Promise<boolean> {
-  const data = await request<{ authenticated: boolean }>('/api/auth/me');
-  return data.authenticated;
+export async function getAuth(): Promise<AuthState> {
+  return await request<AuthState>('/api/auth/me');
 }
 
-export async function loginDemoAdmin(password: string): Promise<boolean> {
-  const data = await request<{ authenticated: boolean }>('/api/auth/login', {
+export async function loginUser(username: string, password: string): Promise<AuthState> {
+  return await request<AuthState>('/api/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ password }),
+    body: JSON.stringify({ username, password }),
   });
-  return data.authenticated;
+}
+
+export async function logoutUser(): Promise<AuthState> {
+  return await request<AuthState>('/api/auth/logout', { method: 'POST' });
 }
 
 export async function loadServerSession(): Promise<DemoSession> {

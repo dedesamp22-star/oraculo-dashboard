@@ -2,10 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { EngineResult } from '../lib/analysis';
 import { type DemoSession, makeSession, loadSession } from '../lib/demo';
 import {
-  getAuth,
   getDemoAutomation,
   loadServerSession,
-  loginDemoAdmin,
   migrateLocalSession,
   persistAccount,
   resetServerSession,
@@ -27,12 +25,11 @@ export interface DemoTradingState {
   refreshSession: () => void;
 }
 
-export function useDemoTrading(): DemoTradingState {
+export function useDemoTrading(authenticated: boolean): DemoTradingState {
   const [session, setSession] = useState<DemoSession>(() => makeSession());
   const [automationEnabled, setAutomationEnabledState] = useState(false);
   const [serverAvailable, setServerAvailable] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
-  const authenticatedRef = useRef(false);
   const sessionRef = useRef(session);
   const writeInFlightRef = useRef(false);
 
@@ -50,34 +47,29 @@ export function useDemoTrading(): DemoTradingState {
   }, []);
 
   const ensureWritable = useCallback(async (): Promise<boolean> => {
-    if (authenticatedRef.current) return true;
-    try {
-      const authenticated = await getAuth();
-      if (authenticated) {
-        authenticatedRef.current = true;
-        return true;
-      }
-      const password = window.prompt('Senha administrativa para controlar o modo demo no servidor:');
-      if (!password) return false;
-      authenticatedRef.current = await loginDemoAdmin(password);
-      return authenticatedRef.current;
-    } catch (err) {
-      markError(err);
-      return false;
-    }
-  }, [markError]);
+    if (authenticated) return true;
+    setServerError('Login necessario para acessar o modo demo no servidor.');
+    return false;
+  }, [authenticated]);
 
   const refreshSession = useCallback(() => {
+    if (!authenticated) return;
     void loadServerSession()
       .then(applyRemoteSession)
       .catch(markError);
-  }, [applyRemoteSession, markError]);
+  }, [authenticated, applyRemoteSession, markError]);
 
   useEffect(() => {
+    if (!authenticated) {
+      setSession(makeSession());
+      setAutomationEnabledState(false);
+      setServerAvailable(false);
+      setServerError(null);
+      return;
+    }
     let cancelled = false;
     async function bootstrap() {
       try {
-        authenticatedRef.current = await getAuth();
         const local = loadSession();
         const hasLocalState = !!local && (
           local.history.length > 0 ||
@@ -86,7 +78,7 @@ export function useDemoTrading(): DemoTradingState {
           local.configuredBalance !== 1000
         );
 
-        if (hasLocalState && authenticatedRef.current && local) {
+        if (hasLocalState && local) {
           const migrated = await migrateLocalSession(local);
           if (!cancelled) applyRemoteSession(migrated);
         } else {
@@ -102,12 +94,13 @@ export function useDemoTrading(): DemoTradingState {
     }
     void bootstrap();
     return () => { cancelled = true; };
-  }, [applyRemoteSession, markError]);
+  }, [authenticated, applyRemoteSession, markError]);
 
   useEffect(() => {
+    if (!authenticated) return;
     const id = setInterval(refreshSession, 5_000);
     return () => clearInterval(id);
-  }, [refreshSession]);
+  }, [authenticated, refreshSession]);
 
   const feedSignal = useCallback((result: EngineResult, pair: string) => {
     if (result.decision === 'SEM ENTRADA') return;

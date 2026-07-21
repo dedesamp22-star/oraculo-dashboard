@@ -11,15 +11,17 @@ async function tick(): Promise<void> {
   if (running) return;
   running = true;
   try {
-    const automation = demoStore.getAutomation();
-    if (!automation.enabled) return;
-    const symbol = automation.symbol || "BTCUSDT";
-    const price = await fetchDisplayPrice(symbol);
-    demoStore.updatePrices({ pair: symbol, price });
+    const users = demoStore.getAutomationUsers();
+    if (users.length === 0) return;
+    for (const { user, automation } of users) {
+      const symbol = automation.symbol || "BTCUSDT";
+      const price = await fetchDisplayPrice(symbol);
+      demoStore.updatePrices(user.id, { pair: symbol, price });
 
-    const { signal } = await analyzeDemoSignal(symbol);
-    if (signal.decision !== "SEM ENTRADA") {
-      demoStore.openFromSignal(signal);
+      const { signal } = await analyzeDemoSignal(symbol);
+      if (signal.decision !== "SEM ENTRADA") {
+        demoStore.openFromSignal(user.id, signal);
+      }
     }
   } catch (err) {
     logger.warn({ err }, "Demo worker tick failed");

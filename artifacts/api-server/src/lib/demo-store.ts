@@ -1,4 +1,4 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { mkdirSync, chmodSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -67,6 +67,27 @@ export interface DemoSession {
   openRiskUSDC: number;
 }
 
+export type UserRole = "admin" | "user";
+
+export interface AuthUser {
+  id: string;
+  name: string;
+  username: string;
+  role: UserRole;
+  active: boolean;
+  createdAt: string;
+  lastLoginAt: string | null;
+}
+
+interface PasswordRecord {
+  password_hash: string;
+  password_salt: string;
+  scrypt_n: number;
+  scrypt_r: number;
+  scrypt_p: number;
+  scrypt_key_len: number;
+}
+
 export interface DemoSignalInput {
   pair: string;
   decision: DemoDecision;
@@ -94,6 +115,14 @@ const DEFAULT_BREAKEVEN_BUFFER_PCT = 0.0002;
 const DEFAULT_TRAILING_STOP_PCT = 0.002;
 const DEFAULT_LOSS_OF_STRENGTH_PCT = 0.004;
 const PRICE_HISTORY_LIMIT = 20;
+const AUTH_COOKIE_NAME = "oraculo_session";
+const DEFAULT_SESSION_TTL_SECONDS = 12 * 60 * 60;
+const DEFAULT_SCRYPT_N = 16384;
+const DEFAULT_SCRYPT_R = 8;
+const DEFAULT_SCRYPT_P = 1;
+const DEFAULT_SCRYPT_KEY_LEN = 64;
+const DEFAULT_BRUTE_FORCE_MAX_ATTEMPTS = 5;
+const DEFAULT_BRUTE_FORCE_LOCK_MS = 15 * 60 * 1000;
 const TRAILING_BY_SYMBOL: Record<string, { minPct: number; maxPct: number }> = {
   BTCUSDT: { minPct: 0.0018, maxPct: 0.0035 },
   ETHUSDT: { minPct: 0.0018, maxPct: 0.0035 },
@@ -169,6 +198,77 @@ function canonical(value: unknown): string {
 
 function newTradeId(): string {
   return `demo_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function newId(prefix: string): string {
+  return `${prefix}_${Date.now()}_${randomBytes(8).toString("hex")}`;
+}
+
+function envInt(name: string, fallback: number, min: number, max: number): number {
+  const value = Number(process.env[name]);
+  return Number.isInteger(value) && value >= min && value <= max ? value : fallback;
+}
+
+function sessionTtlSeconds(): number {
+  return envInt("ORACULO_SESSION_TTL_SECONDS", DEFAULT_SESSION_TTL_SECONDS, 300, 30 * 24 * 60 * 60);
+}
+
+function passwordParams() {
+  return {
+    n: envInt("ORACULO_SCRYPT_N", DEFAULT_SCRYPT_N, 1024, 1048576),
+    r: envInt("ORACULO_SCRYPT_R", DEFAULT_SCRYPT_R, 1, 64),
+    p: envInt("ORACULO_SCRYPT_P", DEFAULT_SCRYPT_P, 1, 16),
+    keyLen: envInt("ORACULO_SCRYPT_KEY_LEN", DEFAULT_SCRYPT_KEY_LEN, 32, 128),
+  };
+}
+
+function normalizeUsername(value: unknown): string {
+  return nonEmptyString(value, "username", 120).trim().toLowerCase();
+}
+
+function safeUserFromRow(row: Record<string, unknown>): AuthUser {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    username: String(row.username),
+    role: String(row.role) === "admin" ? "admin" : "user",
+    active: Boolean(row.active),
+    createdAt: String(row.created_at),
+    lastLoginAt: row.last_login_at == null ? null : String(row.last_login_at),
+  };
+}
+
+function hashPassword(password: string, params = passwordParams()): PasswordRecord {
+  const salt = randomBytes(16).toString("base64url");
+  const hash = scryptSync(password, salt, params.keyLen, {
+    N: params.n,
+    r: params.r,
+    p: params.p,
+    maxmem: 128 * 1024 * 1024,
+  }).toString("base64url");
+  return {
+    password_hash: hash,
+    password_salt: salt,
+    scrypt_n: params.n,
+    scrypt_r: params.r,
+    scrypt_p: params.p,
+    scrypt_key_len: params.keyLen,
+  };
+}
+
+function verifyPassword(password: string, record: PasswordRecord): boolean {
+  const actual = Buffer.from(record.password_hash, "base64url");
+  const expected = scryptSync(password, record.password_salt, record.scrypt_key_len, {
+    N: record.scrypt_n,
+    r: record.scrypt_r,
+    p: record.scrypt_p,
+    maxmem: 128 * 1024 * 1024,
+  });
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+function hashSessionToken(token: string): string {
+  return createHash("sha256").update(token).digest("base64url");
 }
 
 function isSafetyLimited(stats: DailyStats): boolean {
@@ -265,6 +365,7 @@ export class DemoStore {
     this.db.exec("PRAGMA busy_timeout = 5000");
     this.db.exec("PRAGMA foreign_keys = ON");
     this.migrate();
+    this.applyInitialAdminEnv();
   }
 
   close(): void {
@@ -405,6 +506,173 @@ export class DemoStore {
         this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (3, 'demo_trade_management_fields', ?)").run(nowIso());
       });
     }
+    const v4 = this.db.prepare("SELECT version FROM schema_migrations WHERE version = 4").get();
+    if (!v4) {
+      this.transaction(() => {
+        const now = nowIso();
+        const initialUsername = (process.env["ORACULO_INITIAL_ADMIN_USERNAME"] ?? "admin").trim().toLowerCase();
+        const initialName = process.env["ORACULO_INITIAL_ADMIN_NAME"] ?? "Administrador";
+        const initialPassword = process.env["ORACULO_INITIAL_ADMIN_PASSWORD"] ?? process.env["ORACULO_ADMIN_PASSWORD"];
+        const password = hashPassword(initialPassword && initialPassword.length >= 12 ? initialPassword : randomBytes(32).toString("base64url"));
+        const active = initialPassword && initialPassword.length >= 12 ? 1 : 0;
+
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            password_salt TEXT NOT NULL,
+            scrypt_n INTEGER NOT NULL,
+            scrypt_r INTEGER NOT NULL,
+            scrypt_p INTEGER NOT NULL,
+            scrypt_key_len INTEGER NOT NULL,
+            role TEXT NOT NULL CHECK (role IN ('admin','user')),
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_login_at TEXT
+          );
+          CREATE TABLE IF NOT EXISTS auth_sessions (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token_hash TEXT NOT NULL UNIQUE,
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            revoked_at INTEGER,
+            user_agent TEXT,
+            ip TEXT
+          );
+          CREATE TABLE IF NOT EXISTS auth_attempts (
+            identity TEXT PRIMARY KEY,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_attempt_at INTEGER NOT NULL,
+            locked_until INTEGER
+          );
+        `);
+
+        this.db.prepare(`
+          INSERT INTO users
+            (id, name, username, password_hash, password_salt, scrypt_n, scrypt_r, scrypt_p, scrypt_key_len, role, active, created_at, updated_at)
+          VALUES ('admin', ?, ?, ?, ?, ?, ?, ?, ?, 'admin', ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            username = excluded.username,
+            password_hash = CASE WHEN excluded.active = 1 THEN excluded.password_hash ELSE users.password_hash END,
+            password_salt = CASE WHEN excluded.active = 1 THEN excluded.password_salt ELSE users.password_salt END,
+            scrypt_n = CASE WHEN excluded.active = 1 THEN excluded.scrypt_n ELSE users.scrypt_n END,
+            scrypt_r = CASE WHEN excluded.active = 1 THEN excluded.scrypt_r ELSE users.scrypt_r END,
+            scrypt_p = CASE WHEN excluded.active = 1 THEN excluded.scrypt_p ELSE users.scrypt_p END,
+            scrypt_key_len = CASE WHEN excluded.active = 1 THEN excluded.scrypt_key_len ELSE users.scrypt_key_len END,
+            active = CASE WHEN excluded.active = 1 THEN 1 ELSE users.active END,
+            updated_at = excluded.updated_at
+        `).run(
+          initialName,
+          initialUsername,
+          password.password_hash,
+          password.password_salt,
+          password.scrypt_n,
+          password.scrypt_r,
+          password.scrypt_p,
+          password.scrypt_key_len,
+          active,
+          now,
+          now,
+        );
+
+        this.db.exec(`
+          DROP INDEX IF EXISTS demo_positions_open_pair_idx;
+          ALTER TABLE demo_account RENAME TO demo_account_legacy_v4;
+          CREATE TABLE demo_account (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+            balance REAL NOT NULL,
+            configured_balance REAL NOT NULL,
+            daily_stats_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          INSERT INTO demo_account (user_id, balance, configured_balance, daily_stats_json, created_at, updated_at)
+          SELECT 'admin', balance, configured_balance, daily_stats_json, created_at, updated_at
+          FROM demo_account_legacy_v4
+          LIMIT 1;
+          INSERT OR IGNORE INTO demo_account (user_id, balance, configured_balance, daily_stats_json, created_at, updated_at)
+          VALUES ('admin', 1000, 1000, '${JSON.stringify(makeDailyStats(DEFAULT_BALANCE)).replaceAll("'", "''")}', '${now}', '${now}');
+          ALTER TABLE app_settings RENAME TO app_settings_legacy_v4;
+          CREATE TABLE app_settings (
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, key)
+          );
+          INSERT OR IGNORE INTO app_settings (user_id, key, value, updated_at)
+          SELECT 'admin', key, value, updated_at FROM app_settings_legacy_v4;
+        `);
+
+        const addColumn = (table: string, definition: string) => {
+          const column = definition.split(/\s+/)[0];
+          const exists = (this.db.prepare(`PRAGMA table_info(${table})`).all() as Record<string, unknown>[])
+            .some((row) => row.name === column);
+          if (!exists) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+        };
+        addColumn("demo_positions", "user_id TEXT");
+        addColumn("demo_trades", "user_id TEXT");
+        addColumn("demo_events", "user_id TEXT");
+        this.db.prepare("UPDATE demo_positions SET user_id = COALESCE(user_id, 'admin')").run();
+        this.db.prepare("UPDATE demo_trades SET user_id = COALESCE(user_id, 'admin')").run();
+        this.db.prepare("UPDATE demo_events SET user_id = COALESCE(user_id, 'admin')").run();
+        this.db.exec(`
+          CREATE UNIQUE INDEX IF NOT EXISTS demo_positions_open_user_pair_idx
+            ON demo_positions(user_id, pair) WHERE status = 'OPEN';
+          CREATE INDEX IF NOT EXISTS demo_trades_user_time_idx
+            ON demo_trades(user_id, COALESCE(close_time, open_time));
+          CREATE INDEX IF NOT EXISTS demo_events_user_idx
+            ON demo_events(user_id, created_at);
+          CREATE INDEX IF NOT EXISTS auth_sessions_user_idx
+            ON auth_sessions(user_id, expires_at);
+        `);
+        this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (4, 'multiuser_demo_auth', ?)").run(now);
+      });
+    }
+  }
+
+  private applyInitialAdminEnv(): void {
+    const initialPassword = process.env["ORACULO_INITIAL_ADMIN_PASSWORD"] ?? process.env["ORACULO_ADMIN_PASSWORD"];
+    if (!initialPassword || initialPassword.length < 12) return;
+    const initialUsername = (process.env["ORACULO_INITIAL_ADMIN_USERNAME"] ?? "admin").trim().toLowerCase();
+    const initialName = process.env["ORACULO_INITIAL_ADMIN_NAME"] ?? "Administrador";
+    const password = hashPassword(initialPassword);
+    const now = nowIso();
+    this.db.prepare(`
+      INSERT INTO users
+        (id, name, username, password_hash, password_salt, scrypt_n, scrypt_r, scrypt_p, scrypt_key_len, role, active, created_at, updated_at)
+      VALUES ('admin', ?, ?, ?, ?, ?, ?, ?, ?, 'admin', 1, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        name = excluded.name,
+        username = excluded.username,
+        password_hash = excluded.password_hash,
+        password_salt = excluded.password_salt,
+        scrypt_n = excluded.scrypt_n,
+        scrypt_r = excluded.scrypt_r,
+        scrypt_p = excluded.scrypt_p,
+        scrypt_key_len = excluded.scrypt_key_len,
+        role = 'admin',
+        active = 1,
+        updated_at = excluded.updated_at
+    `).run(
+      initialName,
+      initialUsername,
+      password.password_hash,
+      password.password_salt,
+      password.scrypt_n,
+      password.scrypt_r,
+      password.scrypt_p,
+      password.scrypt_key_len,
+      now,
+      now,
+    );
+    this.ensureUserAccount("admin");
   }
 
   transaction<T>(fn: () => T): T {
@@ -419,17 +687,150 @@ export class DemoStore {
     }
   }
 
-  getAccount() {
-    const row = this.db.prepare("SELECT * FROM demo_account WHERE id = 1").get() as Record<string, unknown> | undefined;
+  private getPasswordRow(username: string): (Record<string, unknown> & PasswordRecord) | undefined {
+    return this.db.prepare("SELECT * FROM users WHERE username = ?").get(username) as (Record<string, unknown> & PasswordRecord) | undefined;
+  }
+
+  private bruteForceLocked(username: string): boolean {
+    const row = this.db.prepare("SELECT locked_until FROM auth_attempts WHERE identity = ?").get(username) as Record<string, unknown> | undefined;
+    return row?.locked_until != null && Number(row.locked_until) > Date.now();
+  }
+
+  private recordAuthFailure(username: string): void {
+    const maxAttempts = envInt("ORACULO_AUTH_MAX_ATTEMPTS", DEFAULT_BRUTE_FORCE_MAX_ATTEMPTS, 2, 50);
+    const lockMs = envInt("ORACULO_AUTH_LOCK_MS", DEFAULT_BRUTE_FORCE_LOCK_MS, 60_000, 24 * 60 * 60 * 1000);
+    const now = Date.now();
+    const row = this.db.prepare("SELECT attempts FROM auth_attempts WHERE identity = ?").get(username) as Record<string, unknown> | undefined;
+    const attempts = (Number(row?.attempts ?? 0) || 0) + 1;
+    const lockedUntil = attempts >= maxAttempts ? now + lockMs : null;
+    this.db.prepare(`
+      INSERT INTO auth_attempts (identity, attempts, last_attempt_at, locked_until)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(identity) DO UPDATE SET
+        attempts = excluded.attempts,
+        last_attempt_at = excluded.last_attempt_at,
+        locked_until = excluded.locked_until
+    `).run(username, attempts, now, lockedUntil);
+  }
+
+  private clearAuthFailures(username: string): void {
+    this.db.prepare("DELETE FROM auth_attempts WHERE identity = ?").run(username);
+  }
+
+  authenticate(body: unknown, meta: { userAgent?: string; ip?: string } = {}) {
+    const input = body as Record<string, unknown>;
+    const username = normalizeUsername(input.username ?? process.env["ORACULO_INITIAL_ADMIN_USERNAME"] ?? "admin");
+    const password = nonEmptyString(input.password, "password", 1024);
+    if (this.bruteForceLocked(username)) throw new HttpError(429, "Invalid credentials");
+
+    const row = this.getPasswordRow(username);
+    if (!row || !Boolean(row.active) || !verifyPassword(password, row)) {
+      this.recordAuthFailure(username);
+      throw new HttpError(401, "Invalid credentials");
+    }
+
+    const user = safeUserFromRow(row);
+    const sessionId = newId("sess");
+    const token = randomBytes(32).toString("base64url");
+    const now = Date.now();
+    const ttl = sessionTtlSeconds();
+    this.transaction(() => {
+      this.clearAuthFailures(username);
+      this.db.prepare(`
+        INSERT INTO auth_sessions (id, user_id, token_hash, created_at, expires_at, user_agent, ip)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(sessionId, user.id, hashSessionToken(token), now, now + ttl * 1000, meta.userAgent ?? null, meta.ip ?? null);
+      this.db.prepare("UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?").run(nowIso(), nowIso(), user.id);
+    });
+    return { user: this.getUser(user.id) ?? user, cookieValue: `${sessionId}.${token}`, maxAge: ttl };
+  }
+
+  sessionUser(cookie: string | undefined): AuthUser | null {
+    if (!cookie) return null;
+    const [sessionId, token] = cookie.split(".");
+    if (!sessionId || !token) return null;
+    const row = this.db.prepare(`
+      SELECT u.* , s.token_hash, s.expires_at, s.revoked_at
+      FROM auth_sessions s
+      JOIN users u ON u.id = s.user_id
+      WHERE s.id = ?
+    `).get(sessionId) as (Record<string, unknown> & { token_hash: string }) | undefined;
+    if (!row || row.revoked_at != null || Number(row.expires_at) <= Date.now() || !Boolean(row.active)) return null;
+    const actual = Buffer.from(String(row.token_hash));
+    const expected = Buffer.from(hashSessionToken(token));
+    if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return null;
+    return safeUserFromRow(row);
+  }
+
+  logout(cookie: string | undefined): void {
+    if (!cookie) return;
+    const [sessionId, token] = cookie.split(".");
+    if (!sessionId || !token) return;
+    this.db.prepare("UPDATE auth_sessions SET revoked_at = ? WHERE id = ? AND token_hash = ? AND revoked_at IS NULL")
+      .run(Date.now(), sessionId, hashSessionToken(token));
+  }
+
+  getUser(userId: string): AuthUser | null {
+    const row = this.db.prepare("SELECT * FROM users WHERE id = ?").get(userId) as Record<string, unknown> | undefined;
+    return row ? safeUserFromRow(row) : null;
+  }
+
+  createUser(admin: AuthUser, body: unknown): AuthUser {
+    if (admin.role !== "admin") throw new HttpError(403, "Admin required");
+    const input = body as Record<string, unknown>;
+    const username = normalizeUsername(input.username);
+    const name = nonEmptyString(input.name ?? username, "name", 120);
+    const role = input.role === "admin" ? "admin" : "user";
+    const password = nonEmptyString(input.password, "password", 1024);
+    if (password.length < 12) throw new HttpError(400, "password must have at least 12 characters");
+    const hash = hashPassword(password);
+    const id = newId("user");
+    const now = nowIso();
+    try {
+      this.transaction(() => {
+        this.db.prepare(`
+          INSERT INTO users
+            (id, name, username, password_hash, password_salt, scrypt_n, scrypt_r, scrypt_p, scrypt_key_len, role, active, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+        `).run(id, name, username, hash.password_hash, hash.password_salt, hash.scrypt_n, hash.scrypt_r, hash.scrypt_p, hash.scrypt_key_len, role, now, now);
+        this.ensureUserAccount(id);
+      });
+    } catch (err) {
+      if (String((err as Error).message).includes("UNIQUE")) throw new HttpError(409, "username already exists");
+      throw err;
+    }
+    return this.getUser(id)!;
+  }
+
+  private ensureUserAccount(userId: string): void {
+    const now = nowIso();
+    const stats = makeDailyStats(DEFAULT_BALANCE);
+    this.db.prepare(`
+      INSERT OR IGNORE INTO demo_account (user_id, balance, configured_balance, daily_stats_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(userId, DEFAULT_BALANCE, DEFAULT_BALANCE, JSON.stringify(stats), now, now);
+  }
+
+  getAutomationUsers(): Array<{ user: AuthUser; automation: { enabled: boolean; symbol: string } }> {
+    const rows = this.db.prepare("SELECT * FROM users WHERE active = 1").all() as Record<string, unknown>[];
+    return rows
+      .map(safeUserFromRow)
+      .map((user) => ({ user, automation: this.getAutomation(user.id) }))
+      .filter((item) => item.automation.enabled);
+  }
+
+  getAccount(userId: string) {
+    this.ensureUserAccount(userId);
+    const row = this.db.prepare("SELECT * FROM demo_account WHERE user_id = ?").get(userId) as Record<string, unknown> | undefined;
     if (!row) throw new HttpError(500, "demo account is not initialized");
     return accountFromRow(row);
   }
 
-  getSession(): DemoSession {
-    const activeTrade = this.getPositions()[0] ?? null;
-    const history = this.getTrades();
+  getSession(userId: string): DemoSession {
+    const activeTrade = this.getPositions(userId)[0] ?? null;
+    const history = this.getTrades(userId);
     const lastPrice = activeTrade
-      ? this.getSetting<number | null>(`demo.lastPrice.${activeTrade.pair}`, null)
+      ? this.getSetting<number | null>(userId, `demo.lastPrice.${activeTrade.pair}`, null)
       : null;
     const unrealizedPnlUSDC = activeTrade && lastPrice !== null
       ? this.unrealizedFor(activeTrade, lastPrice)
@@ -439,7 +840,7 @@ export class DemoStore {
     const realizedPnlUSDC = history.reduce((sum, trade) => sum + (trade.pnlUSDC ?? 0), 0) +
       (activeTrade?.realizedPnlUSDC ?? 0);
     return {
-      ...this.getAccount(),
+      ...this.getAccount(userId),
       activeTrade,
       history,
       realizedPnlUSDC,
@@ -449,26 +850,26 @@ export class DemoStore {
     };
   }
 
-  getSetting<T>(key: string, fallback: T): T {
-    const row = this.db.prepare("SELECT value FROM app_settings WHERE key = ?").get(key) as Record<string, unknown> | undefined;
+  getSetting<T>(userId: string, key: string, fallback: T): T {
+    const row = this.db.prepare("SELECT value FROM app_settings WHERE user_id = ? AND key = ?").get(userId, key) as Record<string, unknown> | undefined;
     if (!row) return fallback;
     return jsonParse<T>(row.value, fallback);
   }
 
-  setSetting(key: string, value: unknown): void {
+  setSetting(userId: string, key: string, value: unknown): void {
     this.db.prepare(`
-      INSERT INTO app_settings (key, value, updated_at)
-      VALUES (?, ?, ?)
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-    `).run(key, JSON.stringify(value), nowIso());
+      INSERT INTO app_settings (user_id, key, value, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).run(userId, key, JSON.stringify(value), nowIso());
   }
 
-  getAutomation() {
-    return this.getSetting("demo.automation", { enabled: false, symbol: "BTCUSDT" });
+  getAutomation(userId: string) {
+    return this.getSetting(userId, "demo.automation", { enabled: false, symbol: "BTCUSDT" });
   }
 
-  tradeManagementSettings() {
-    return this.getSetting("demo.tradeManagement", {
+  tradeManagementSettings(userId: string) {
+    return this.getSetting(userId, "demo.tradeManagement", {
       maxDurationMs: DEFAULT_MAX_DURATION_MS,
       breakevenBufferPct: DEFAULT_BREAKEVEN_BUFFER_PCT,
       trailingStopPct: DEFAULT_TRAILING_STOP_PCT,
@@ -477,16 +878,16 @@ export class DemoStore {
     });
   }
 
-  setAutomation(body: unknown) {
+  setAutomation(userId: string, body: unknown) {
     const input = body as Record<string, unknown>;
     const enabled = input.enabled === true;
     const symbol = typeof input.symbol === "string" && input.symbol.trim() ? input.symbol.toUpperCase() : "BTCUSDT";
     const next = { enabled, symbol };
-    this.setSetting("demo.automation", next);
+    this.setSetting(userId, "demo.automation", next);
     return next;
   }
 
-  putAccount(body: unknown) {
+  putAccount(userId: string, body: unknown) {
     const input = body as Record<string, unknown>;
     const balance = finiteNumber(input.balance, "balance", 0, MAX_BALANCE);
     const configuredBalance = finiteNumber(input.configuredBalance ?? input.configured_balance, "configuredBalance", 0, MAX_BALANCE);
@@ -495,29 +896,29 @@ export class DemoStore {
     this.db.prepare(`
       UPDATE demo_account
       SET balance = ?, configured_balance = ?, daily_stats_json = ?, updated_at = ?
-      WHERE id = 1
-    `).run(balance, configuredBalance, JSON.stringify(dailyStats), now);
-    return this.getAccount();
+      WHERE user_id = ?
+    `).run(balance, configuredBalance, JSON.stringify(dailyStats), now, userId);
+    return this.getAccount(userId);
   }
 
-  resetSession(body: unknown) {
+  resetSession(userId: string, body: unknown) {
     const input = body as Record<string, unknown>;
     const configuredBalance = finiteNumber(input.configuredBalance ?? DEFAULT_BALANCE, "configuredBalance", 100, MAX_BALANCE);
     return this.transaction(() => {
-      this.db.prepare("DELETE FROM demo_positions").run();
-      this.db.prepare("DELETE FROM demo_trades").run();
-      this.db.prepare("DELETE FROM demo_events").run();
-      this.putAccount({ balance: configuredBalance, configuredBalance, dailyStats: makeDailyStats(configuredBalance) });
-      return this.getSession();
+      this.db.prepare("DELETE FROM demo_positions WHERE user_id = ?").run(userId);
+      this.db.prepare("DELETE FROM demo_trades WHERE user_id = ?").run(userId);
+      this.db.prepare("DELETE FROM demo_events WHERE user_id = ?").run(userId);
+      this.putAccount(userId, { balance: configuredBalance, configuredBalance, dailyStats: makeDailyStats(configuredBalance) });
+      return this.getSession(userId);
     });
   }
 
-  getPositions() {
-    return (this.db.prepare("SELECT * FROM demo_positions WHERE status = 'OPEN' ORDER BY open_time DESC").all() as Record<string, unknown>[]).map(tradeFromRow);
+  getPositions(userId: string) {
+    return (this.db.prepare("SELECT * FROM demo_positions WHERE user_id = ? AND status = 'OPEN' ORDER BY open_time DESC").all(userId) as Record<string, unknown>[]).map(tradeFromRow);
   }
 
-  getTrades() {
-    return (this.db.prepare("SELECT * FROM demo_trades ORDER BY COALESCE(close_time, open_time) DESC").all() as Record<string, unknown>[]).map(tradeFromRow);
+  getTrades(userId: string) {
+    return (this.db.prepare("SELECT * FROM demo_trades WHERE user_id = ? ORDER BY COALESCE(close_time, open_time) DESC").all(userId) as Record<string, unknown>[]).map(tradeFromRow);
   }
 
   private validatePosition(body: unknown): DemoTrade {
@@ -551,19 +952,19 @@ export class DemoStore {
     };
   }
 
-  postPosition(body: unknown) {
+  postPosition(userId: string, body: unknown) {
     const position = this.validatePosition(body);
     const now = nowIso();
     try {
       this.db.prepare(`
         INSERT INTO demo_positions
-          (id, pair, direction, status, open_time, entry, stop_loss, stop_loss_original, target1, target2,
+          (id, user_id, pair, direction, status, open_time, entry, stop_loss, stop_loss_original, target1, target2,
            balance_at_open, risk_amount, position_size, remaining_position_size, risk_reward, target1_hit, is_breakeven_stop,
            realized_pnl_usdc, partial_pnl_usdc, target1_close_price, max_duration_ms,
            signal_reasons_json, market_conditions, updated_at)
-        VALUES (?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
-        position.id, position.pair, position.direction, position.openTime, position.entry, position.stopLoss,
+        position.id, userId, position.pair, position.direction, position.openTime, position.entry, position.stopLoss,
         position.stopLossOriginal, position.target1, position.target2, position.balanceAtOpen, position.riskAmount,
         position.positionSize, position.remainingPositionSize, position.riskReward, Number(position.target1Hit), Number(position.isBreakevenStop),
         position.realizedPnlUSDC ?? 0, position.partialPnlUSDC ?? 0, position.target1ClosePrice ?? null, position.maxDurationMs ?? DEFAULT_MAX_DURATION_MS,
@@ -573,31 +974,31 @@ export class DemoStore {
       if (String((err as Error).message).includes("UNIQUE")) throw new HttpError(409, "an open position already exists for this pair");
       throw err;
     }
-    this.setSetting(`demo.priceHistory.${position.id}`, [{ price: position.entry, at: position.openTime }]);
+    this.setSetting(userId, `demo.priceHistory.${position.id}`, [{ price: position.entry, at: position.openTime }]);
     return position;
   }
 
-  openFromSignal(body: unknown) {
+  openFromSignal(userId: string, body: unknown) {
     const input = body as DemoSignalInput;
     const pair = nonEmptyString(input.pair, "pair", 32).toUpperCase();
     const decision = input.decision;
-    if (decision !== "BUY" && decision !== "SELL") return this.getSession();
+    if (decision !== "BUY" && decision !== "SELL") return this.getSession(userId);
     const entry = finiteNumber(input.entryNum, "entryNum", 0.00000001, MAX_PRICE);
     const stop = finiteNumber(input.stopLossNum, "stopLossNum", 0.00000001, MAX_PRICE);
     const target1 = finiteNumber(input.target1Num, "target1Num", 0.00000001, MAX_PRICE);
     const target2 = finiteNumber(input.target2Num, "target2Num", 0.00000001, MAX_PRICE);
     const key = `signal:${signalKey({ ...input, pair })}`;
     return this.transaction(() => {
-      const existingEvent = this.db.prepare("SELECT event_key FROM demo_events WHERE event_key = ?").get(key);
-      if (existingEvent) return this.getSession();
-      if (this.getPositions().some((position) => position.pair === pair)) {
-        this.recordEvent(key, "duplicate_signal_blocked", null);
-        return this.getSession();
+      const existingEvent = this.db.prepare("SELECT event_key FROM demo_events WHERE event_key = ?").get(`${userId}:${key}`);
+      if (existingEvent) return this.getSession(userId);
+      if (this.getPositions(userId).some((position) => position.pair === pair)) {
+        this.recordEvent(userId, key, "duplicate_signal_blocked", null);
+        return this.getSession(userId);
       }
-      const account = this.getAccount();
+      const account = this.getAccount(userId);
       if (isSafetyLimited(account.dailyStats)) {
-        this.recordEvent(key, "risk_limited_signal_blocked", null);
-        return this.getSession();
+        this.recordEvent(userId, key, "risk_limited_signal_blocked", null);
+        return this.getSession(userId);
       }
       const { riskAmount, positionSize } = calcPositionSize(account.balance, entry, stop);
       const steps = Array.isArray(input.steps) ? input.steps : [];
@@ -624,32 +1025,32 @@ export class DemoStore {
         isBreakevenStop: false,
         realizedPnlUSDC: 0,
         partialPnlUSDC: 0,
-        maxDurationMs: this.tradeManagementSettings().maxDurationMs,
+        maxDurationMs: this.tradeManagementSettings(userId).maxDurationMs,
         signalReasons,
         marketConditions: signalReasons.join(" | "),
       };
-      this.postPosition(trade);
-      this.setSetting(`demo.priceHistory.${trade.id}`, [{ price: entry, at: Date.now() }]);
-      this.recordEvent(key, "signal_opened", trade.id);
-      return this.getSession();
+      this.postPosition(userId, trade);
+      this.setSetting(userId, `demo.priceHistory.${trade.id}`, [{ price: entry, at: Date.now() }]);
+      this.recordEvent(userId, key, "signal_opened", trade.id);
+      return this.getSession(userId);
     });
   }
 
-  updatePrices(body: unknown) {
+  updatePrices(userId: string, body: unknown) {
     const input = body as Record<string, unknown>;
     const price = finiteNumber(input.price, "price", 0.00000001, MAX_PRICE);
     const pair = typeof input.pair === "string" ? input.pair.toUpperCase() : undefined;
     return this.transaction(() => {
-      const positions = this.getPositions().filter((position) => !pair || position.pair === pair);
-      for (const position of positions) this.setSetting(`demo.lastPrice.${position.pair}`, price);
-      for (const trade of positions) this.applyPriceToPosition(trade, price);
-      return this.getSession();
+      const positions = this.getPositions(userId).filter((position) => !pair || position.pair === pair);
+      for (const position of positions) this.setSetting(userId, `demo.lastPrice.${position.pair}`, price);
+      for (const trade of positions) this.applyPriceToPosition(userId, trade, price);
+      return this.getSession(userId);
     });
   }
 
-  patchPosition(id: string, body: unknown) {
+  patchPosition(userId: string, id: string, body: unknown) {
     return this.transaction(() => {
-      const row = this.db.prepare("SELECT * FROM demo_positions WHERE id = ? AND status = 'OPEN'").get(id) as Record<string, unknown> | undefined;
+      const row = this.db.prepare("SELECT * FROM demo_positions WHERE user_id = ? AND id = ? AND status = 'OPEN'").get(userId, id) as Record<string, unknown> | undefined;
       if (!row) throw new HttpError(404, "open position not found");
       const current = tradeFromRow(row);
       const input = body as Record<string, unknown>;
@@ -657,7 +1058,7 @@ export class DemoStore {
         const closePrice = finiteNumber(input.closePrice, "closePrice", 0.00000001, MAX_PRICE);
         const reason = nonEmptyString(input.exitReason, "exitReason") as ManagedTradeExitReason;
         if (!["STOP_LOSS", "BREAKEVEN", "TARGET_1", "TARGET_2", "TIMEOUT", "TIME_EXIT", "TRAILING_STOP", "LOSS_OF_STRENGTH", "SESSION_END"].includes(reason)) throw new HttpError(400, "invalid exitReason");
-        return this.closePosition(current, closePrice, reason);
+        return this.closePosition(userId, current, closePrice, reason);
       }
 
       const stopLoss = input.stopLoss === undefined ? current.stopLoss : finiteNumber(input.stopLoss, "stopLoss", 0.00000001, MAX_PRICE);
@@ -666,27 +1067,28 @@ export class DemoStore {
       this.db.prepare(`
         UPDATE demo_positions
         SET stop_loss = ?, target1_hit = ?, is_breakeven_stop = ?, updated_at = ?
-        WHERE id = ?
-      `).run(stopLoss, Number(target1Hit), Number(isBreakevenStop), nowIso(), id);
+        WHERE user_id = ? AND id = ?
+      `).run(stopLoss, Number(target1Hit), Number(isBreakevenStop), nowIso(), userId, id);
       return { ...current, stopLoss, target1Hit, isBreakevenStop };
     });
   }
 
-  private recordEvent(key: string, type: string, tradeId: string | null): boolean {
+  private recordEvent(userId: string, key: string, type: string, tradeId: string | null): boolean {
+    const scopedKey = `${userId}:${key}`;
     const result = this.db.prepare(`
-      INSERT OR IGNORE INTO demo_events (event_key, event_type, trade_id, created_at)
-      VALUES (?, ?, ?, ?)
-    `).run(key, type, tradeId, nowIso());
+      INSERT OR IGNORE INTO demo_events (event_key, user_id, event_type, trade_id, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(scopedKey, userId, type, tradeId, nowIso());
     return result.changes > 0;
   }
 
-  private getOpenPosition(id: string): DemoTrade | null {
-    const row = this.db.prepare("SELECT * FROM demo_positions WHERE id = ? AND status = 'OPEN'").get(id) as Record<string, unknown> | undefined;
+  private getOpenPosition(userId: string, id: string): DemoTrade | null {
+    const row = this.db.prepare("SELECT * FROM demo_positions WHERE user_id = ? AND id = ? AND status = 'OPEN'").get(userId, id) as Record<string, unknown> | undefined;
     return row ? tradeFromRow(row) : null;
   }
 
-  private priceHistory(tradeId: string): Array<{ price: number; at: number }> {
-    const rows = this.getSetting<Array<{ price: number; at: number }>>(`demo.priceHistory.${tradeId}`, []);
+  private priceHistory(userId: string, tradeId: string): Array<{ price: number; at: number }> {
+    const rows = this.getSetting<Array<{ price: number; at: number }>>(userId, `demo.priceHistory.${tradeId}`, []);
     return rows.filter((row) =>
       typeof row === "object"
       && Number.isFinite(row.price)
@@ -696,17 +1098,17 @@ export class DemoStore {
     ).slice(-PRICE_HISTORY_LIMIT);
   }
 
-  private pushPriceHistory(trade: DemoTrade, price: number): Array<{ price: number; at: number }> {
-    const next = [...this.priceHistory(trade.id), { price, at: Date.now() }].slice(-PRICE_HISTORY_LIMIT);
-    this.setSetting(`demo.priceHistory.${trade.id}`, next);
+  private pushPriceHistory(userId: string, trade: DemoTrade, price: number): Array<{ price: number; at: number }> {
+    const next = [...this.priceHistory(userId, trade.id), { price, at: Date.now() }].slice(-PRICE_HISTORY_LIMIT);
+    this.setSetting(userId, `demo.priceHistory.${trade.id}`, next);
     return next;
   }
 
-  private appendPositionReason(trade: DemoTrade, reason: string): DemoTrade {
+  private appendPositionReason(userId: string, trade: DemoTrade, reason: string): DemoTrade {
     const signalReasons = [...trade.signalReasons, reason].slice(-40);
     const marketConditions = signalReasons.join(" | ");
-    this.db.prepare("UPDATE demo_positions SET signal_reasons_json = ?, market_conditions = ?, updated_at = ? WHERE id = ? AND status = 'OPEN'")
-      .run(JSON.stringify(signalReasons), marketConditions, nowIso(), trade.id);
+    this.db.prepare("UPDATE demo_positions SET signal_reasons_json = ?, market_conditions = ?, updated_at = ? WHERE user_id = ? AND id = ? AND status = 'OPEN'")
+      .run(JSON.stringify(signalReasons), marketConditions, nowIso(), userId, trade.id);
     return { ...trade, signalReasons, marketConditions };
   }
 
@@ -717,49 +1119,49 @@ export class DemoStore {
       : (trade.entry - price) * size;
   }
 
-  private applyPriceToPosition(trade: DemoTrade, price: number): void {
+  private applyPriceToPosition(userId: string, trade: DemoTrade, price: number): void {
     const isBuy = trade.direction === "BUY";
-    const settings = this.tradeManagementSettings();
-    const history = this.pushPriceHistory(trade, price);
+    const settings = this.tradeManagementSettings(userId);
+    const history = this.pushPriceHistory(userId, trade, price);
 
     if (isBuy ? price <= trade.stopLoss : price >= trade.stopLoss) {
       const reason: ManagedTradeExitReason = trade.isBreakevenStop ? "BREAKEVEN" : "STOP_LOSS";
       const key = `close:${trade.id}:${reason}`;
-      if (this.recordEvent(key, "close", trade.id)) this.closePosition(trade, trade.stopLoss, reason);
+      if (this.recordEvent(userId, key, "close", trade.id)) this.closePosition(userId, trade, trade.stopLoss, reason);
       return;
     }
 
     if (isBuy ? price >= trade.target2 : price <= trade.target2) {
       const key = `close:${trade.id}:TARGET_2`;
-      if (this.recordEvent(key, "close", trade.id)) this.closePosition(trade, trade.target2, "TARGET_2");
+      if (this.recordEvent(userId, key, "close", trade.id)) this.closePosition(userId, trade, trade.target2, "TARGET_2");
       return;
     }
 
     let current = trade;
     if (!trade.target1Hit && (isBuy ? price >= trade.target1 : price <= trade.target1)) {
       const key = `target1:${trade.id}`;
-      if (this.recordEvent(key, "target1", trade.id)) {
-        current = this.realizeTarget1(trade, settings.breakevenBufferPct);
+      if (this.recordEvent(userId, key, "target1", trade.id)) {
+        current = this.realizeTarget1(userId, trade, settings.breakevenBufferPct);
       }
     }
 
     if (current.target1Hit) {
-      current = this.updateTrailingStop(current, price, settings.trailingStopPct, history);
-      if (this.lossOfStrengthReached(current, price, settings.lossOfStrengthPct, history)) {
+      current = this.updateTrailingStop(userId, current, price, settings.trailingStopPct, history);
+      if (this.lossOfStrengthReached(userId, current, price, settings.lossOfStrengthPct, history)) {
         const key = `close:${current.id}:LOSS_OF_STRENGTH`;
-        if (this.recordEvent(key, "close", current.id)) this.closePosition(current, price, "LOSS_OF_STRENGTH");
+        if (this.recordEvent(userId, key, "close", current.id)) this.closePosition(userId, current, price, "LOSS_OF_STRENGTH");
         return;
       }
     }
 
     if (tradeAgeMs(current) >= (current.maxDurationMs ?? settings.maxDurationMs)) {
       const key = `close:${current.id}:TIMEOUT`;
-      if (this.recordEvent(key, "close", current.id)) this.closePosition(current, price, "TIMEOUT");
+      if (this.recordEvent(userId, key, "close", current.id)) this.closePosition(userId, current, price, "TIMEOUT");
     }
   }
 
-  private realizeTarget1(trade: DemoTrade, bufferPct: number): DemoTrade {
-    const latest = this.getOpenPosition(trade.id) ?? trade;
+  private realizeTarget1(userId: string, trade: DemoTrade, bufferPct: number): DemoTrade {
+    const latest = this.getOpenPosition(userId, trade.id) ?? trade;
     if (latest.target1Hit) return latest;
     const currentRemaining = latest.remainingPositionSize ?? latest.positionSize;
     const closedSize = Math.min(currentRemaining, latest.positionSize * 0.5);
@@ -789,18 +1191,18 @@ export class DemoStore {
       SET stop_loss = ?, target1_hit = 1, is_breakeven_stop = 1,
           remaining_position_size = ?, realized_pnl_usdc = ?, partial_pnl_usdc = ?,
           target1_close_price = ?, updated_at = ?
-      WHERE id = ? AND status = 'OPEN'
-    `).run(stopLoss, remainingPositionSize, realizedPnlUSDC, partialPnlUSDC, latest.target1, nowIso(), latest.id);
-    const withReason = this.appendPositionReason(next, `TARGET_1 parcial: realizou ${closedSize.toFixed(8)} em ${latest.target1}; PnL parcial ${partialPnlUSDC.toFixed(8)}; stop movido para breakeven ${stopLoss.toFixed(8)} com buffer ${(bufferPct * 100).toFixed(4)}%.`);
+      WHERE user_id = ? AND id = ? AND status = 'OPEN'
+    `).run(stopLoss, remainingPositionSize, realizedPnlUSDC, partialPnlUSDC, latest.target1, nowIso(), userId, latest.id);
+    const withReason = this.appendPositionReason(userId, next, `TARGET_1 parcial: realizou ${closedSize.toFixed(8)} em ${latest.target1}; PnL parcial ${partialPnlUSDC.toFixed(8)}; stop movido para breakeven ${stopLoss.toFixed(8)} com buffer ${(bufferPct * 100).toFixed(4)}%.`);
 
-    const account = this.getAccount();
+    const account = this.getAccount(userId);
     const stats = { ...account.dailyStats };
     stats.dailyPnL += partialPnlUSDC;
     const newBalance = account.balance + partialPnlUSDC;
     stats.peakBalance = Math.max(stats.peakBalance, newBalance);
     stats.maxDrawdown = Math.max(stats.maxDrawdown, stats.peakBalance - newBalance);
     stats.safetyLimited = isSafetyLimited(stats);
-    this.putAccount({ balance: newBalance, configuredBalance: account.configuredBalance, dailyStats: stats });
+    this.putAccount(userId, { balance: newBalance, configuredBalance: account.configuredBalance, dailyStats: stats });
     return withReason;
   }
 
@@ -815,20 +1217,20 @@ export class DemoStore {
     return clamp(candidate, limits.minPct, limits.maxPct);
   }
 
-  private updateTrailingStop(trade: DemoTrade, price: number, trailingPct: number, history: Array<{ price: number; at: number }>): DemoTrade {
+  private updateTrailingStop(userId: string, trade: DemoTrade, price: number, trailingPct: number, history: Array<{ price: number; at: number }>): DemoTrade {
     if (!Number.isFinite(price) || price <= 0) return trade;
     const adaptivePct = this.adaptiveTrailingPct(trade, price, trailingPct, history);
     const nextStop = trade.direction === "BUY"
       ? Math.max(trade.stopLoss, price * (1 - adaptivePct))
       : Math.min(trade.stopLoss, price * (1 + adaptivePct));
     if (nextStop === trade.stopLoss) return trade;
-    this.db.prepare("UPDATE demo_positions SET stop_loss = ?, updated_at = ? WHERE id = ? AND status = 'OPEN'")
-      .run(nextStop, nowIso(), trade.id);
+    this.db.prepare("UPDATE demo_positions SET stop_loss = ?, updated_at = ? WHERE user_id = ? AND id = ? AND status = 'OPEN'")
+      .run(nextStop, nowIso(), userId, trade.id);
     const next = { ...trade, stopLoss: nextStop };
-    return this.appendPositionReason(next, `TRAILING: stop ajustado para ${nextStop.toFixed(8)} usando ${(adaptivePct * 100).toFixed(3)}% adaptativo pela volatilidade recente.`);
+    return this.appendPositionReason(userId, next, `TRAILING: stop ajustado para ${nextStop.toFixed(8)} usando ${(adaptivePct * 100).toFixed(3)}% adaptativo pela volatilidade recente.`);
   }
 
-  private lossOfStrengthReached(trade: DemoTrade, price: number, thresholdPct: number, history: Array<{ price: number; at: number }>): boolean {
+  private lossOfStrengthReached(userId: string, trade: DemoTrade, price: number, thresholdPct: number, history: Array<{ price: number; at: number }>): boolean {
     if (!trade.target1Hit || !Number.isFinite(thresholdPct) || thresholdPct <= 0) return false;
     const prices = history.map((item) => item.price).filter((value) => Number.isFinite(value) && value > 0).slice(-5);
     const previous = prices.at(-2);
@@ -847,19 +1249,19 @@ export class DemoStore {
       : price >= trade.entry * (1 - DEFAULT_BREAKEVEN_BUFFER_PCT);
     const signals = [contraryClose, failedContinuation, shortStructureReversal, lostBreakevenBuffer].filter(Boolean).length;
     if (signals >= 2) {
-      this.appendPositionReason(trade, `LOSS_OF_STRENGTH: ${signals}/4 sinais ativos; fechamento contrario=${contraryClose}; falha continuacao=${failedContinuation}; reversao curta=${shortStructureReversal}; perda breakeven=${lostBreakevenBuffer}.`);
+      this.appendPositionReason(userId, trade, `LOSS_OF_STRENGTH: ${signals}/4 sinais ativos; fechamento contrario=${contraryClose}; falha continuacao=${failedContinuation}; reversao curta=${shortStructureReversal}; perda breakeven=${lostBreakevenBuffer}.`);
       return true;
     }
     if (signals === 1) {
-      this.appendPositionReason(trade, `ALERTA perda de forca: 1/4 sinal ativo; posicao mantida.`);
+      this.appendPositionReason(userId, trade, `ALERTA perda de forca: 1/4 sinal ativo; posicao mantida.`);
     }
     return false;
   }
 
-  private closePosition(position: DemoTrade, closePrice: number, exitReason: ManagedTradeExitReason) {
-    const latest = this.getOpenPosition(position.id);
+  private closePosition(userId: string, position: DemoTrade, closePrice: number, exitReason: ManagedTradeExitReason) {
+    const latest = this.getOpenPosition(userId, position.id);
     if (!latest) {
-      return this.getTrades().find((trade) => trade.id === position.id) ?? position;
+      return this.getTrades(userId).find((trade) => trade.id === position.id) ?? position;
     }
     position = latest;
     const remainingSize = position.remainingPositionSize ?? position.positionSize;
@@ -886,9 +1288,9 @@ export class DemoStore {
       pnlUSDC,
       pnlPct,
     };
-    this.upsertTrade(closed);
-    this.db.prepare("DELETE FROM demo_positions WHERE id = ?").run(position.id);
-    const account = this.getAccount();
+    this.upsertTrade(userId, closed);
+    this.db.prepare("DELETE FROM demo_positions WHERE user_id = ? AND id = ?").run(userId, position.id);
+    const account = this.getAccount(userId);
     const stats = { ...account.dailyStats };
     stats.totalTrades += 1;
     stats.wins += status === "WIN" ? 1 : 0;
@@ -901,11 +1303,11 @@ export class DemoStore {
     stats.peakBalance = Math.max(stats.peakBalance, newBalance);
     stats.maxDrawdown = Math.max(stats.maxDrawdown, stats.peakBalance - newBalance);
     stats.safetyLimited = stats.totalTrades >= 8 || stats.consecutiveLosses >= 3 || stats.dailyPnL <= -(stats.startOfDayBalance * 0.03);
-    this.putAccount({ balance: newBalance, configuredBalance: account.configuredBalance, dailyStats: stats });
+    this.putAccount(userId, { balance: newBalance, configuredBalance: account.configuredBalance, dailyStats: stats });
     return closed;
   }
 
-  postTrade(body: unknown) {
+  postTrade(userId: string, body: unknown) {
     const input = body as Record<string, unknown>;
     const trade = this.validatePosition({ ...input, status: "OPEN" });
     const closePrice = input.closePrice === undefined ? undefined : finiteNumber(input.closePrice, "closePrice", 0.00000001, MAX_PRICE);
@@ -921,19 +1323,21 @@ export class DemoStore {
       pnlPct: undefined,
     };
     fullTrade.pnlPct = fullTrade.pnlUSDC === undefined || fullTrade.balanceAtOpen <= 0 ? undefined : (fullTrade.pnlUSDC / fullTrade.balanceAtOpen) * 100;
-    this.upsertTrade(fullTrade);
+    this.upsertTrade(userId, fullTrade);
     return fullTrade;
   }
 
-  private upsertTrade(trade: DemoTrade): void {
+  private upsertTrade(userId: string, trade: DemoTrade): void {
+    const owner = this.db.prepare("SELECT user_id FROM demo_trades WHERE id = ?").get(trade.id) as Record<string, unknown> | undefined;
+    if (owner && owner.user_id !== userId) throw new HttpError(404, "trade not found");
     const now = nowIso();
     this.db.prepare(`
       INSERT INTO demo_trades
-        (id, pair, direction, status, open_time, close_time, entry, close_price, stop_loss, stop_loss_original,
+        (id, user_id, pair, direction, status, open_time, close_time, entry, close_price, stop_loss, stop_loss_original,
          target1, target2, balance_at_open, risk_amount, position_size, remaining_position_size, risk_reward, pnl_usdc, pnl_pct,
          realized_pnl_usdc, partial_pnl_usdc, target1_close_price, max_duration_ms,
          exit_reason, target1_hit, is_breakeven_stop, signal_reasons_json, market_conditions, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         status = excluded.status, close_time = excluded.close_time, close_price = excluded.close_price,
         pnl_usdc = excluded.pnl_usdc, pnl_pct = excluded.pnl_pct, exit_reason = excluded.exit_reason,
@@ -943,7 +1347,7 @@ export class DemoStore {
         stop_loss = excluded.stop_loss, target1_hit = excluded.target1_hit,
         is_breakeven_stop = excluded.is_breakeven_stop, updated_at = excluded.updated_at
     `).run(
-      trade.id, trade.pair, trade.direction, trade.status, trade.openTime, trade.closeTime ?? null,
+      trade.id, userId, trade.pair, trade.direction, trade.status, trade.openTime, trade.closeTime ?? null,
       trade.entry, trade.closePrice ?? null, trade.stopLoss, trade.stopLossOriginal, trade.target1, trade.target2,
       trade.balanceAtOpen, trade.riskAmount, trade.positionSize, trade.remainingPositionSize ?? trade.positionSize,
       trade.riskReward, trade.pnlUSDC ?? null, trade.pnlPct ?? null,
@@ -953,38 +1357,21 @@ export class DemoStore {
     );
   }
 
-  migrateSession(session: DemoSession) {
+  migrateSession(userId: string, session: DemoSession) {
     return this.transaction(() => {
       const hash = migrationHash(session);
       const key = `demo.localStorageMigration.${hash}`;
-      const existing = this.db.prepare("SELECT value FROM app_settings WHERE key = ?").get(key);
-      if (existing) return { applied: false, hash, account: this.getAccount(), positions: this.getPositions(), trades: this.getTrades() };
-      this.putAccount({ balance: session.balance, configuredBalance: session.configuredBalance, dailyStats: session.dailyStats });
+      const existing = this.db.prepare("SELECT value FROM app_settings WHERE user_id = ? AND key = ?").get(userId, key);
+      if (existing) return { applied: false, hash, account: this.getAccount(userId), positions: this.getPositions(userId), trades: this.getTrades(userId) };
+      this.putAccount(userId, { balance: session.balance, configuredBalance: session.configuredBalance, dailyStats: session.dailyStats });
       if (session.activeTrade) {
-        try { this.postPosition(session.activeTrade); } catch (err) { if (!(err instanceof HttpError && err.status === 409)) throw err; }
+        try { this.postPosition(userId, session.activeTrade); } catch (err) { if (!(err instanceof HttpError && err.status === 409)) throw err; }
       }
-      for (const trade of session.history) this.postTrade(trade);
-      this.db.prepare("INSERT INTO app_settings (key, value, updated_at) VALUES (?, 'applied', ?)").run(key, nowIso());
-      return { applied: true, hash, account: this.getAccount(), positions: this.getPositions(), trades: this.getTrades() };
+      for (const trade of session.history) this.postTrade(userId, trade);
+      this.setSetting(userId, key, "applied");
+      return { applied: true, hash, account: this.getAccount(userId), positions: this.getPositions(userId), trades: this.getTrades(userId) };
     });
   }
 }
 
-export function signSession(payload: string, secret: string): string {
-  return createHmac("sha256", secret).update(payload).digest("base64url");
-}
-
-export function makeSessionCookie(secret: string): string {
-  const payload = Buffer.from(JSON.stringify({ sub: "admin", iat: Date.now() })).toString("base64url");
-  return `${payload}.${signSession(payload, secret)}`;
-}
-
-export function verifySessionCookie(cookie: string | undefined, secret: string | undefined): boolean {
-  if (!cookie || !secret) return false;
-  const [payload, sig] = cookie.split(".");
-  if (!payload || !sig) return false;
-  const expected = signSession(payload, secret);
-  const a = Buffer.from(sig);
-  const b = Buffer.from(expected);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
+export { AUTH_COOKIE_NAME };
