@@ -49,6 +49,12 @@ interface TVConfig {
   studies_overrides?: Record<string, unknown>;
 }
 
+function isKnownTradingViewRemoveError(error: unknown): boolean {
+  return error instanceof TypeError
+    && error.message.includes("Cannot read properties of null")
+    && error.message.includes("parentNode");
+}
+
 declare global {
   interface Window {
     TradingView?: {
@@ -124,18 +130,44 @@ export function TradingViewChart({ symbol, interval, height = 540 }: Props) {
   // Stable, unique container ID — never changes for the lifetime of this mount
   const containerId  = useRef(`tv_${Math.random().toString(36).slice(2, 10)}`);
   const widgetRef    = useRef<TVWidget | null>(null);
+  const generationRef = useRef(0);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setLoading(true);
+    const generation = generationRef.current + 1;
+    generationRef.current = generation;
+    let disposed = false;
+
+    const isCurrent = () => !disposed && generationRef.current === generation;
+    const safeSetLoading = (value: boolean) => {
+      if (isCurrent()) setLoading(value);
+    };
+
+    const disposeWidget = () => {
+      const widget = widgetRef.current;
+      widgetRef.current = null;
+      if (!widget?.remove) return;
+
+      try {
+        widget.remove();
+      } catch (error) {
+        if (isKnownTradingViewRemoveError(error)) return;
+        throw error;
+      }
+    };
+
+    safeSetLoading(true);
 
     // Give the container a frame to render before we attach the widget
     const raf = requestAnimationFrame(() => {
       loadTVScript(() => {
-        if (!window.TradingView || !containerRef.current) return;
+        if (!isCurrent() || !window.TradingView || !containerRef.current) return;
 
-        // Destroy any previous instance on re-mount (safety)
-        widgetRef.current?.remove?.();
+        // StrictMode and rapid remounts can leave a stale instance behind.
+        // Always detach the ref before calling TradingView's imperative cleanup.
+        disposeWidget();
+        containerRef.current.textContent = '';
+        if (!isCurrent() || !containerRef.current) return;
 
         widgetRef.current = new window.TradingView.widget({
           container_id:        containerId.current,
@@ -159,14 +191,15 @@ export function TradingViewChart({ symbol, interval, height = 540 }: Props) {
           overrides:           CANDLE_OVERRIDES,
         });
 
-        setLoading(false);
+        safeSetLoading(false);
       });
     });
 
     return () => {
+      disposed = true;
+      generationRef.current += 1;
       cancelAnimationFrame(raf);
-      widgetRef.current?.remove?.();
-      widgetRef.current = null;
+      disposeWidget();
     };
   }, []); // empty — parent changes `key` when symbol/interval changes
 
