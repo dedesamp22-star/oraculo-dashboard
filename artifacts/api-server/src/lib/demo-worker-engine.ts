@@ -4,6 +4,8 @@ type RadarDirection = "COMPRA" | "VENDA" | "AGUARDAR";
 type RadarTrend = "ALTA" | "BAIXA" | "LATERAL";
 type TradeSide = "BUY" | "SELL";
 type DemoSymbol = "BTCUSDT" | "ETHUSDT" | "SOLUSDT";
+type TriggerKind = "breakout" | "retest" | null;
+type QualitySeverity = "block" | "penalty";
 
 export interface Candle {
   openTime: number;
@@ -28,6 +30,18 @@ interface QualityFilter {
   passed: boolean;
   reason: string;
   penalty?: number;
+  severity?: QualitySeverity;
+}
+
+interface TriggerResult {
+  direction: RadarDirection;
+  aggressive: number | null;
+  conservative: number | null;
+  confirmation: string | null;
+  risk: string | null;
+  kind: TriggerKind;
+  level: number | null;
+  retestValid: boolean;
 }
 
 interface RadarLikeAnalysis {
@@ -37,6 +51,9 @@ interface RadarLikeAnalysis {
   trend1h: RadarTrend;
   trend15m: RadarTrend;
   trigger5m: RadarDirection;
+  triggerKind: TriggerKind;
+  triggerLevel: number | null;
+  retestValid: boolean;
   suggestedDirection: RadarDirection;
   support: number | null;
   resistance: number | null;
@@ -61,14 +78,29 @@ const MIN_1H_CANDLES = 205;
 const MIN_15M_CANDLES = 40;
 const MIN_5M_CANDLES = 30;
 const MIN_EMA200_WARMUP = 200;
-const MAX_EMA21_DISTANCE_PCT = 0.006;
-const MAX_EMA9_DISTANCE_PCT = 0.004;
-const MAX_STRETCHED_MOVE_PCT = 0.012;
-const MAX_SAME_DIRECTION_CANDLES = 3;
-const CLIMAX_RANGE_ATR_MULTIPLE = 2.2;
-const CLIMAX_BODY_AVG_MULTIPLE = 1.8;
-const MIN_VOLUME_RELATIVE = 0.8;
-const MIN_RR = 2;
+
+export const DEMO_EXHAUSTION_CONFIG = {
+  minRiskReward: 2,
+  retestTolerancePct: 0.0015,
+  maxStretchedMovePct: 0.012,
+  stretchedAtrMultiple: 1.6,
+  extremeStretchedMovePct: 0.024,
+  extremeStretchedAtrMultiple: 3.2,
+  maxSameDirectionCandles: 3,
+  allowedFourthCandle: 4,
+  climaxRangeAtrMultiple: 2.2,
+  climaxBodyAvgMultiple: 1.8,
+  rejectionWickBodyMultiple: 1.5,
+  aggressiveRejectionWickBodyMultiple: 1.2,
+  minVolumeRelative: 0.8,
+  preferredVolumeRelative: 1,
+  volumeExhaustionRelative: 1.8,
+  bySymbol: {
+    BTCUSDT: { maxEma9DistancePct: 0.004, maxEma21DistancePct: 0.006 },
+    ETHUSDT: { maxEma9DistancePct: 0.004, maxEma21DistancePct: 0.006 },
+    SOLUSDT: { maxEma9DistancePct: 0.006, maxEma21DistancePct: 0.008 },
+  } satisfies Record<DemoSymbol, { maxEma9DistancePct: number; maxEma21DistancePct: number }>,
+};
 
 async function binanceJson(path: string): Promise<unknown> {
   const res = await fetch(`${BINANCE_BASE}${path}`);
@@ -246,35 +278,46 @@ function candleConfirms(candle: Candle, direction: Exclude<RadarDirection, "AGUA
     : candle.close < candle.open && bodyRatio >= 0.35;
 }
 
-function trigger5m(candles5m: Candle[], direction: RadarDirection, breakoutResistance: number | null, breakdownSupport: number | null, volumeOk: boolean) {
+function trigger5m(candles5m: Candle[], direction: RadarDirection, breakoutResistance: number | null, breakdownSupport: number | null, volumeOk: boolean): TriggerResult {
   const lastClosed = last(candles5m);
   const previous = candles5m[candles5m.length - 2] ?? null;
   if (direction === "AGUARDAR" || !lastClosed || !previous) {
-    return { direction: "AGUARDAR" as const, aggressive: null, conservative: null, confirmation: null, risk: "Timeframes maiores sem direcao operacional." };
+    return { direction: "AGUARDAR", aggressive: null, conservative: null, confirmation: null, risk: "Timeframes maiores sem direcao operacional.", kind: null, level: null, retestValid: false };
   }
+  const tolerance = DEMO_EXHAUSTION_CONFIG.retestTolerancePct;
   if (direction === "COMPRA") {
     const level = breakoutResistance;
-    if (!level) return { direction: "AGUARDAR" as const, aggressive: null, conservative: null, confirmation: null, risk: "Sem resistencia confirmada para validar rompimento." };
+    if (!level) return { direction: "AGUARDAR", aggressive: null, conservative: null, confirmation: null, risk: "Sem resistencia confirmada para validar rompimento.", kind: null, level: null, retestValid: false };
     const breakout = previous.close <= level && lastClosed.close > level && candleConfirms(lastClosed, "COMPRA") && volumeOk;
-    const retest = previous.low <= level * 1.0015 && lastClosed.low <= level * 1.0015 && lastClosed.close > level && candleConfirms(lastClosed, "COMPRA") && volumeOk;
+    const touchedRetestZone = lastClosed.low <= level * (1 + tolerance);
+    const reactedFromRetest = lastClosed.close > level && lastClosed.close > lastClosed.open && candleConfirms(lastClosed, "COMPRA");
+    const retest = touchedRetestZone && reactedFromRetest && volumeOk;
     return {
-      direction: breakout || retest ? "COMPRA" as const : "AGUARDAR" as const,
+      direction: breakout || retest ? "COMPRA" : "AGUARDAR",
       aggressive: breakout ? lastClosed.close : level * 1.001,
-      conservative: retest ? lastClosed.close : level,
+      conservative: retest ? lastClosed.close : null,
       confirmation: retest ? "Reteste real confirmado no 5m." : breakout ? "Rompimento confirmado no 5m; aguardando reteste para o robo." : null,
       risk: breakout || retest ? null : "Aguardando rompimento ou reteste confirmado no 5m.",
+      kind: retest ? "retest" : breakout ? "breakout" : null,
+      level,
+      retestValid: retest,
     };
   }
   const level = breakdownSupport;
-  if (!level) return { direction: "AGUARDAR" as const, aggressive: null, conservative: null, confirmation: null, risk: "Sem suporte confirmado para validar rompimento." };
+  if (!level) return { direction: "AGUARDAR", aggressive: null, conservative: null, confirmation: null, risk: "Sem suporte confirmado para validar rompimento.", kind: null, level: null, retestValid: false };
   const breakout = previous.close >= level && lastClosed.close < level && candleConfirms(lastClosed, "VENDA") && volumeOk;
-  const retest = previous.high >= level * 0.9985 && lastClosed.high >= level * 0.9985 && lastClosed.close < level && candleConfirms(lastClosed, "VENDA") && volumeOk;
+  const touchedRetestZone = lastClosed.high >= level * (1 - tolerance);
+  const reactedFromRetest = lastClosed.close < level && lastClosed.close < lastClosed.open && candleConfirms(lastClosed, "VENDA");
+  const retest = touchedRetestZone && reactedFromRetest && volumeOk;
   return {
-    direction: breakout || retest ? "VENDA" as const : "AGUARDAR" as const,
+    direction: breakout || retest ? "VENDA" : "AGUARDAR",
     aggressive: breakout ? lastClosed.close : level * 0.999,
-    conservative: retest ? lastClosed.close : level,
+    conservative: retest ? lastClosed.close : null,
     confirmation: retest ? "Reteste real confirmado no 5m." : breakout ? "Rompimento confirmado no 5m; aguardando reteste para o robo." : null,
     risk: breakout || retest ? null : "Aguardando rompimento ou reteste confirmado no 5m.",
+    kind: retest ? "retest" : breakout ? "breakout" : null,
+    level,
+    retestValid: retest,
   };
 }
 
@@ -314,7 +357,17 @@ function sameDirectionRun(candles: Candle[], side: TradeSide): number {
   return count;
 }
 
-export function qualityFilters(side: TradeSide, entry: number, candles5m: Candle[], trend15m: TrendDetails, volume: RadarLikeAnalysis["volume"]): QualityFilter[] {
+export function qualityFilters(
+  symbol: DemoSymbol,
+  side: TradeSide,
+  entry: number,
+  candles5m: Candle[],
+  trend15m: TrendDetails,
+  volume: RadarLikeAnalysis["volume"],
+  trigger: Pick<TriggerResult, "kind" | "level" | "retestValid"> = { kind: "retest", level: null, retestValid: true },
+): QualityFilter[] {
+  const cfg = DEMO_EXHAUSTION_CONFIG;
+  const symbolCfg = cfg.bySymbol[symbol];
   const lastClosed = last(candles5m);
   const recent = candles5m.slice(-20);
   const currentAtr = atr(candles5m, 14);
@@ -323,60 +376,98 @@ export function qualityFilters(side: TradeSide, entry: number, candles5m: Candle
   const avgBody = average(recent.map((c) => Math.abs(c.close - c.open)));
   const ema21Distance = trend15m.ema21 > 0 ? Math.abs(entry - trend15m.ema21) / entry : Number.POSITIVE_INFINITY;
   const ema9Distance = trend15m.ema9 > 0 ? Math.abs(entry - trend15m.ema9) / entry : Number.POSITIVE_INFINITY;
-  const move5 = candles5m.length >= 6 ? Math.abs(entry - candles5m[candles5m.length - 6].close) / entry : 0;
+  const move5Abs = candles5m.length >= 6 ? Math.abs(entry - candles5m[candles5m.length - 6].close) : 0;
+  const move5 = entry > 0 ? move5Abs / entry : Number.POSITIVE_INFINITY;
+  const move5AtrMultiple = currentAtr > 0 ? move5Abs / currentAtr : Number.POSITIVE_INFINITY;
   const run = sameDirectionRun(candles5m, side);
   const upperWick = lastClosed ? lastClosed.high - Math.max(lastClosed.open, lastClosed.close) : 0;
   const lowerWick = lastClosed ? Math.min(lastClosed.open, lastClosed.close) - lastClosed.low : 0;
   const rejectionWick = side === "BUY" ? upperWick : lowerWick;
+  const emaWithin = ema21Distance <= symbolCfg.maxEma21DistancePct && ema9Distance <= symbolCfg.maxEma9DistancePct;
+  const climactic = currentAtr > 0 && avgBody > 0 && (lastRange > currentAtr * cfg.climaxRangeAtrMultiple || lastBody > avgBody * cfg.climaxBodyAvgMultiple);
+  const volumeRelative = volume?.relative ?? 0;
+  const volumeExhaustion = !!volume && volume.relative >= cfg.volumeExhaustionRelative && volume.delta5 < -0.1;
+  const fourthAllowed = run === cfg.allowedFourthCandle && trigger.retestValid && !climactic && emaWithin && !volumeExhaustion;
+  const extensionRelevant = move5 > cfg.maxStretchedMovePct && move5AtrMultiple > cfg.stretchedAtrMultiple;
+  const extensionExtreme = move5 > cfg.extremeStretchedMovePct || move5AtrMultiple > cfg.extremeStretchedAtrMultiple;
+  const wickLimit = trigger.kind === "breakout" ? cfg.aggressiveRejectionWickBodyMultiple : cfg.rejectionWickBodyMultiple;
+  const wickExcess = lastBody > 0 ? rejectionWick > lastBody * wickLimit : true;
+  const exhaustionCompanion = climactic || run > cfg.maxSameDirectionCandles || wickExcess || volumeExhaustion;
+  const movementBlocks = extensionExtreme || (extensionRelevant && exhaustionCompanion);
+  const volumePasses = !!volume && (
+    volume.relative >= cfg.preferredVolumeRelative
+    || (volume.relative >= cfg.minVolumeRelative && (volume.delta5 > 0 || trigger.retestValid))
+  );
+  const volumeSeverity: QualitySeverity = volumeRelative < cfg.minVolumeRelative ? "block" : "penalty";
   return [
     {
       name: "Reteste conservador",
-      passed: true,
-      reason: "Entrada usa apenas reteste confirmado; rompimento imediato nao abre trade demo.",
+      passed: trigger.kind === "retest" && trigger.retestValid,
+      reason: trigger.kind === "retest" && trigger.retestValid
+        ? `Reteste valido com tolerancia de ${(cfg.retestTolerancePct * 100).toFixed(2)}% na zona ${trigger.level?.toFixed(4) ?? "estrutural"}.`
+        : "Rompimento imediato nao abre trade demo; falta toque e fechamento posterior a favor.",
+      severity: "block",
     },
     {
       name: "Distancia da EMA21",
-      passed: ema21Distance <= MAX_EMA21_DISTANCE_PCT,
-      reason: `Distancia da EMA21 em ${(ema21Distance * 100).toFixed(2)}% (max ${(MAX_EMA21_DISTANCE_PCT * 100).toFixed(2)}%).`,
+      passed: ema21Distance <= symbolCfg.maxEma21DistancePct,
+      reason: `Distancia da EMA21 em ${(ema21Distance * 100).toFixed(2)}% (max ${(symbolCfg.maxEma21DistancePct * 100).toFixed(2)}% para ${symbol}).`,
       penalty: -20,
+      severity: "block",
     },
     {
       name: "Distancia da EMA9",
-      passed: ema9Distance <= MAX_EMA9_DISTANCE_PCT,
-      reason: `Distancia da EMA9 em ${(ema9Distance * 100).toFixed(2)}% (max ${(MAX_EMA9_DISTANCE_PCT * 100).toFixed(2)}%).`,
+      passed: ema9Distance <= symbolCfg.maxEma9DistancePct,
+      reason: `Distancia da EMA9 em ${(ema9Distance * 100).toFixed(2)}% (max ${(symbolCfg.maxEma9DistancePct * 100).toFixed(2)}% para ${symbol}).`,
       penalty: -10,
+      severity: "block",
     },
     {
       name: "Movimento esticado",
-      passed: move5 <= MAX_STRETCHED_MOVE_PCT,
-      reason: `Movimento das ultimas 5 velas em ${(move5 * 100).toFixed(2)}% (max ${(MAX_STRETCHED_MOVE_PCT * 100).toFixed(2)}%).`,
+      passed: !movementBlocks && !extensionRelevant,
+      reason: `Movimento 5 velas ${(move5 * 100).toFixed(2)}%; ${move5AtrMultiple.toFixed(2)}x ATR. ${movementBlocks ? "Extensao relevante combinada com exaustao." : extensionRelevant ? "Extensao isolada vira penalidade, nao bloqueio." : "Dentro do contexto."}`,
       penalty: -20,
+      severity: movementBlocks ? "block" : "penalty",
     },
     {
       name: "Sequencia de candles",
-      passed: run <= MAX_SAME_DIRECTION_CANDLES,
-      reason: `${run} velas consecutivas na direcao da entrada (max ${MAX_SAME_DIRECTION_CANDLES}).`,
+      passed: run <= cfg.maxSameDirectionCandles || fourthAllowed,
+      reason: `${run} velas consecutivas na direcao da entrada. Quarta vela ${fourthAllowed ? "permitida por reteste, EMAs, volume e candle nao climatico" : "exige reteste valido sem exaustao"}.`,
       penalty: -15,
+      severity: "block",
     },
     {
       name: "Candle climatico",
-      passed: currentAtr > 0 && avgBody > 0 && lastRange <= currentAtr * CLIMAX_RANGE_ATR_MULTIPLE && lastBody <= avgBody * CLIMAX_BODY_AVG_MULTIPLE,
+      passed: currentAtr > 0 && avgBody > 0 && !climactic,
       reason: `Range ${(currentAtr > 0 ? lastRange / currentAtr : 0).toFixed(2)}x ATR; corpo ${(avgBody > 0 ? lastBody / avgBody : 0).toFixed(2)}x media.`,
       penalty: -25,
+      severity: "block",
     },
     {
       name: "Pavio contra entrada",
-      passed: lastBody > 0 && rejectionWick <= lastBody * 1.5,
-      reason: `Pavio contra entrada em ${(lastBody > 0 ? rejectionWick / lastBody : 0).toFixed(2)}x o corpo.`,
+      passed: !wickExcess,
+      reason: `Pavio contra entrada em ${(lastBody > 0 ? rejectionWick / lastBody : 0).toFixed(2)}x o corpo (max ${wickLimit.toFixed(1)}x).`,
       penalty: -15,
+      severity: "block",
     },
     {
       name: "Volume compativel",
-      passed: !!volume && volume.relative >= MIN_VOLUME_RELATIVE,
-      reason: volume ? `Volume relativo ${(volume.relative * 100).toFixed(0)}%.` : "Volume indisponivel.",
+      passed: volumePasses,
+      reason: volume
+        ? `Volume relativo ${volume.relative.toFixed(2)}x; delta 5 velas ${(volume.delta5 * 100).toFixed(1)}%. ${volume.relative >= cfg.preferredVolumeRelative ? "Qualidade cheia." : "Aceito abaixo de 1.0 apenas com contexto forte/expansao."}`
+        : "Volume indisponivel.",
       penalty: -20,
+      severity: volumeSeverity,
     },
   ];
+}
+
+export function blockingQualityFailures(filters: QualityFilter[]): QualityFilter[] {
+  return filters.filter((filter) => !filter.passed && filter.severity !== "penalty");
+}
+
+export function riskRewardMeetsMinimum(rr: number | null, minRr = DEMO_EXHAUSTION_CONFIG.minRiskReward): boolean {
+  return rr !== null && Number.isFinite(rr) && rr >= minRr;
 }
 
 function noSignal(symbol: DemoSymbol, reason: string, closeTime: number, extraSteps: DemoSignalInput["steps"] = []): DemoSignalInput {
@@ -428,11 +519,11 @@ function analyzeRadarLike(input: {
   if (trend1h !== "LATERAL" && trend15m !== "LATERAL" && trend1h !== trend15m) blockedReasons.push("1h e 15m estao em direcoes opostas.");
   if (volume?.veryWeak) blockedReasons.push("Volume muito baixo em relacao a media.");
   const alignedDirection: RadarDirection = trend1h === trend15m && trend1h === "ALTA" ? "COMPRA" : trend1h === trend15m && trend1h === "BAIXA" ? "VENDA" : "AGUARDAR";
-  const trigger = trigger5m(candles5m, alignedDirection, levels.breakoutResistance, levels.breakdownSupport, !!volume && volume.relative >= MIN_VOLUME_RELATIVE);
+  const trigger = trigger5m(candles5m, alignedDirection, levels.breakoutResistance, levels.breakdownSupport, !!volume && volume.relative >= DEMO_EXHAUSTION_CONFIG.minVolumeRelative);
   const entry = trigger.conservative;
   const plan = rrPlan(trigger.direction, entry, levels.support, levels.resistance, levels.breakoutResistance, levels.breakdownSupport);
   if (trigger.direction !== "AGUARDAR" && trigger.conservative === null) blockedReasons.push("Robo demo exige reteste real; rompimento imediato nao abre operacao.");
-  if (plan.rr !== null && plan.rr < MIN_RR) blockedReasons.push("Relacao risco/retorno menor que 1:2.");
+  if (plan.rr !== null && !riskRewardMeetsMinimum(plan.rr)) blockedReasons.push("Relacao risco/retorno menor que 1:2.");
   if (plan.stopTooFar) blockedReasons.push("Stop excessivamente distante para o setup intraday.");
   if (trigger.direction !== "AGUARDAR" && !plan.valid) blockedReasons.push("Plano matematicamente invalido.");
 
@@ -442,11 +533,11 @@ function analyzeRadarLike(input: {
   else scoreItems.push({ label: "-10 conflito/lateral 15m", points: -10, detail: "15m nao confirma o 1h." });
   if (trigger.direction !== "AGUARDAR" && trigger.conservative !== null) { scoreItems.push({ label: "+20 reteste 5m", points: 20, detail: trigger.confirmation ?? "Reteste aprovado." }); confirmations.push(trigger.confirmation ?? "Reteste 5m aprovado."); }
   else scoreItems.push({ label: "-20 sem reteste 5m", points: -20, detail: trigger.risk ?? "Sem reteste confirmado." });
-  if (volume && volume.relative >= MIN_VOLUME_RELATIVE) { scoreItems.push({ label: "+15 volume", points: 15, detail: volume.expanding ? "Volume relativo com expansao." : "Volume suficiente." }); confirmations.push(volume.expanding ? "Volume em expansao." : "Volume suficiente."); }
+  if (volume && volume.relative >= DEMO_EXHAUSTION_CONFIG.minVolumeRelative) { scoreItems.push({ label: "+15 volume", points: 15, detail: volume.expanding ? "Volume relativo com expansao." : "Volume suficiente." }); confirmations.push(volume.expanding ? "Volume em expansao." : "Volume suficiente."); }
   else scoreItems.push({ label: "-20 volume fraco", points: -20, detail: "Volume abaixo do minimo operacional." });
   if (levels.support !== null && levels.resistance !== null) { scoreItems.push({ label: "+10 suporte/resistencia", points: 10, detail: "Niveis estruturais encontrados." }); confirmations.push("Suporte e resistencia mapeados."); }
   else scoreItems.push({ label: "-10 sem nivel claro", points: -10, detail: "Suporte ou resistencia principal ausente." });
-  if (plan.rr !== null && plan.rr >= MIN_RR) { scoreItems.push({ label: "+10 R/R >= 2", points: 10, detail: `1:${plan.rr.toFixed(2)}` }); confirmations.push("R/R minimo aprovado."); }
+  if (riskRewardMeetsMinimum(plan.rr)) { scoreItems.push({ label: "+10 R/R >= 2", points: 10, detail: `1:${plan.rr?.toFixed(2)}` }); confirmations.push("R/R minimo aprovado."); }
   else scoreItems.push({ label: "-20 risco alto", points: -20, detail: plan.rr !== null ? `1:${plan.rr.toFixed(2)}` : "R/R indisponivel." });
   const rawScore = scoreItems.reduce((sum, item) => sum + item.points, 0);
   const score = Math.max(0, Math.min(100, rawScore));
@@ -466,6 +557,9 @@ function analyzeRadarLike(input: {
     trend1h,
     trend15m,
     trigger5m: trigger.direction,
+    triggerKind: trigger.kind,
+    triggerLevel: trigger.level,
+    retestValid: trigger.retestValid,
     suggestedDirection,
     support: levels.support,
     resistance: levels.resistance,
@@ -508,8 +602,12 @@ export function analyzeDemoCandles(input: {
   const side: TradeSide = analysis.suggestedDirection === "COMPRA" ? "BUY" : "SELL";
   const closed15m = closedCandles(input.candles15m, now);
   const trend15m = trendFor(closed15m, false);
-  const filters = qualityFilters(side, analysis.conservativeEntry, candles5m, trend15m, analysis.volume);
-  const failed = filters.filter((filter) => !filter.passed);
+  const filters = qualityFilters(input.symbol, side, analysis.conservativeEntry, candles5m, trend15m, analysis.volume, {
+    kind: analysis.triggerKind,
+    level: analysis.triggerLevel,
+    retestValid: analysis.retestValid,
+  });
+  const failed = blockingQualityFailures(filters);
   if (failed.length > 0) {
     return {
       price,
@@ -518,17 +616,18 @@ export function analyzeDemoCandles(input: {
       signal: noSignal(input.symbol, failed.map((filter) => filter.reason).join(" | "), closeTime, filters.map((filter, index) => ({
         number: index + 1,
         name: filter.name,
-        value: filter.passed ? "APROVADO" : "BLOQUEADO",
+        value: filter.passed ? "APROVADO" : filter.severity === "penalty" ? "PENALIDADE" : "BLOQUEADO",
         reason: filter.reason,
       }))),
     };
   }
   const steps: DemoSignalInput["steps"] = [
     ...analysis.scoreItems.map((item, index) => ({ number: index + 1, name: item.label, value: `${item.points}`, reason: item.detail })),
+    { number: analysis.scoreItems.length + 1, name: "Score final", value: `${analysis.score}/100`, reason: "Score final calculado antes dos filtros anti-exaustao." },
     ...filters.map((filter, index) => ({
-      number: analysis.scoreItems.length + index + 1,
+      number: analysis.scoreItems.length + index + 2,
       name: filter.name,
-      value: filter.passed ? "APROVADO" : "BLOQUEADO",
+      value: filter.passed ? "APROVADO" : filter.severity === "penalty" ? "PENALIDADE" : "BLOQUEADO",
       reason: filter.reason,
     })),
   ];
