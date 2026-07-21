@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { HealthCheckResponse } from "@workspace/api-zod";
 import { checkBinanceHealth } from "../lib/binance-client";
+import { APP_METADATA } from "@shared/appVersion";
 
 const router: IRouter = Router();
 
@@ -12,6 +13,7 @@ router.get("/healthz", (_req, res) => {
 router.get("/health", async (_req, res) => {
   const binance = await checkBinanceHealth();
   res.json({
+    ...APP_METADATA,
     status: binance.ok ? "ok" : "degraded",
     api: {
       ok: true,

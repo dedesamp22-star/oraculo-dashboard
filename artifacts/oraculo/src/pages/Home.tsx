@@ -24,6 +24,7 @@ import { DemoStatsPanel }    from '../components/DemoStatsPanel';
 import { MarketRadarPanel }  from '../components/MarketRadarPanel';
 import { DemoAgentsPanel }   from '../components/DemoAgentsPanel';
 import { getAuth, loginUser, logoutUser, type AuthUser } from '../lib/demoApi';
+import { APP_NAME, APP_VERSION } from '@shared/appVersion';
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 
@@ -890,7 +891,7 @@ export default function Home() {
             <div className="relative w-4 h-4 bg-primary shadow-[0_0_15px_var(--color-primary)] rotate-45" />
           </div>
           <h1 className="text-3xl sm:text-4xl font-mono font-bold tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-white to-white/70">
-            ORÁCULO<span className="text-primary ml-2">0.3</span>
+            {APP_NAME.toUpperCase()}<span className="text-primary ml-2">{APP_VERSION}</span>
           </h1>
         </div>
         <div className="hidden sm:flex items-center gap-3 text-xs font-mono text-primary bg-primary/10 px-4 py-2 border-l-2 border-primary">

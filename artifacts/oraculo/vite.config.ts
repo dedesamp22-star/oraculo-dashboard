@@ -1,9 +1,10 @@
 import path from 'path';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 
 import runtimeErrorOverlay from '@replit/vite-plugin-runtime-error-modal';
+import { APP_DESCRIPTION, APP_DISPLAY_NAME, APP_NAME, APP_VERSION } from '../shared/appVersion';
 
 const rawPort = process.env.PORT ?? '5173';
 
@@ -15,9 +16,23 @@ if (Number.isNaN(port) || port <= 0) {
 
 const basePath = process.env.BASE_PATH ?? '/';
 
+function appMetadataHtml(): Plugin {
+  return {
+    name: 'oraculo-app-metadata',
+    transformIndexHtml(html) {
+      return html
+        .replaceAll('%APP_TITLE%', `${APP_NAME} ${APP_VERSION}`)
+        .replaceAll('%APP_DESCRIPTION%', APP_DESCRIPTION)
+        .replaceAll('%APP_NAME%', APP_NAME)
+        .replaceAll('%APP_DISPLAY_NAME%', APP_DISPLAY_NAME);
+    },
+  };
+}
+
 export default defineConfig({
   base: basePath,
   plugins: [
+    appMetadataHtml(),
     react(),
     tailwindcss(),
     runtimeErrorOverlay(),
@@ -38,6 +53,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(import.meta.dirname, 'src'),
+      '@shared': path.resolve(import.meta.dirname, '..', 'shared'),
       '@assets': path.resolve(
         import.meta.dirname,
         '..',
@@ -65,6 +81,10 @@ export default defineConfig({
     },
     fs: {
       strict: true,
+      allow: [
+        path.resolve(import.meta.dirname),
+        path.resolve(import.meta.dirname, '..', 'shared'),
+      ],
     },
   },
   preview: {

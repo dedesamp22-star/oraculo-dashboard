@@ -4,10 +4,13 @@
     "incremental": true,
     "tsBuildInfoFile": ".tsbuildinfo",
     "outDir": "dist",
-    "rootDir": "src",
-    "types": ["node"]
+    "rootDirs": ["src", "../shared"],
+    "types": ["node"],
+    "paths": {
+      "@shared/*": ["../shared/*"]
+    }
   },
-  "include": ["src"],
+  "include": ["src", "../shared/appVersion.ts"],
   "references": [
     {
       "path": "../../lib/db"

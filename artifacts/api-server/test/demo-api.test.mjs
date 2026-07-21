@@ -526,6 +526,10 @@ test("health endpoint reports API and Binance state", async () => {
     const res = await fetch(`${server.base}/api/health`);
     assert.equal(res.status, 200);
     const health = await json(res);
+    assert.equal(health.appName, "Oráculo");
+    assert.equal(health.version, "0.5");
+    assert.equal(health.displayName, "ORÁCULO 0.5");
+    assert.equal(health.buildChannel, "homologation");
     assert.equal(health.api.ok, true);
     assert.ok(["ok", "degraded"].includes(health.status));
     assert.equal(typeof health.api.uptimeSec, "number");
