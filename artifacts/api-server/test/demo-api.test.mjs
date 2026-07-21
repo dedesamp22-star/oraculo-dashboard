@@ -87,6 +87,26 @@ async function json(res) {
   return await res.json();
 }
 
+async function postPosition(base, cookie, trade) {
+  const res = await fetch(`${base}/api/demo/positions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: cookie },
+    body: JSON.stringify(trade),
+  });
+  assert.equal(res.status, 200);
+  return await json(res);
+}
+
+async function postPrice(base, cookie, pair, price) {
+  const res = await fetch(`${base}/api/demo/price`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: cookie },
+    body: JSON.stringify({ pair, price }),
+  });
+  assert.equal(res.status, 200);
+  return await json(res);
+}
+
 test("demo API auth, validation, migration, persistence, and trade lifecycle", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "oraculo-demo-"));
   const dbPath = path.join(dir, "oraculo.sqlite");
@@ -288,6 +308,7 @@ test("server session is authoritative and demo signal/price events are idempoten
     assert.equal(browserAOpen.status, 200);
     const sessionA = await json(browserAOpen);
     assert.equal(sessionA.activeTrade.pair, "BTCUSDT");
+    assert.equal(sessionA.dailyStats.totalTrades, 0);
 
     const browserBDuplicate = await fetch(`${server.base}/api/demo/signal`, {
       method: "POST",
@@ -318,6 +339,9 @@ test("server session is authoritative and demo signal/price events are idempoten
     assert.equal(afterTarget1.partialPnlUSDC, 5);
     assert.ok(afterTarget1.openRiskUSDC > 0);
     assert.equal(afterTarget1.history.length, 0);
+    assert.equal(afterTarget1.dailyStats.totalTrades, 0);
+    assert.equal(afterTarget1.dailyStats.wins, 0);
+    assert.equal(afterTarget1.dailyStats.dailyPnL, 5);
 
     await Promise.all([
       fetch(`${server.base}/api/demo/price`, {
@@ -335,6 +359,7 @@ test("server session is authoritative and demo signal/price events are idempoten
     const finalSession = await json(await fetch(`${server.base}/api/demo/session`));
     assert.equal(finalSession.activeTrade, null);
     assert.equal(finalSession.history.filter((item) => item.id === sessionA.activeTrade.id).length, 1);
+    assert.equal(finalSession.dailyStats.totalTrades, 1);
     assert.equal(finalSession.dailyStats.wins, 1);
     assert.equal(finalSession.dailyStats.dailyPnL, 15);
     assert.equal(finalSession.realizedPnlUSDC, 15);
@@ -383,8 +408,189 @@ test("operation management realizes partial and closes stale scalps by max durat
     assert.equal(updated.status, 200);
     const session = await json(updated);
     assert.equal(session.activeTrade, null);
-    assert.equal(session.history[0].exitReason, "TIME_EXIT");
+    assert.equal(session.history[0].exitReason, "TIMEOUT");
     assert.equal(session.history[0].pnlUSDC, 2);
+  } finally {
+    await stopServer(server.child);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("management keeps partial idempotent and statistics count only final closes", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "oraculo-demo-partial-"));
+  const dbPath = path.join(dir, "oraculo.sqlite");
+  const port = 5127;
+  const server = await startServer({ port, dbPath });
+  try {
+    const cookie = await login(server.base);
+    const trade = sampleTrade({ id: "partial_once" });
+    await postPosition(server.base, cookie, trade);
+
+    const first = await postPrice(server.base, cookie, "BTCUSDT", 105);
+    assert.equal(first.activeTrade.target1Hit, true);
+    assert.equal(first.activeTrade.remainingPositionSize, 1);
+    assert.equal(first.activeTrade.partialPnlUSDC, 5);
+    assert.equal(first.activeTrade.realizedPnlUSDC, 5);
+    assert.equal(first.dailyStats.totalTrades, 0);
+    assert.equal(first.dailyStats.wins, 0);
+    assert.equal(first.dailyStats.dailyPnL, 5);
+
+    const second = await postPrice(server.base, cookie, "BTCUSDT", 105);
+    assert.equal(second.activeTrade.remainingPositionSize, 1);
+    assert.equal(second.activeTrade.partialPnlUSDC, 5);
+    assert.equal(second.activeTrade.realizedPnlUSDC, 5);
+    assert.equal(second.dailyStats.dailyPnL, 5);
+    assert.equal(second.history.length, 0);
+
+    const closed = await postPrice(server.base, cookie, "BTCUSDT", 110);
+    assert.equal(closed.activeTrade, null);
+    assert.equal(closed.history[0].status, "WIN");
+    assert.equal(closed.history[0].realizedPnlUSDC, 15);
+    assert.equal(closed.dailyStats.totalTrades, 1);
+    assert.equal(closed.dailyStats.wins, 1);
+    assert.equal(closed.dailyStats.losses, 0);
+    assert.equal(closed.dailyStats.breakevens, 0);
+    assert.equal(closed.dailyStats.dailyPnL, 15);
+    assert.equal(closed.unrealizedPnlUSDC, 0);
+  } finally {
+    await stopServer(server.child);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("breakeven buffer works for BUY and SELL without counting wins early", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "oraculo-demo-breakeven-"));
+  const dbPath = path.join(dir, "oraculo.sqlite");
+  const port = 5128;
+  const server = await startServer({ port, dbPath });
+  try {
+    const cookie = await login(server.base);
+    await postPosition(server.base, cookie, sampleTrade({ id: "buy_be" }));
+    const buy = await postPrice(server.base, cookie, "BTCUSDT", 105);
+    assert.ok(Math.abs(buy.activeTrade.stopLoss - 100.02) < 0.000001 || buy.activeTrade.stopLoss > 100.02);
+    assert.equal(buy.dailyStats.wins, 0);
+
+    await postPrice(server.base, cookie, "BTCUSDT", 110);
+    await postPosition(server.base, cookie, sampleTrade({
+      id: "sell_be",
+      pair: "ETHUSDT",
+      direction: "SELL",
+      entry: 100,
+      stopLoss: 105,
+      stopLossOriginal: 105,
+      target1: 95,
+      target2: 90,
+    }));
+    const sell = await postPrice(server.base, cookie, "ETHUSDT", 95);
+    assert.ok(sell.activeTrade.stopLoss <= 99.98);
+    assert.equal(sell.activeTrade.isBreakevenStop, true);
+    assert.equal(sell.activeTrade.remainingPositionSize, 1);
+  } finally {
+    await stopServer(server.child);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("adaptive trailing never worsens and uses symbol-specific bounds", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "oraculo-demo-trailing-"));
+  const dbPath = path.join(dir, "oraculo.sqlite");
+  const port = 5129;
+  const server = await startServer({ port, dbPath });
+  try {
+    const cookie = await login(server.base);
+    await postPosition(server.base, cookie, sampleTrade({ id: "btc_trailing" }));
+    const btc = await postPrice(server.base, cookie, "BTCUSDT", 106);
+    const btcStop = btc.activeTrade.stopLoss;
+    assert.ok(btcStop >= 106 * (1 - 0.0035) - 0.000001);
+    assert.ok(btcStop <= 106 * (1 - 0.0018) + 0.000001);
+
+    const notWorse = await postPrice(server.base, cookie, "BTCUSDT", btcStop + 0.05);
+    assert.equal(notWorse.activeTrade.stopLoss, btcStop);
+
+    await postPrice(server.base, cookie, "BTCUSDT", 110);
+    await postPosition(server.base, cookie, sampleTrade({ id: "sol_trailing", pair: "SOLUSDT" }));
+    const sol = await postPrice(server.base, cookie, "SOLUSDT", 106);
+    const solStop = sol.activeTrade.stopLoss;
+    assert.ok(solStop >= 106 * (1 - 0.005) - 0.000001);
+    assert.ok(solStop <= 106 * (1 - 0.0025) + 0.000001);
+    assert.ok(solStop < btcStop);
+  } finally {
+    await stopServer(server.child);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loss of strength requires a combination of signals", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "oraculo-demo-strength-"));
+  const dbPath = path.join(dir, "oraculo.sqlite");
+  const port = 5130;
+  const server = await startServer({ port, dbPath });
+  try {
+    const cookie = await login(server.base);
+    await postPosition(server.base, cookie, sampleTrade({
+      id: "strength_alert",
+      target1Hit: true,
+      isBreakevenStop: true,
+      stopLoss: 100.02,
+      remainingPositionSize: 1,
+      realizedPnlUSDC: 5,
+      partialPnlUSDC: 5,
+      target1ClosePrice: 105,
+    }));
+    const alertOnly = await postPrice(server.base, cookie, "BTCUSDT", 104.8);
+    assert.equal(alertOnly.activeTrade.id, "strength_alert");
+    assert.equal(alertOnly.history.length, 0);
+
+    await postPrice(server.base, cookie, "BTCUSDT", 110);
+    await postPosition(server.base, cookie, sampleTrade({
+      id: "strength_close",
+      target1Hit: true,
+      isBreakevenStop: true,
+      stopLoss: 100.02,
+      remainingPositionSize: 1,
+      realizedPnlUSDC: 5,
+      partialPnlUSDC: 5,
+      target1ClosePrice: 105,
+    }));
+    await postPrice(server.base, cookie, "BTCUSDT", 105.2);
+    await postPrice(server.base, cookie, "BTCUSDT", 105.1);
+    const closed = await postPrice(server.base, cookie, "BTCUSDT", 105);
+    assert.equal(closed.activeTrade, null);
+    assert.equal(closed.history[0].exitReason, "LOSS_OF_STRENGTH");
+  } finally {
+    await stopServer(server.child);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("event priority prevents duplicate partial, stop, target2, trailing and timeout closes", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "oraculo-demo-priority-"));
+  const dbPath = path.join(dir, "oraculo.sqlite");
+  const port = 5131;
+  const server = await startServer({ port, dbPath });
+  try {
+    const cookie = await login(server.base);
+    await postPosition(server.base, cookie, sampleTrade({ id: "stop_priority" }));
+    const stopped = await postPrice(server.base, cookie, "BTCUSDT", 95);
+    assert.equal(stopped.activeTrade, null);
+    assert.equal(stopped.history[0].exitReason, "STOP_LOSS");
+    assert.equal(stopped.history[0].target1Hit, false);
+
+    await postPosition(server.base, cookie, sampleTrade({ id: "target2_priority" }));
+    const target2 = await postPrice(server.base, cookie, "BTCUSDT", 110);
+    assert.equal(target2.activeTrade, null);
+    assert.equal(target2.history[0].exitReason, "TARGET_2");
+    assert.equal(target2.history[0].target1Hit, false);
+
+    await postPosition(server.base, cookie, sampleTrade({
+      id: "timeout_first_tick",
+      openTime: Date.now() - 90 * 60 * 1000 - 1,
+      maxDurationMs: 90 * 60 * 1000,
+    }));
+    const timedOut = await postPrice(server.base, cookie, "BTCUSDT", 101);
+    assert.equal(timedOut.activeTrade, null);
+    assert.equal(timedOut.history[0].exitReason, "TIMEOUT");
+    assert.equal(timedOut.history[0].closePrice, 101);
   } finally {
     await stopServer(server.child);
     rmSync(dir, { recursive: true, force: true });
