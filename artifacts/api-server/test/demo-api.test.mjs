@@ -137,6 +137,97 @@ async function postPrice(base, cookie, pair, price) {
   return await json(res);
 }
 
+async function runHomologationTradeFlow(base, cookie, trade) {
+  const initialSession = await authedJson(base, cookie, "/api/demo/session");
+  assert.equal(initialSession.activeTrade, null);
+
+  assert.equal((await fetch(`${base}/api/demo/automation`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Cookie: cookie },
+    body: JSON.stringify({ enabled: true, symbol: trade.pair }),
+  })).status, 200);
+
+  await postPosition(base, cookie, trade);
+  const opened = await authedJson(base, cookie, "/api/demo/session");
+  assert.equal(opened.activeTrade.id, trade.id);
+  assert.equal(opened.dailyStats.totalTrades, 0);
+
+  const partial = await postPrice(base, cookie, trade.pair, trade.target1);
+  assert.equal(partial.activeTrade.target1Hit, true);
+  assert.equal(partial.activeTrade.remainingPositionSize, trade.positionSize * 0.5);
+  assert.equal(partial.activeTrade.isBreakevenStop, true);
+  assert.ok(trade.direction === "BUY"
+    ? partial.activeTrade.stopLoss >= trade.entry
+    : partial.activeTrade.stopLoss <= trade.entry);
+  assert.ok(partial.realizedPnlUSDC > 0);
+  assert.equal(partial.dailyStats.totalTrades, 0);
+
+  const trailed = await postPrice(base, cookie, trade.pair, trade.direction === "BUY" ? trade.target1 + 1 : trade.target1 - 1);
+  assert.ok(trade.direction === "BUY"
+    ? trailed.activeTrade.stopLoss >= partial.activeTrade.stopLoss
+    : trailed.activeTrade.stopLoss <= partial.activeTrade.stopLoss);
+
+  const closed = await postPrice(base, cookie, trade.pair, trade.target2);
+  assert.equal(closed.activeTrade, null);
+  assert.equal(closed.history[0].id, trade.id);
+  assert.equal(closed.history[0].status, "WIN");
+  assert.equal(closed.dailyStats.totalTrades, 1);
+  assert.equal(closed.dailyStats.wins, 1);
+  assert.ok(closed.balance > initialSession.balance);
+  return closed;
+}
+
+test("0.4 homologation integrated flow persists and isolates admin and second user", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "oraculo-demo-homologation-"));
+  const dbPath = path.join(dir, "oraculo.sqlite");
+  const port = 5133;
+  let server = await startServer({ port, dbPath });
+  try {
+    const adminCookie = await login(server.base);
+    await createUser(server.base, adminCookie, {
+      username: "homologacao",
+      name: "Usuario Homologacao",
+      password: "homologacao-safe-123",
+      role: "user",
+    });
+    const userCookie = await loginAs(server.base, "homologacao", "homologacao-safe-123");
+
+    const adminClosed = await runHomologationTradeFlow(server.base, adminCookie, sampleTrade({
+      id: "homolog_admin_btc",
+      pair: "BTCUSDT",
+      target2: 110,
+    }));
+    const userClosed = await runHomologationTradeFlow(server.base, userCookie, sampleTrade({
+      id: "homolog_user_eth",
+      pair: "ETHUSDT",
+      target2: 110,
+    }));
+
+    assert.equal(adminClosed.history.some((trade) => trade.id === "homolog_user_eth"), false);
+    assert.equal(userClosed.history.some((trade) => trade.id === "homolog_admin_btc"), false);
+
+    assert.equal((await fetch(`${server.base}/api/auth/logout`, { method: "POST", headers: { Cookie: adminCookie } })).status, 200);
+    assert.equal((await fetch(`${server.base}/api/demo/session`, { headers: { Cookie: adminCookie } })).status, 401);
+
+    await stopServer(server.child);
+    server = await startServer({ port, dbPath });
+    const adminCookieAfterRestart = await login(server.base);
+    const userCookieAfterRestart = await loginAs(server.base, "homologacao", "homologacao-safe-123");
+    const persistedAdmin = await authedJson(server.base, adminCookieAfterRestart, "/api/demo/session");
+    const persistedUser = await authedJson(server.base, userCookieAfterRestart, "/api/demo/session");
+
+    assert.equal(persistedAdmin.history.some((trade) => trade.id === "homolog_admin_btc"), true);
+    assert.equal(persistedAdmin.history.some((trade) => trade.id === "homolog_user_eth"), false);
+    assert.equal(persistedUser.history.some((trade) => trade.id === "homolog_user_eth"), true);
+    assert.equal(persistedUser.history.some((trade) => trade.id === "homolog_admin_btc"), false);
+    assert.equal(persistedAdmin.dailyStats.totalTrades, 1);
+    assert.equal(persistedUser.dailyStats.totalTrades, 1);
+  } finally {
+    await stopServer(server.child);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("multiuser auth isolates demo data and protects sessions", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "oraculo-demo-auth-"));
   const dbPath = path.join(dir, "oraculo.sqlite");
