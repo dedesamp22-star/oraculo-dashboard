@@ -16,7 +16,7 @@ import { useDemoAutoAnalysis }  from '../hooks/useDemoAutoAnalysis';
 import { useDemoTrading }       from '../hooks/useDemoTrading';
 import { runEngine, type EngineResult, type RuleStep, type StepStatus, type Decision } from '../lib/analysis';
 import { fmtTimeSP, fmtSPNow, isOperational as checkOperational } from '../lib/schedule';
-import { isSafetyLimited, safetyLimitReason } from '../lib/demo';
+import { isSafetyLimited, safetyLimitReason, type DemoSession } from '../lib/demo';
 import { TradingViewChart, type TVInterval } from '../components/TradingViewChart';
 import { DemoActivePanel }   from '../components/DemoActivePanel';
 import { DemoHistoryPanel }  from '../components/DemoHistoryPanel';
@@ -416,6 +416,132 @@ function DemoStatusBadge({ enabled, limited, reason }: {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
+function MobileSystemStatus({
+  apiOnline,
+  binanceOnline,
+  demoEnabled,
+  safeLimited,
+  symbol,
+  lastUpdate,
+}: {
+  apiOnline: boolean;
+  binanceOnline: boolean;
+  demoEnabled: boolean;
+  safeLimited: boolean;
+  symbol: string;
+  lastUpdate: Date | null;
+}) {
+  const systemOnline = apiOnline && binanceOnline;
+  return (
+    <section className="lg:hidden border border-border/60 bg-card/40 p-3">
+      <div className="grid grid-cols-2 gap-2">
+        <MobileMiniCell label="Sistema" value={systemOnline ? 'Online' : 'Offline'} color={systemOnline ? '#00ff66' : '#ff4444'} />
+        <MobileMiniCell label="Demo" value={demoEnabled ? safeLimited ? 'Pausado' : 'Ativo' : 'Inativo'} color={demoEnabled && !safeLimited ? '#00f0ff' : '#ffaa00'} />
+        <MobileMiniCell label="Par" value={symbol.replace('USDT', '')} color="#ffffff" />
+        <MobileMiniCell
+          label="Atualizacao"
+          value={lastUpdate ? lastUpdate.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--'}
+          color="#aaaaaa"
+        />
+      </div>
+    </section>
+  );
+}
+
+function MobileMiniCell({ label, value, color }: { label: string; value: string; color: string }) {
+  return (
+    <div className="min-w-0 border border-border/40 bg-background/25 px-3 py-2">
+      <p className="text-[8px] font-mono uppercase tracking-[0.14em] text-muted-foreground truncate">{label}</p>
+      <p className="mt-0.5 text-xs font-mono font-bold uppercase tabular-nums truncate" style={{ color }}>{value}</p>
+    </div>
+  );
+}
+
+function MobileEmptyOperation({ safeLimited, safeReason, countdown }: { safeLimited: boolean; safeReason?: string; countdown: string }) {
+  return (
+    <section className="lg:hidden border border-[#00f0ff]/20 bg-[#00f0ff]/[0.04] p-3">
+      <div className="flex items-center gap-3">
+        <Bot className="w-5 h-5 text-[#00f0ff]/60 flex-shrink-0" />
+        <div className="min-w-0 flex-1">
+          <p className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-[#00f0ff]">Sem operacao aberta</p>
+          <p className="mt-1 text-[10px] font-mono text-muted-foreground/70 leading-snug break-words">
+            {safeLimited ? safeReason ?? 'Novas operacoes pausadas por limite de risco.' : `Proxima leitura demo em ${countdown}.`}
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function MobileActions({
+  canAnalyze,
+  analyzing,
+  loading,
+  demoEnabled,
+  marketError,
+  onAnalyze,
+  onRefresh,
+  onAutomationChange,
+}: {
+  canAnalyze: boolean;
+  analyzing: boolean;
+  loading: boolean;
+  demoEnabled: boolean;
+  marketError: string | null;
+  onAnalyze: () => void;
+  onRefresh: () => void;
+  onAutomationChange: (enabled: boolean) => void;
+}) {
+  return (
+    <section className="lg:hidden grid grid-cols-2 gap-2">
+      <button
+        onClick={onAnalyze}
+        disabled={!canAnalyze}
+        className={`min-h-11 border px-3 py-3 text-[10px] font-mono font-bold uppercase tracking-[0.14em] flex items-center justify-center gap-2 ${
+          canAnalyze ? 'bg-primary text-primary-foreground border-primary' : 'bg-primary/10 text-primary/40 border-primary/20'
+        }`}
+      >
+        <Zap className="w-3.5 h-3.5" />
+        {analyzing ? 'Analisando' : 'Analisar'}
+      </button>
+      <button
+        onClick={onRefresh}
+        disabled={loading}
+        className="min-h-11 border border-border/60 bg-card/40 px-3 py-3 text-[10px] font-mono font-bold uppercase tracking-[0.14em] flex items-center justify-center gap-2 text-foreground"
+      >
+        <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+        Atualizar
+      </button>
+      <div className="col-span-2 min-h-11 flex items-center justify-between border border-[#00f0ff]/25 bg-[#00f0ff]/[0.04] px-3 py-2">
+        <div className="min-w-0">
+          <p className="text-[9px] font-mono uppercase tracking-[0.16em] text-muted-foreground">Automacao demo</p>
+          <p className="text-[10px] font-mono uppercase truncate" style={{ color: demoEnabled ? '#00f0ff' : '#ffaa00' }}>
+            {demoEnabled ? 'Ativa no servidor' : 'Inativa'}
+          </p>
+        </div>
+        <Toggle checked={demoEnabled} onChange={onAutomationChange} disabled={loading || !!marketError} accentColor="#00f0ff" />
+      </div>
+    </section>
+  );
+}
+
+function MobilePanelOverview({ session }: { session: DemoSession }) {
+  return (
+    <section className="lg:hidden border border-border/60 bg-card/40 p-3">
+      <div className="grid grid-cols-2 gap-2">
+        <MobileMiniCell label="Saldo demo" value={`$${fmtPrice(session.balance)}`} color={session.balance >= session.configuredBalance ? '#00ff66' : '#ff4444'} />
+        <MobileMiniCell label="P&L dia" value={`${session.dailyStats.dailyPnL >= 0 ? '+' : '-'}$${fmtPrice(Math.abs(session.dailyStats.dailyPnL))}`} color={session.dailyStats.dailyPnL >= 0 ? '#00ff66' : '#ff4444'} />
+        <MobileMiniCell label="Flutuante" value={`${(session.unrealizedPnlUSDC ?? 0) >= 0 ? '+' : '-'}$${fmtPrice(Math.abs(session.unrealizedPnlUSDC ?? 0))}`} color={(session.unrealizedPnlUSDC ?? 0) >= 0 ? '#00ff66' : '#ff4444'} />
+        <MobileMiniCell label="Abertas" value={session.activeTrade ? '1' : '0'} color={session.activeTrade ? '#00f0ff' : '#aaaaaa'} />
+        <MobileMiniCell label="Trades" value={String(session.dailyStats.totalTrades)} color="#ffffff" />
+        <MobileMiniCell label="W/L/BE" value={`${session.dailyStats.wins}/${session.dailyStats.losses}/${session.dailyStats.breakevens}`} color="#ffffff" />
+        <MobileMiniCell label="Drawdown" value={`$${fmtPrice(session.dailyStats.maxDrawdown)}`} color="#ffaa00" />
+        <MobileMiniCell label="Risco aberto" value={`$${fmtPrice(session.openRiskUSDC ?? 0)}`} color="#ffaa00" />
+      </div>
+    </section>
+  );
+}
+
 let alertIdCounter = 0;
 
 export default function Home() {
@@ -576,6 +702,11 @@ export default function Home() {
     }, 900);
   };
 
+  const handleRefreshMobile = () => {
+    void market.refresh();
+    void radar.refresh();
+  };
+
   // ─────────────────────────────────────────────────────────────────────────
   // RENDER
   // ─────────────────────────────────────────────────────────────────────────
@@ -618,7 +749,7 @@ export default function Home() {
       <main className="w-full max-w-5xl flex flex-col gap-5 relative z-10">
 
         {/* ── Live price ──────────────────────────────────────────────────── */}
-        <section className="bg-card/50 backdrop-blur-md border border-border p-5 relative overflow-hidden">
+        <section className="hidden lg:block bg-card/50 backdrop-blur-md border border-border p-5 relative overflow-hidden">
           <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-primary/30 to-transparent" />
           {market.error ? (
             <div className="flex items-center gap-3 text-destructive font-mono text-sm min-w-0">
@@ -662,7 +793,7 @@ export default function Home() {
         </section>
 
         {/* ── Controls ────────────────────────────────────────────────────── */}
-        <section className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+        <section className="hidden lg:grid grid-cols-1 sm:grid-cols-3 gap-2">
           <div className="border border-border/50 bg-card/30 px-4 py-3">
             <span className="text-[9px] font-mono uppercase tracking-[0.18em] text-muted-foreground">API</span>
             <div className="mt-1 flex items-center gap-2">
@@ -714,7 +845,96 @@ export default function Home() {
           ))}
         </div>
 
-        <div className={`${mobileTab === 'panel' ? 'block' : 'hidden'} lg:block`}>
+        <div className={`${mobileTab === 'operation' ? 'flex' : 'hidden'} lg:hidden flex-col gap-3`}>
+          <MobileSystemStatus
+            apiOnline={!apiHealth.error && !apiHealth.loading}
+            binanceOnline={!!apiHealth.health?.binance.ok && !market.error}
+            demoEnabled={demoEnabled}
+            safeLimited={safeLimited}
+            symbol={radar.symbol}
+            lastUpdate={market.lastUpdate ?? radar.lastUpdate}
+          />
+
+          {demoSession.activeTrade ? (
+            <DemoActivePanel trade={demoSession.activeTrade} currentPrice={market.price} />
+          ) : (
+            <MobileEmptyOperation safeLimited={safeLimited} safeReason={safeReason} countdown={demoAutoState.countdown} />
+          )}
+
+          <MobileActions
+            canAnalyze={canAnalyze}
+            analyzing={analyzing}
+            loading={market.loading || radar.loading}
+            demoEnabled={demoEnabled}
+            marketError={market.error}
+            onAnalyze={handleManualAnalyze}
+            onRefresh={handleRefreshMobile}
+            onAutomationChange={(enabled) => setAutomationEnabled(enabled, radar.symbol)}
+          />
+
+          <MarketRadarPanel
+            analysis={radar.analysis}
+            loading={radar.loading}
+            error={radar.error}
+            lastUpdate={radar.lastUpdate}
+            symbol={radar.symbol}
+            onSymbolChange={radar.setSymbol}
+          />
+
+          <button
+            onClick={() => setMobileChartOpen(open => !open)}
+            className="flex min-h-11 items-center justify-between border border-border/60 bg-card/40 px-4 py-3"
+          >
+            <span className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-[0.18em] text-muted-foreground">
+              <BarChart2 className="w-3.5 h-3.5 text-primary" />
+              Grafico
+            </span>
+            {mobileChartOpen
+              ? <ChevronUp className="w-4 h-4 text-muted-foreground/60" />
+              : <ChevronDown className="w-4 h-4 text-muted-foreground/60" />
+            }
+          </button>
+          <section className={`${mobileChartOpen ? 'block' : 'hidden'} bg-card/50 border border-border overflow-hidden`}>
+            <TradingViewChart key={`mobile-${radar.symbol}-${tvInterval}`} symbol={`BINANCE:${radar.symbol}`} interval={tvInterval} height={360} />
+          </section>
+        </div>
+
+        <div className={`${mobileTab === 'panel' ? 'flex' : 'hidden'} lg:hidden flex-col gap-3`}>
+          <MobilePanelOverview session={demoSession} />
+          <DemoAgentsPanel
+            agents={demoAgents.agents}
+            configs={demoAgents.configs}
+            portfolio={demoAgents.portfolio}
+            globalRisk={demoAgents.globalRisk}
+            selectedSymbol={radar.symbol}
+            onSelectSymbol={radar.setSymbol}
+          />
+          <MarketRadarPanel
+            analysis={radar.analysis}
+            loading={radar.loading}
+            error={radar.error}
+            lastUpdate={radar.lastUpdate}
+            symbol={radar.symbol}
+            onSymbolChange={radar.setSymbol}
+          />
+          <DemoStatsPanel
+            stats={demoSession.dailyStats}
+            currentBalance={demoSession.balance}
+            configuredBalance={demoSession.configuredBalance}
+            realizedPnl={demoSession.realizedPnlUSDC ?? 0}
+            unrealizedPnl={demoSession.unrealizedPnlUSDC ?? 0}
+            partialPnl={demoSession.partialPnlUSDC ?? 0}
+            openRisk={demoSession.openRiskUSDC ?? 0}
+            onReset={() => resetSession(demoSession.configuredBalance)}
+            onBalanceChange={b => {
+              setConfiguredBalance(b);
+              resetSession(b);
+            }}
+          />
+          <DemoHistoryPanel history={demoSession.history} />
+        </div>
+
+        <div className="hidden lg:block">
         <MarketRadarPanel
           analysis={radar.analysis}
           loading={radar.loading}
@@ -725,7 +945,7 @@ export default function Home() {
         />
         </div>
 
-        <div className={`${mobileTab === 'panel' ? 'block' : 'hidden'} lg:block`}>
+        <div className="hidden lg:block">
         <DemoAgentsPanel
           agents={demoAgents.agents}
           configs={demoAgents.configs}
@@ -736,7 +956,7 @@ export default function Home() {
         />
         </div>
 
-        <section className={`${mobileTab === 'operation' ? 'block' : 'hidden'} lg:block bg-card/50 backdrop-blur-md border border-border p-4 sm:p-6 relative overflow-hidden`}>
+        <section className="hidden lg:block bg-card/50 backdrop-blur-md border border-border p-4 sm:p-6 relative overflow-hidden">
           <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-primary/50 to-transparent" />
 
           <div className="flex flex-col gap-5">
@@ -848,7 +1068,7 @@ export default function Home() {
               animate={{ opacity: 1, height: 'auto' }}
               exit={{    opacity: 0, height: 0    }}
               transition={{ duration: 0.3, ease: 'easeInOut' }}
-              className={`${mobileTab === 'operation' ? 'block' : 'hidden'} lg:block overflow-hidden`}
+              className="hidden lg:block overflow-hidden"
             >
               {!autoState.isOperational ? (
                 <div className="bg-card/40 border border-border/50 p-5 relative overflow-hidden">
@@ -915,7 +1135,7 @@ export default function Home() {
               animate={{ opacity: 1, height: 'auto' }}
               exit={{    opacity: 0, height: 0    }}
               transition={{ duration: 0.3 }}
-              className={`${mobileTab === 'operation' ? 'block' : 'hidden'} lg:block overflow-hidden`}
+              className="hidden lg:block overflow-hidden"
             >
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div className="bg-card/40 border p-4 flex flex-col gap-2 relative overflow-hidden col-span-2 sm:col-span-1"
@@ -960,7 +1180,7 @@ export default function Home() {
         </AnimatePresence>
 
         {/* ── Two-column grid: analysis (left) + chart (right) ────────────── */}
-        <div className={`${mobileTab === 'operation' ? 'grid' : 'hidden'} lg:grid grid-cols-1 lg:grid-cols-[5fr_7fr] gap-5 items-start`}>
+        <div className="hidden lg:grid grid-cols-1 lg:grid-cols-[5fr_7fr] gap-5 items-start">
 
           {/* Left — Analysis panel */}
           <div className="order-2 lg:order-1 flex flex-col gap-4">
@@ -1133,7 +1353,7 @@ export default function Home() {
               animate={{ opacity: 1, y: 0 }}
               exit={{    opacity: 0, y: 12 }}
               transition={{ duration: 0.4, ease: 'easeOut' }}
-              className="flex flex-col gap-5"
+              className="hidden lg:flex flex-col gap-5"
             >
               {/* Divider */}
               <div className="flex items-center gap-4">

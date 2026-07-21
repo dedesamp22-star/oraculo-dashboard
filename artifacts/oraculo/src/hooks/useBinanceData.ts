@@ -10,13 +10,16 @@ export interface BinanceData {
   lastUpdate: Date | null;
   error: string | null;
   loading: boolean;
+  refresh: () => Promise<void>;
 }
+
+type BinanceDataState = Omit<BinanceData, 'refresh'>;
 
 const SYMBOL  = 'BTCUSDT';
 const POLL_MS = 30_000;
 
 export function useBinanceData(): BinanceData {
-  const [state, setState] = useState<BinanceData>({
+  const [state, setState] = useState<BinanceDataState>({
     price: null,
     candles1h: [],
     candles15m: [],
@@ -58,5 +61,5 @@ export function useBinanceData(): BinanceData {
     return () => clearInterval(id);
   }, [fetchAll]);
 
-  return state;
+  return { ...state, refresh: fetchAll };
 }

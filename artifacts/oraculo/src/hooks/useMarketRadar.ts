@@ -9,7 +9,10 @@ interface MarketRadarState {
   lastUpdate: Date | null;
   symbol: RadarSymbol;
   setSymbol: (symbol: RadarSymbol) => void;
+  refresh: () => Promise<void>;
 }
+
+type MarketRadarDataState = Omit<MarketRadarState, 'symbol' | 'setSymbol' | 'refresh'>;
 
 export const RADAR_SYMBOLS: RadarSymbol[] = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
 
@@ -29,7 +32,7 @@ function initialSymbol(): RadarSymbol {
 
 export function useMarketRadar(): MarketRadarState {
   const [symbol, setSymbolState] = useState<RadarSymbol>(() => initialSymbol());
-  const [state, setState] = useState<Omit<MarketRadarState, 'symbol' | 'setSymbol'>>({
+  const [state, setState] = useState<MarketRadarDataState>({
     analysis: null,
     loading: true,
     error: null,
@@ -112,5 +115,5 @@ export function useMarketRadar(): MarketRadarState {
     return () => window.clearInterval(id);
   }, [refresh, symbol]);
 
-  return { ...state, symbol, setSymbol };
+  return { ...state, symbol, setSymbol, refresh: () => refresh(symbol) };
 }
