@@ -8,13 +8,27 @@ interface Props {
   currentPrice: number | null;
 }
 
-function fmt(n: number): string {
+function isFiniteNumber(n: number | null | undefined): n is number {
+  return typeof n === 'number' && Number.isFinite(n);
+}
+
+function fmt(n: number | null | undefined): string {
+  if (!isFiniteNumber(n)) return '—';
   return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function fmtSign(n: number): string {
+function fmtCurrency(n: number | null | undefined): string {
+  return isFiniteNumber(n) ? `$${fmt(n)}` : '—';
+}
+
+function fmtSign(n: number | null | undefined): string {
+  if (!isFiniteNumber(n)) return '—';
   const s = fmt(Math.abs(n));
   return `${n >= 0 ? '+' : '-'}$${s}`;
+}
+
+function fmtQuantity(n: number | null | undefined): string {
+  return isFiniteNumber(n) ? n.toFixed(6) : '—';
 }
 
 export function DemoActivePanel({ trade, currentPrice }: Props) {
@@ -29,16 +43,23 @@ export function DemoActivePanel({ trade, currentPrice }: Props) {
   const dirLabel = isBuy ? 'COMPRA' : 'VENDA';
   const DirIcon  = isBuy ? TrendingUp : TrendingDown;
 
-  const remainingSize = trade.remainingPositionSize ?? trade.positionSize;
-  const realizedPnl = trade.realizedPnlUSDC ?? 0;
+  const remainingSize = isFiniteNumber(trade.remainingPositionSize) ? trade.remainingPositionSize : trade.positionSize;
+  const realizedPnl = isFiniteNumber(trade.realizedPnlUSDC) ? trade.realizedPnlUSDC : 0;
 
   // Unrealized P&L uses only the remaining quantity after real partials.
-  const unrealized = currentPrice !== null
+  const canCalculateUnrealized = isFiniteNumber(currentPrice)
+    && isFiniteNumber(trade.entry)
+    && isFiniteNumber(remainingSize)
+    && isFiniteNumber(trade.balanceAtOpen)
+    && trade.balanceAtOpen > 0;
+  const unrealized = canCalculateUnrealized
     ? (isBuy
         ? (currentPrice - trade.entry) * remainingSize
         : (trade.entry - currentPrice) * remainingSize)
     : null;
-  const unrealizedPct = unrealized !== null ? (unrealized / trade.balanceAtOpen) * 100 : null;
+  const unrealizedPct = unrealized !== null && isFiniteNumber(trade.balanceAtOpen) && trade.balanceAtOpen > 0
+    ? (unrealized / trade.balanceAtOpen) * 100
+    : null;
 
   const duration = fmtDuration(now - trade.openTime);
   const maxDurationMs = trade.maxDurationMs ?? 90 * 60 * 1000;
@@ -85,12 +106,12 @@ export function DemoActivePanel({ trade, currentPrice }: Props) {
         <Cell label="Par" value={trade.pair} accent="#aaaaaa" />
 
         {/* Entry */}
-        <Cell label="Entrada" value={`$${fmt(trade.entry)}`} accent="#00f0ff" icon={<Crosshair className="w-3 h-3" />} />
+        <Cell label="Entrada" value={fmtCurrency(trade.entry)} accent="#00f0ff" icon={<Crosshair className="w-3 h-3" />} />
 
         {/* Current price */}
         <Cell
           label="Preço Atual"
-          value={currentPrice !== null ? `$${fmt(currentPrice)}` : '—'}
+          value={fmtCurrency(currentPrice)}
           accent={unrealized !== null
             ? (unrealized >= 0 ? '#00ff66' : '#ff4444')
             : '#aaaaaa'}
@@ -99,7 +120,7 @@ export function DemoActivePanel({ trade, currentPrice }: Props) {
         {/* Stop */}
         <Cell
           label={stopIsBreakeven ? 'Stop (Breakeven)' : 'Stop Loss'}
-          value={`$${fmt(trade.stopLoss)}`}
+          value={fmtCurrency(trade.stopLoss)}
           accent={stopIsBreakeven ? '#00ff66' : '#ff4444'}
           icon={<ShieldAlert className="w-3 h-3" />}
           note={stopIsBreakeven ? 'movido para entrada' : undefined}
@@ -108,19 +129,19 @@ export function DemoActivePanel({ trade, currentPrice }: Props) {
         {/* Target 1 */}
         <Cell
           label="Alvo 1"
-          value={`$${fmt(trade.target1)}`}
+          value={fmtCurrency(trade.target1)}
           accent={trade.target1Hit ? '#00ff66' : '#00cc55'}
           icon={<Target className="w-3 h-3" />}
           note={trade.target1Hit ? 'atingido ✓' : undefined}
         />
 
         {/* Target 2 */}
-        <Cell label="Alvo 2" value={`$${fmt(trade.target2)}`} accent="#00aa44" icon={<Target className="w-3 h-3" />} />
+        <Cell label="Alvo 2" value={fmtCurrency(trade.target2)} accent="#00aa44" icon={<Target className="w-3 h-3" />} />
 
         {/* Position size */}
         <Cell
           label="Quantidade Restante"
-          value={`${remainingSize.toFixed(6)} ${trade.pair.replace('USDT','').replace('USDC','')}`}
+          value={`${fmtQuantity(remainingSize)} ${trade.pair.replace('USDT','').replace('USDC','')}`}
           accent="#cccccc"
           icon={<BarChart2 className="w-3 h-3" />}
         />
@@ -128,7 +149,7 @@ export function DemoActivePanel({ trade, currentPrice }: Props) {
         {/* Risk amount */}
         <Cell
           label="Valor em Risco"
-          value={`$${fmt(trade.riskAmount)}`}
+          value={fmtCurrency(trade.riskAmount)}
           accent="#ffaa00"
           icon={<DollarSign className="w-3 h-3" />}
           note="1% do saldo"
@@ -144,8 +165,8 @@ export function DemoActivePanel({ trade, currentPrice }: Props) {
         {/* Unrealized P&L */}
         <Cell
           label="P&L Não Realizado"
-          value={unrealized !== null
-            ? `${fmtSign(unrealized)} (${unrealized >= 0 ? '+' : ''}${unrealizedPct!.toFixed(2)}%)`
+          value={unrealized !== null && isFiniteNumber(unrealizedPct)
+            ? `${fmtSign(unrealized)} (${unrealized >= 0 ? '+' : ''}${unrealizedPct.toFixed(2)}%)`
             : '—'}
           accent={unrealized !== null
             ? (unrealized >= 0 ? '#00ff66' : '#ff4444')

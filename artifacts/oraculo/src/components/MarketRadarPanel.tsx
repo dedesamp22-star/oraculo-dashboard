@@ -17,17 +17,29 @@ import type { MarketRadarAnalysis, RadarDirection } from '../lib/marketRadar';
 import { RADAR_SYMBOLS } from '../hooks/useMarketRadar';
 import type { RadarSymbol } from '../lib/marketRadar';
 
-function fmtPrice(value: number | null): string {
-  if (value === null || !Number.isFinite(value) || value < 0) return '-';
+function isFiniteNumber(value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function fmtPrice(value: number | null | undefined): string {
+  if (!isFiniteNumber(value) || value < 0) return '—';
   return `$${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function fmtRatio(value: number | null): string {
-  return value === null || !Number.isFinite(value) || value < 0 ? '-' : `1:${value.toFixed(2)}`;
+function fmtRatio(value: number | null | undefined): string {
+  return !isFiniteNumber(value) || value < 0 ? '—' : `1:${value.toFixed(2)}`;
+}
+
+function fmtNumber(value: number | null | undefined, digits = 0): string {
+  return isFiniteNumber(value) ? value.toFixed(digits) : '—';
+}
+
+function fmtPercent(value: number | null | undefined, digits = 0): string {
+  return isFiniteNumber(value) ? `${(value * 100).toFixed(digits)}%` : '—';
 }
 
 function fmtTime(value: string | null): string {
-  if (!value) return '-';
+  if (!value) return '—';
   return new Date(value).toLocaleTimeString('pt-BR', {
     timeZone: 'America/Sao_Paulo',
     hour: '2-digit',
@@ -182,7 +194,7 @@ function MarketRadarSummary({
           <MiniMetric label="Entrada" value={fmtPrice(primaryEntry(analysis))} color="#00f0ff" />
           <MiniMetric label="Stop" value={fmtPrice(analysis.stop)} color="#ff6666" />
           <MiniMetric label="Alvo 1" value={fmtPrice(analysis.target1)} color="#00ff66" />
-          <MiniMetric label="R/R" value={fmtRatio(analysis.rr)} color={analysis.rr !== null && analysis.rr >= 2 ? '#00ff66' : '#ffaa00'} />
+          <MiniMetric label="R/R" value={fmtRatio(analysis.rr)} color={isFiniteNumber(analysis.rr) && analysis.rr >= 2 ? '#00ff66' : '#ffaa00'} />
         </div>
       </div>
 
@@ -204,10 +216,10 @@ function MarketRadarDetails({ analysis }: { analysis: MarketRadarAnalysis }) {
         <DetailMetric label="Entrada agressiva" value={fmtPrice(analysis.aggressiveEntry)} color="#00f0ff" />
         <DetailMetric label="Entrada conservadora" value={fmtPrice(analysis.conservativeEntry)} color="#00f0ff" />
         <DetailMetric label="Alvo 2" value={fmtPrice(analysis.target2)} color="#00cc55" />
-        <DetailMetric label="Volume atual" value={analysis.volume ? analysis.volume.current.toFixed(0) : '-'} />
-        <DetailMetric label="Media 20" value={analysis.volume ? analysis.volume.average20.toFixed(0) : '-'} />
-        <DetailMetric label="Volume relativo" value={analysis.volume ? `${(analysis.volume.relative * 100).toFixed(0)}%` : '-'} />
-        <DetailMetric label="Delta 5 velas" value={analysis.volume ? `${(analysis.volume.delta5 * 100).toFixed(1)}%` : '-'} color={analysis.volume?.expanding ? '#00ff66' : '#ffaa00'} />
+        <DetailMetric label="Volume atual" value={fmtNumber(analysis.volume?.current)} />
+        <DetailMetric label="Media 20" value={fmtNumber(analysis.volume?.average20)} />
+        <DetailMetric label="Volume relativo" value={fmtPercent(analysis.volume?.relative)} />
+        <DetailMetric label="Delta 5 velas" value={fmtPercent(analysis.volume?.delta5, 1)} color={analysis.volume?.expanding ? '#00ff66' : '#ffaa00'} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">

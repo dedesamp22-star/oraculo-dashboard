@@ -25,8 +25,31 @@ const STATUS_CFG = {
   OPEN:      { color: '#00f0ff', label: 'ABERTA',   Icon: Clock        },
 };
 
-function fmt(n: number): string {
+function isFiniteNumber(n: number | null | undefined): n is number {
+  return typeof n === 'number' && Number.isFinite(n);
+}
+
+function fmt(n: number | null | undefined): string {
+  if (!isFiniteNumber(n)) return '—';
   return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function fmtCurrency(n: number | null | undefined): string {
+  return isFiniteNumber(n) ? `$${fmt(n)}` : '—';
+}
+
+function fmtSigned(n: number | null | undefined): string {
+  if (!isFiniteNumber(n)) return '—';
+  return `${n >= 0 ? '+' : ''}${fmt(n)}`;
+}
+
+function fmtPct(n: number | null | undefined): string {
+  if (!isFiniteNumber(n)) return '—';
+  return `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`;
+}
+
+function fmtQuantity(n: number | null | undefined): string {
+  return isFiniteNumber(n) ? n.toFixed(6) : '—';
 }
 
 export function DemoHistoryPanel({ history }: Props) {
@@ -88,8 +111,8 @@ function HistoryRow({ trade }: { trade: DemoTrade }) {
   const [open, setOpen] = useState(false);
   const cfg    = STATUS_CFG[trade.status];
   const isBuy  = trade.direction === 'BUY';
-  const pnl    = trade.pnlUSDC ?? 0;
-  const pnlPct = trade.pnlPct  ?? 0;
+  const pnl    = isFiniteNumber(trade.pnlUSDC) ? trade.pnlUSDC : null;
+  const pnlPct = isFiniteNumber(trade.pnlPct) ? trade.pnlPct : null;
   const duration = trade.closeTime
     ? fmtDuration(trade.closeTime - trade.openTime)
     : '—';
@@ -128,17 +151,17 @@ function HistoryRow({ trade }: { trade: DemoTrade }) {
         {/* P&L */}
         <span
           className="text-sm font-mono font-bold tabular-nums flex-shrink-0"
-          style={{ color: pnl >= 0 ? '#00ff66' : '#ff4444' }}
+          style={{ color: pnl === null ? '#aaaaaa' : (pnl >= 0 ? '#00ff66' : '#ff4444') }}
         >
-          {pnl >= 0 ? '+' : ''}{fmt(pnl)}
+          {fmtSigned(pnl)}
         </span>
 
         {/* % */}
         <span
           className="text-[10px] font-mono flex-shrink-0 w-14 text-right"
-          style={{ color: pnlPct >= 0 ? '#00ff6680' : '#ff444480' }}
+          style={{ color: pnlPct === null ? '#aaaaaa' : (pnlPct >= 0 ? '#00ff6680' : '#ff444480') }}
         >
-          {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%
+          {fmtPct(pnlPct)}
         </span>
 
         {/* Chevron */}
@@ -154,11 +177,11 @@ function HistoryRow({ trade }: { trade: DemoTrade }) {
             <DetailCell label="Abertura" value={fmtEpochSP(trade.openTime)} />
             <DetailCell label="Fechamento" value={trade.closeTime ? fmtEpochSP(trade.closeTime) : '—'} />
             <DetailCell label="Duração" value={duration} />
-            <DetailCell label="Entrada" value={`$${fmt(trade.entry)}`} />
-            <DetailCell label="Saída" value={trade.closePrice ? `$${fmt(trade.closePrice)}` : '—'} />
+            <DetailCell label="Entrada" value={fmtCurrency(trade.entry)} />
+            <DetailCell label="Saída" value={fmtCurrency(trade.closePrice)} />
             <DetailCell label="R/R" value={trade.riskReward} />
-            <DetailCell label="Posição" value={`${trade.positionSize.toFixed(6)}`} />
-            <DetailCell label="Risco USDC" value={`$${fmt(trade.riskAmount)}`} />
+            <DetailCell label="Posição" value={fmtQuantity(trade.positionSize)} />
+            <DetailCell label="Risco USDC" value={fmtCurrency(trade.riskAmount)} />
             <DetailCell
               label="Resultado"
               value={cfg.label}

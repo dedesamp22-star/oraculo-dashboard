@@ -2,11 +2,17 @@ import { Bot, PauseCircle, ShieldAlert, TrendingDown, TrendingUp, Wallet } from 
 import type { AgentConfig, AgentId, AgentState, AgentStates, GlobalRiskState, PortfolioState } from '../lib/demoAgents';
 import type { RadarSymbol } from '../lib/marketRadar';
 
-function fmtMoney(value: number): string {
+function isFiniteNumber(value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function fmtMoney(value: number | null | undefined): string {
+  if (!isFiniteNumber(value)) return '—';
   return `$${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function fmtPct(value: number): string {
+function fmtPct(value: number | null | undefined): string {
+  if (!isFiniteNumber(value)) return '—';
   return `${(value * 100).toFixed(2)}%`;
 }
 

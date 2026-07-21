@@ -27,8 +27,27 @@ import { getAuth, loginUser, logoutUser, type AuthUser } from '../lib/demoApi';
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 
-function fmtPrice(n: number): string {
+function isFiniteNumber(n: number | null | undefined): n is number {
+  return typeof n === 'number' && Number.isFinite(n);
+}
+
+function fmtPrice(n: number | null | undefined): string {
+  if (!isFiniteNumber(n)) return '—';
   return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function fmtCurrency(n: number | null | undefined): string {
+  return isFiniteNumber(n) ? `$${fmtPrice(n)}` : '—';
+}
+
+function fmtSignedCurrency(n: number | null | undefined): string {
+  if (!isFiniteNumber(n)) return '—';
+  return `${n >= 0 ? '+' : '-'}$${fmtPrice(Math.abs(n))}`;
+}
+
+function signedColor(n: number | null | undefined): string {
+  if (!isFiniteNumber(n)) return '#aaaaaa';
+  return n >= 0 ? '#00ff66' : '#ff4444';
 }
 
 function LoginScreen({ loading, error, onLogin }: {
@@ -581,17 +600,20 @@ function MobileActions({
 }
 
 function MobilePanelOverview({ session }: { session: DemoSession }) {
+  const balanceColor = isFiniteNumber(session.balance) && isFiniteNumber(session.configuredBalance)
+    ? (session.balance >= session.configuredBalance ? '#00ff66' : '#ff4444')
+    : '#aaaaaa';
   return (
     <section className="lg:hidden border border-border/60 bg-card/40 p-3">
       <div className="grid grid-cols-2 gap-2">
-        <MobileMiniCell label="Saldo demo" value={`$${fmtPrice(session.balance)}`} color={session.balance >= session.configuredBalance ? '#00ff66' : '#ff4444'} />
-        <MobileMiniCell label="P&L dia" value={`${session.dailyStats.dailyPnL >= 0 ? '+' : '-'}$${fmtPrice(Math.abs(session.dailyStats.dailyPnL))}`} color={session.dailyStats.dailyPnL >= 0 ? '#00ff66' : '#ff4444'} />
-        <MobileMiniCell label="Flutuante" value={`${(session.unrealizedPnlUSDC ?? 0) >= 0 ? '+' : '-'}$${fmtPrice(Math.abs(session.unrealizedPnlUSDC ?? 0))}`} color={(session.unrealizedPnlUSDC ?? 0) >= 0 ? '#00ff66' : '#ff4444'} />
+        <MobileMiniCell label="Saldo demo" value={fmtCurrency(session.balance)} color={balanceColor} />
+        <MobileMiniCell label="P&L dia" value={fmtSignedCurrency(session.dailyStats?.dailyPnL)} color={signedColor(session.dailyStats?.dailyPnL)} />
+        <MobileMiniCell label="Flutuante" value={fmtSignedCurrency(session.unrealizedPnlUSDC)} color={signedColor(session.unrealizedPnlUSDC)} />
         <MobileMiniCell label="Abertas" value={session.activeTrade ? '1' : '0'} color={session.activeTrade ? '#00f0ff' : '#aaaaaa'} />
-        <MobileMiniCell label="Trades" value={String(session.dailyStats.totalTrades)} color="#ffffff" />
-        <MobileMiniCell label="W/L/BE" value={`${session.dailyStats.wins}/${session.dailyStats.losses}/${session.dailyStats.breakevens}`} color="#ffffff" />
-        <MobileMiniCell label="Drawdown" value={`$${fmtPrice(session.dailyStats.maxDrawdown)}`} color="#ffaa00" />
-        <MobileMiniCell label="Risco aberto" value={`$${fmtPrice(session.openRiskUSDC ?? 0)}`} color="#ffaa00" />
+        <MobileMiniCell label="Trades" value={isFiniteNumber(session.dailyStats?.totalTrades) ? String(session.dailyStats.totalTrades) : '—'} color="#ffffff" />
+        <MobileMiniCell label="W/L/BE" value={`${isFiniteNumber(session.dailyStats?.wins) ? session.dailyStats.wins : '—'}/${isFiniteNumber(session.dailyStats?.losses) ? session.dailyStats.losses : '—'}/${isFiniteNumber(session.dailyStats?.breakevens) ? session.dailyStats.breakevens : '—'}`} color="#ffffff" />
+        <MobileMiniCell label="Drawdown" value={fmtCurrency(session.dailyStats?.maxDrawdown)} color="#ffaa00" />
+        <MobileMiniCell label="Risco aberto" value={fmtCurrency(session.openRiskUSDC)} color="#ffaa00" />
       </div>
     </section>
   );
@@ -906,13 +928,13 @@ export default function Home() {
                 </span>
                 <AnimatePresence mode="wait">
                   <motion.span
-                    key={market.price?.toFixed(2)}
+                    key={isFiniteNumber(market.price) ? market.price.toFixed(2) : 'price-loading'}
                     initial={{ opacity: 0.4, y: -4 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.25 }}
                     className="text-4xl sm:text-5xl font-mono font-bold text-white drop-shadow-[0_0_12px_rgba(255,255,255,0.15)]"
                   >
-                    ${fmtPrice(market.price!)}
+                    {fmtCurrency(market.price)}
                   </motion.span>
                 </AnimatePresence>
               </div>
@@ -1307,8 +1329,12 @@ export default function Home() {
                     <Activity className="w-3 h-3" /> Saldo Demo
                   </span>
                   <span className="text-base font-mono font-bold tabular-nums"
-                    style={{ color: demoSession.balance >= demoSession.configuredBalance ? '#00ff66' : '#ff4444' }}>
-                    ${demoSession.balance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    style={{
+                      color: isFiniteNumber(demoSession.balance) && isFiniteNumber(demoSession.configuredBalance)
+                        ? (demoSession.balance >= demoSession.configuredBalance ? '#00ff66' : '#ff4444')
+                        : '#aaaaaa',
+                    }}>
+                    {fmtCurrency(demoSession.balance)}
                   </span>
                 </div>
               </div>
