@@ -146,6 +146,62 @@ export interface WorkerDiagnosticAdminDto extends WorkerDiagnosticUserDto {
   full: Record<string, unknown>;
 }
 
+export type ControlledSimulationStatus = "INACTIVE" | "ACTIVE" | "COMPLETED" | "CANCELLED" | "ERROR";
+export type ControlledSimulationStep =
+  | "OPEN"
+  | "MOVE"
+  | "TARGET1"
+  | "PARTIAL"
+  | "BREAKEVEN"
+  | "TRAILING"
+  | "TARGET2"
+  | "STOP"
+  | "LOSS_OF_STRENGTH"
+  | "TIMEOUT"
+  | "CANCEL";
+
+export interface ControlledSimulationScenario {
+  symbol: string;
+  direction: TradeDirection;
+  entry: number;
+  stopLoss: number;
+  target1: number;
+  target2: number;
+  quantity: number;
+  riskAmount: number;
+  maxDurationMs: number;
+  initialPrice: number;
+}
+
+export interface ControlledSimulationDto {
+  id: string;
+  userId: string;
+  simulationUserId: string;
+  status: ControlledSimulationStatus;
+  scenario: ControlledSimulationScenario;
+  currentStep: string;
+  startedAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+  cancelledAt: string | null;
+  lastEvent: string | null;
+  error: string | null;
+  session: DemoSession;
+  allowedSteps: ControlledSimulationStep[];
+}
+
+export interface ControlledSimulationEventDto {
+  id: string;
+  simulationId: string;
+  userId: string;
+  step: ControlledSimulationStep;
+  idempotencyKey: string;
+  status: "APPLIED" | "IGNORED" | "ERROR";
+  message: string;
+  snapshot: Record<string, unknown>;
+  createdAt: string;
+}
+
 export class HttpError extends Error {
   constructor(public status: number, message: string) {
     super(message);
@@ -425,6 +481,36 @@ function diagnosticAdminFromRow(row: Record<string, unknown>): WorkerDiagnosticA
     engineVersion: String(row.engine_version),
     full: jsonParse<Record<string, unknown>>(row.admin_json, {}),
   };
+}
+
+function simulationEventFromRow(row: Record<string, unknown>): ControlledSimulationEventDto {
+  return {
+    id: String(row.id),
+    simulationId: String(row.simulation_id),
+    userId: String(row.user_id),
+    step: String(row.step) as ControlledSimulationStep,
+    idempotencyKey: String(row.idempotency_key),
+    status: String(row.status) as "APPLIED" | "IGNORED" | "ERROR",
+    message: String(row.message),
+    snapshot: jsonParse<Record<string, unknown>>(String(row.snapshot_json), {}),
+    createdAt: String(row.created_at),
+  };
+}
+
+function allowedSimulationSteps(status: ControlledSimulationStatus, session: DemoSession): ControlledSimulationStep[] {
+  if (status === "CANCELLED" || status === "COMPLETED" || status === "ERROR") return [];
+  const trade = session.activeTrade;
+  if (!trade) return status === "ACTIVE" ? ["OPEN", "CANCEL"] : [];
+  if (!trade.target1Hit) return ["MOVE", "TARGET1", "STOP", "TIMEOUT", "LOSS_OF_STRENGTH", "CANCEL"];
+  return ["MOVE", "PARTIAL", "BREAKEVEN", "TRAILING", "TARGET2", "STOP", "TIMEOUT", "LOSS_OF_STRENGTH", "CANCEL"];
+}
+
+function simulationStatusFromRow(row: Record<string, unknown>): ControlledSimulationStatus {
+  return String(row.status) as ControlledSimulationStatus;
+}
+
+function simulationTradeId(id: string): string {
+  return `sim_trade_${id}`;
 }
 
 export class DemoStore {
@@ -746,6 +832,47 @@ export class DemoStore {
         this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (5, 'worker_diagnostics', ?)").run(nowIso());
       });
     }
+    const v6 = this.db.prepare("SELECT version FROM schema_migrations WHERE version = 6").get();
+    if (!v6) {
+      this.transaction(() => {
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS controlled_simulations (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            simulation_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            status TEXT NOT NULL CHECK (status IN ('INACTIVE','ACTIVE','COMPLETED','CANCELLED','ERROR')),
+            scenario_json TEXT NOT NULL,
+            current_step TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            completed_at TEXT,
+            cancelled_at TEXT,
+            last_event TEXT,
+            error TEXT
+          );
+          CREATE UNIQUE INDEX IF NOT EXISTS controlled_simulations_active_user_idx
+            ON controlled_simulations(user_id) WHERE status = 'ACTIVE';
+          CREATE INDEX IF NOT EXISTS controlled_simulations_user_time_idx
+            ON controlled_simulations(user_id, started_at);
+          CREATE TABLE IF NOT EXISTS controlled_simulation_events (
+            id TEXT PRIMARY KEY,
+            simulation_id TEXT NOT NULL REFERENCES controlled_simulations(id) ON DELETE CASCADE,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            step TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('APPLIED','IGNORED','ERROR')),
+            message TEXT NOT NULL,
+            snapshot_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+          );
+          CREATE UNIQUE INDEX IF NOT EXISTS controlled_simulation_events_dedupe_idx
+            ON controlled_simulation_events(simulation_id, idempotency_key);
+          CREATE INDEX IF NOT EXISTS controlled_simulation_events_time_idx
+            ON controlled_simulation_events(simulation_id, created_at);
+        `);
+        this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (6, 'controlled_simulations', ?)").run(nowIso());
+      });
+    }
   }
 
   private applyInitialAdminEnv(): void {
@@ -1064,6 +1191,273 @@ export class DemoStore {
     const mapper = user.role === "admin" ? diagnosticAdminFromRow : diagnosticUserFromRow;
     const history = rows.map(mapper);
     return { current: history[0] ?? null, history };
+  }
+
+  private simulationUserId(admin: AuthUser): string {
+    return `sim_${admin.id}`.slice(0, 120);
+  }
+
+  private ensureSimulationUser(admin: AuthUser): string {
+    const simulationUserId = this.simulationUserId(admin);
+    const existing = this.db.prepare("SELECT id FROM users WHERE id = ?").get(simulationUserId);
+    if (!existing) {
+      const password = hashPassword(randomBytes(32).toString("base64url"));
+      const now = nowIso();
+      this.db.prepare(`
+        INSERT INTO users
+          (id, name, username, password_hash, password_salt, scrypt_n, scrypt_r, scrypt_p, scrypt_key_len, role, active, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'user', 0, ?, ?)
+      `).run(
+        simulationUserId,
+        `Simulacao ${admin.username}`,
+        `sim-${admin.username}`.toLowerCase().replace(/[^a-z0-9._-]/g, "-").slice(0, 80),
+        password.password_hash,
+        password.password_salt,
+        password.scrypt_n,
+        password.scrypt_r,
+        password.scrypt_p,
+        password.scrypt_key_len,
+        now,
+        now,
+      );
+    }
+    this.ensureUserAccount(simulationUserId);
+    return simulationUserId;
+  }
+
+  private simulationDto(row: Record<string, unknown>): ControlledSimulationDto {
+    const scenario = jsonParse<ControlledSimulationScenario>(String(row.scenario_json), {
+      symbol: "BTCUSDT",
+      direction: "BUY",
+      entry: 100,
+      stopLoss: 95,
+      target1: 105,
+      target2: 110,
+      quantity: 1,
+      riskAmount: 5,
+      maxDurationMs: DEFAULT_MAX_DURATION_MS,
+      initialPrice: 100,
+    });
+    const simulationUserId = String(row.simulation_user_id);
+    const session = this.getSession(simulationUserId);
+    const status = simulationStatusFromRow(row);
+    return {
+      id: String(row.id),
+      userId: String(row.user_id),
+      simulationUserId,
+      status,
+      scenario,
+      currentStep: String(row.current_step),
+      startedAt: String(row.started_at),
+      updatedAt: String(row.updated_at),
+      completedAt: row.completed_at == null ? null : String(row.completed_at),
+      cancelledAt: row.cancelled_at == null ? null : String(row.cancelled_at),
+      lastEvent: row.last_event == null ? null : String(row.last_event),
+      error: row.error == null ? null : String(row.error),
+      session,
+      allowedSteps: allowedSimulationSteps(status, session),
+    };
+  }
+
+  private getSimulationRow(userId: string, id: string): Record<string, unknown> {
+    const row = this.db.prepare("SELECT * FROM controlled_simulations WHERE user_id = ? AND id = ?").get(userId, id) as Record<string, unknown> | undefined;
+    if (!row) throw new HttpError(404, "simulation not found");
+    return row;
+  }
+
+  private validateSimulationScenario(body: unknown): ControlledSimulationScenario {
+    const input = body as Record<string, unknown>;
+    const symbol = nonEmptyString(input.symbol ?? "BTCUSDT", "symbol", 32).toUpperCase();
+    if (!["BTCUSDT", "ETHUSDT", "SOLUSDT"].includes(symbol)) throw new HttpError(400, "invalid simulation symbol");
+    const direction = nonEmptyString(input.direction ?? "BUY", "direction") as TradeDirection;
+    if (direction !== "BUY" && direction !== "SELL") throw new HttpError(400, "direction must be BUY or SELL");
+    const entry = finiteNumber(input.entry, "entry", 0.00000001, MAX_PRICE);
+    const stopLoss = finiteNumber(input.stopLoss ?? input.stop, "stopLoss", 0.00000001, MAX_PRICE);
+    const target1 = finiteNumber(input.target1, "target1", 0.00000001, MAX_PRICE);
+    const target2 = finiteNumber(input.target2, "target2", 0.00000001, MAX_PRICE);
+    const quantity = finiteNumber(input.quantity ?? input.positionSize, "quantity", 0.00000001, MAX_POSITION_SIZE);
+    const riskAmount = finiteNumber(input.riskAmount ?? Math.abs(entry - stopLoss) * quantity, "riskAmount", 0, MAX_BALANCE);
+    const maxDurationMs = finiteNumber(input.maxDurationMs ?? DEFAULT_MAX_DURATION_MS, "maxDurationMs", 60_000, 24 * 60 * 60 * 1000);
+    const initialPrice = finiteNumber(input.initialPrice ?? entry, "initialPrice", 0.00000001, MAX_PRICE);
+    if (direction === "BUY" && !(stopLoss < entry && target1 > entry && target2 > target1)) throw new HttpError(400, "invalid BUY simulation plan");
+    if (direction === "SELL" && !(stopLoss > entry && target1 < entry && target2 < target1)) throw new HttpError(400, "invalid SELL simulation plan");
+    return { symbol, direction, entry, stopLoss, target1, target2, quantity, riskAmount, maxDurationMs, initialPrice };
+  }
+
+  createControlledSimulation(admin: AuthUser, body: unknown): ControlledSimulationDto {
+    if (admin.role !== "admin") throw new HttpError(403, "Admin required");
+    const scenario = this.validateSimulationScenario(body);
+    const now = nowIso();
+    const simulationId = newId("sim");
+    return this.transaction(() => {
+      if (this.getPositions(admin.id).length > 0) throw new HttpError(409, "close the real demo position before starting a controlled simulation");
+      const active = this.db.prepare("SELECT id FROM controlled_simulations WHERE user_id = ? AND status = 'ACTIVE'").get(admin.id);
+      if (active) throw new HttpError(409, "controlled simulation already active");
+      const simulationUserId = this.ensureSimulationUser(admin);
+      this.db.prepare("DELETE FROM demo_positions WHERE user_id = ?").run(simulationUserId);
+      this.db.prepare("DELETE FROM demo_trades WHERE user_id = ?").run(simulationUserId);
+      this.db.prepare("DELETE FROM demo_events WHERE user_id = ?").run(simulationUserId);
+      this.putAccount(simulationUserId, { balance: DEFAULT_BALANCE, configuredBalance: DEFAULT_BALANCE, dailyStats: makeDailyStats(DEFAULT_BALANCE) });
+      this.db.prepare(`
+        INSERT INTO controlled_simulations
+          (id, user_id, simulation_user_id, status, scenario_json, current_step, started_at, updated_at)
+        VALUES (?, ?, ?, 'ACTIVE', ?, 'CREATED', ?, ?)
+      `).run(simulationId, admin.id, simulationUserId, JSON.stringify(scenario), now, now);
+      return this.simulationDto(this.getSimulationRow(admin.id, simulationId));
+    });
+  }
+
+  getCurrentControlledSimulation(admin: AuthUser): ControlledSimulationDto | null {
+    if (admin.role !== "admin") throw new HttpError(403, "Admin required");
+    const row = this.db.prepare(`
+      SELECT * FROM controlled_simulations
+      WHERE user_id = ?
+      ORDER BY CASE status WHEN 'ACTIVE' THEN 0 ELSE 1 END, started_at DESC
+      LIMIT 1
+    `).get(admin.id) as Record<string, unknown> | undefined;
+    return row ? this.simulationDto(row) : null;
+  }
+
+  getControlledSimulationEvents(admin: AuthUser, id: string): ControlledSimulationEventDto[] {
+    if (admin.role !== "admin") throw new HttpError(403, "Admin required");
+    this.getSimulationRow(admin.id, id);
+    return (this.db.prepare("SELECT * FROM controlled_simulation_events WHERE user_id = ? AND simulation_id = ? ORDER BY created_at ASC")
+      .all(admin.id, id) as Record<string, unknown>[]).map(simulationEventFromRow);
+  }
+
+  private recordSimulationEvent(userId: string, simulationId: string, step: ControlledSimulationStep, idempotencyKey: string, status: "APPLIED" | "IGNORED" | "ERROR", message: string, snapshot: Record<string, unknown>): ControlledSimulationEventDto {
+    const now = nowIso();
+    const id = newId("simev");
+    this.db.prepare(`
+      INSERT INTO controlled_simulation_events
+        (id, simulation_id, user_id, step, idempotency_key, status, message, snapshot_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(simulation_id, idempotency_key) DO NOTHING
+    `).run(id, simulationId, userId, step, idempotencyKey, status, message, JSON.stringify(snapshot), now);
+    const row = this.db.prepare("SELECT * FROM controlled_simulation_events WHERE simulation_id = ? AND idempotency_key = ?")
+      .get(simulationId, idempotencyKey) as Record<string, unknown>;
+    return simulationEventFromRow(row);
+  }
+
+  stepControlledSimulation(admin: AuthUser, id: string, body: unknown): ControlledSimulationDto {
+    if (admin.role !== "admin") throw new HttpError(403, "Admin required");
+    const input = body as Record<string, unknown>;
+    const step = nonEmptyString(input.step, "step") as ControlledSimulationStep;
+    if (!["OPEN", "MOVE", "TARGET1", "PARTIAL", "BREAKEVEN", "TRAILING", "TARGET2", "STOP", "LOSS_OF_STRENGTH", "TIMEOUT", "CANCEL"].includes(step)) {
+      throw new HttpError(400, "invalid simulation step");
+    }
+    if (step === "CANCEL") return this.cancelControlledSimulation(admin, id);
+    const idempotencyKey = typeof input.idempotencyKey === "string" && input.idempotencyKey.trim()
+      ? input.idempotencyKey.trim().slice(0, 160)
+      : `${step}:${id}`;
+    const existingEvent = this.db.prepare("SELECT * FROM controlled_simulation_events WHERE simulation_id = ? AND idempotency_key = ?")
+      .get(id, idempotencyKey) as Record<string, unknown> | undefined;
+    if (existingEvent) return this.simulationDto(this.getSimulationRow(admin.id, id));
+
+    const row = this.getSimulationRow(admin.id, id);
+    const current = this.simulationDto(row);
+    if (current.status !== "ACTIVE") throw new HttpError(409, "simulation is not active");
+    const allowed = new Set(current.allowedSteps);
+    if (!allowed.has(step)) throw new HttpError(409, `step ${step} is not allowed now`);
+
+    const scenario = current.scenario;
+    const simulationUserId = current.simulationUserId;
+    let message = "Evento aplicado.";
+    try {
+      if (step === "OPEN") {
+        const trade: DemoTrade = {
+          id: simulationTradeId(id),
+          pair: scenario.symbol,
+          direction: scenario.direction,
+          openTime: Date.now(),
+          entry: scenario.entry,
+          stopLoss: scenario.stopLoss,
+          stopLossOriginal: scenario.stopLoss,
+          target1: scenario.target1,
+          target2: scenario.target2,
+          balanceAtOpen: this.getAccount(simulationUserId).balance,
+          riskAmount: scenario.riskAmount,
+          positionSize: scenario.quantity,
+          remainingPositionSize: scenario.quantity,
+          riskReward: "controlled",
+          status: "OPEN",
+          target1Hit: false,
+          isBreakevenStop: false,
+          realizedPnlUSDC: 0,
+          partialPnlUSDC: 0,
+          maxDurationMs: scenario.maxDurationMs,
+          signalReasons: ["CONTROLLED_SIMULATION: entrada criada por administrador para homologacao."],
+          marketConditions: "CONTROLLED_SIMULATION",
+        };
+        this.postPosition(simulationUserId, trade);
+        this.updatePrices(simulationUserId, { pair: scenario.symbol, price: scenario.initialPrice });
+        message = "Entrada controlada aberta.";
+      } else if (step === "MOVE") {
+        const price = finiteNumber(input.price ?? scenario.initialPrice, "price", 0.00000001, MAX_PRICE);
+        this.updatePrices(simulationUserId, { pair: scenario.symbol, price });
+        message = "Preco movimentado sem depender da Binance.";
+      } else if (step === "TARGET1" || step === "PARTIAL" || step === "BREAKEVEN") {
+        this.updatePrices(simulationUserId, { pair: scenario.symbol, price: scenario.target1 });
+        message = "Alvo 1 processado pela gestao demo com parcial e breakeven idempotentes.";
+      } else if (step === "TRAILING") {
+        const price = input.price === undefined
+          ? scenario.direction === "BUY" ? scenario.target1 * 1.01 : scenario.target1 * 0.99
+          : finiteNumber(input.price, "price", 0.00000001, MAX_PRICE);
+        this.updatePrices(simulationUserId, { pair: scenario.symbol, price });
+        message = "Trailing atualizado pela gestao demo.";
+      } else if (step === "TARGET2") {
+        this.updatePrices(simulationUserId, { pair: scenario.symbol, price: scenario.target2 });
+        message = "Alvo 2 processado pela gestao demo.";
+      } else if (step === "STOP") {
+        const activeTrade = this.getSession(simulationUserId).activeTrade;
+        if (!activeTrade) throw new HttpError(409, "simulation position is already closed");
+        this.updatePrices(simulationUserId, { pair: scenario.symbol, price: activeTrade.stopLoss });
+        message = "Stop processado pela gestao demo.";
+      } else if (step === "LOSS_OF_STRENGTH" || step === "TIMEOUT") {
+        const activeTrade = this.getSession(simulationUserId).activeTrade;
+        if (!activeTrade) throw new HttpError(409, "simulation position is already closed");
+        const closePrice = finiteNumber(input.price ?? activeTrade.entry, "price", 0.00000001, MAX_PRICE);
+        this.patchPosition(simulationUserId, activeTrade.id, {
+          status: "LOSS",
+          closePrice,
+          exitReason: step === "TIMEOUT" ? "TIMEOUT" : "LOSS_OF_STRENGTH",
+        });
+        message = step === "TIMEOUT" ? "Fechamento por tempo maximo processado." : "Fechamento por perda de forca processado.";
+      }
+      const session = this.getSession(simulationUserId);
+      const finished = session.activeTrade === null && step !== "MOVE" && step !== "OPEN" && step !== "TARGET1" && step !== "PARTIAL" && step !== "BREAKEVEN" && step !== "TRAILING";
+      const now = nowIso();
+      this.db.prepare(`
+        UPDATE controlled_simulations
+        SET current_step = ?, last_event = ?, status = ?, completed_at = COALESCE(completed_at, ?), updated_at = ?, error = NULL
+        WHERE user_id = ? AND id = ?
+      `).run(step, step, finished ? "COMPLETED" : "ACTIVE", finished ? now : null, now, admin.id, id);
+      this.recordSimulationEvent(admin.id, id, step, idempotencyKey, "APPLIED", message, { session: this.getSession(simulationUserId) });
+      return this.simulationDto(this.getSimulationRow(admin.id, id));
+    } catch (err) {
+      const messageText = err instanceof Error ? err.message : String(err);
+      this.db.prepare("UPDATE controlled_simulations SET status = 'ERROR', error = ?, updated_at = ? WHERE user_id = ? AND id = ?")
+        .run(messageText.slice(0, 500), nowIso(), admin.id, id);
+      this.recordSimulationEvent(admin.id, id, step, idempotencyKey, "ERROR", messageText.slice(0, 500), {});
+      if (err instanceof HttpError) throw err;
+      throw new HttpError(500, "controlled simulation step failed");
+    }
+  }
+
+  cancelControlledSimulation(admin: AuthUser, id: string): ControlledSimulationDto {
+    if (admin.role !== "admin") throw new HttpError(403, "Admin required");
+    const row = this.getSimulationRow(admin.id, id);
+    const current = this.simulationDto(row);
+    if (current.status !== "ACTIVE") return current;
+    const now = nowIso();
+    this.db.prepare(`
+      UPDATE controlled_simulations
+      SET status = 'CANCELLED', current_step = 'CANCEL', last_event = 'CANCEL', cancelled_at = ?, updated_at = ?
+      WHERE user_id = ? AND id = ?
+    `).run(now, now, admin.id, id);
+    this.db.prepare("DELETE FROM demo_positions WHERE user_id = ?").run(current.simulationUserId);
+    this.recordSimulationEvent(admin.id, id, "CANCEL", `CANCEL:${id}`, "APPLIED", "Simulacao cancelada pelo administrador.", { session: this.getSession(current.simulationUserId) });
+    return this.simulationDto(this.getSimulationRow(admin.id, id));
   }
 
   tradeManagementSettings(userId: string) {

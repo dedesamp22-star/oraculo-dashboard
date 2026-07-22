@@ -137,6 +137,43 @@ async function postPrice(base, cookie, pair, price) {
   return await json(res);
 }
 
+async function startSimulation(base, cookie, overrides = {}) {
+  const scenario = {
+    symbol: "BTCUSDT",
+    direction: "BUY",
+    entry: 100,
+    stopLoss: 95,
+    target1: 105,
+    target2: 110,
+    quantity: 2,
+    riskAmount: 10,
+    maxDurationMs: 90 * 60 * 1000,
+    initialPrice: 100,
+    ...overrides,
+  };
+  const res = await fetch(`${base}/api/admin/simulations`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: cookie },
+    body: JSON.stringify(scenario),
+  });
+  assert.equal(res.status, 200);
+  return await json(res);
+}
+
+async function stepSimulation(base, cookie, id, step, extra = {}) {
+  const res = await fetch(`${base}/api/admin/simulations/${id}/step`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: cookie },
+    body: JSON.stringify({ step, idempotencyKey: `${step}:test`, ...extra }),
+  });
+  assert.equal(res.status, 200);
+  return await json(res);
+}
+
+async function simulationEvents(base, cookie, id) {
+  return await authedJson(base, cookie, `/api/admin/simulations/${id}/events`);
+}
+
 async function runHomologationTradeFlow(base, cookie, trade) {
   const initialSession = await authedJson(base, cookie, "/api/demo/session");
   assert.equal(initialSession.activeTrade, null);
@@ -492,6 +529,173 @@ test("worker diagnostics API separates admin details, user DTOs, history, dedupe
     const persisted = await authedJson(server.base, adminAfterReload, "/api/worker/diagnostics?limit=10");
     assert.equal(persisted.history.length, 6);
     assert.equal(persisted.current.summary, "leitura atualizada");
+  } finally {
+    await stopServer(server.child);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("controlled simulation protects admin routes and isolates homologation data", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "oraculo-controlled-sim-auth-"));
+  const dbPath = path.join(dir, "oraculo.sqlite");
+  const port = 5135;
+  const server = await startServer({ port, dbPath });
+  try {
+    assert.equal((await fetch(`${server.base}/api/admin/simulations/current`)).status, 401);
+
+    const adminCookie = await login(server.base);
+    await createUser(server.base, adminCookie, {
+      username: "simuser",
+      name: "Sim User",
+      password: "sim-user-safe-123",
+      role: "user",
+    });
+    await createUser(server.base, adminCookie, {
+      username: "admin2",
+      name: "Admin 2",
+      password: "admin-two-safe-123",
+      role: "admin",
+    });
+    const userCookie = await loginAs(server.base, "simuser", "sim-user-safe-123");
+    const admin2Cookie = await loginAs(server.base, "admin2", "admin-two-safe-123");
+
+    assert.equal((await fetch(`${server.base}/api/admin/simulations/current`, { headers: { Cookie: userCookie } })).status, 403);
+    assert.equal((await fetch(`${server.base}/api/admin/simulations`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: userCookie },
+      body: JSON.stringify({ symbol: "BTCUSDT" }),
+    })).status, 403);
+
+    await postPosition(server.base, adminCookie, sampleTrade({ id: "real_admin_position", pair: "BTCUSDT" }));
+    const blocked = await fetch(`${server.base}/api/admin/simulations`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: adminCookie },
+      body: JSON.stringify({ symbol: "BTCUSDT", direction: "BUY", entry: 100, stopLoss: 95, target1: 105, target2: 110, quantity: 1 }),
+    });
+    assert.equal(blocked.status, 409);
+    await fetch(`${server.base}/api/demo/positions/real_admin_position`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Cookie: adminCookie },
+      body: JSON.stringify({ status: "LOSS", closePrice: 95, exitReason: "STOP_LOSS" }),
+    });
+
+    const simA = await startSimulation(server.base, adminCookie, { symbol: "BTCUSDT" });
+    const simB = await startSimulation(server.base, admin2Cookie, { symbol: "ETHUSDT" });
+    assert.equal(simA.scenario.symbol, "BTCUSDT");
+    assert.equal(simB.scenario.symbol, "ETHUSDT");
+    assert.notEqual(simA.userId, simB.userId);
+
+    const currentA = await authedJson(server.base, adminCookie, "/api/admin/simulations/current");
+    const currentB = await authedJson(server.base, admin2Cookie, "/api/admin/simulations/current");
+    assert.equal(currentA.id, simA.id);
+    assert.equal(currentB.id, simB.id);
+  } finally {
+    await stopServer(server.child);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("controlled simulation runs BUY and SELL flows through demo management without contaminating real stats", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "oraculo-controlled-sim-flow-"));
+  const dbPath = path.join(dir, "oraculo.sqlite");
+  const port = 5136;
+  let server = await startServer({ port, dbPath });
+  try {
+    const adminCookie = await login(server.base);
+    const realBefore = await authedJson(server.base, adminCookie, "/api/demo/session");
+    const buy = await startSimulation(server.base, adminCookie, { direction: "BUY", entry: 100, stopLoss: 95, target1: 105, target2: 110, quantity: 2 });
+
+    const outOfOrder = await fetch(`${server.base}/api/admin/simulations/${buy.id}/step`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: adminCookie },
+      body: JSON.stringify({ step: "TARGET2", idempotencyKey: "bad-order" }),
+    });
+    assert.equal(outOfOrder.status, 409);
+
+    let state = await stepSimulation(server.base, adminCookie, buy.id, "OPEN");
+    assert.equal(state.session.activeTrade.pair, "BTCUSDT");
+    state = await stepSimulation(server.base, adminCookie, buy.id, "TARGET1");
+    assert.equal(state.session.activeTrade.target1Hit, true);
+    assert.equal(state.session.activeTrade.remainingPositionSize, 1);
+    assert.ok(state.session.activeTrade.stopLoss >= 100);
+    assert.ok(state.session.realizedPnlUSDC > 0);
+
+    const duplicate = await stepSimulation(server.base, adminCookie, buy.id, "TARGET1");
+    assert.equal(duplicate.session.activeTrade.remainingPositionSize, 1);
+
+    state = await stepSimulation(server.base, adminCookie, buy.id, "TRAILING");
+    assert.ok(state.session.activeTrade.stopLoss >= duplicate.session.activeTrade.stopLoss);
+    state = await stepSimulation(server.base, adminCookie, buy.id, "TARGET2");
+    assert.equal(state.status, "COMPLETED");
+    assert.equal(state.session.activeTrade, null);
+    assert.equal(state.session.history[0].status, "WIN");
+    assert.equal(state.session.dailyStats.totalTrades, 1);
+
+    const realAfterBuy = await authedJson(server.base, adminCookie, "/api/demo/session");
+    assert.equal(realAfterBuy.dailyStats.totalTrades, realBefore.dailyStats.totalTrades);
+    assert.equal(realAfterBuy.history.some((trade) => trade.id.startsWith("sim_trade_")), false);
+
+    const sell = await startSimulation(server.base, adminCookie, { symbol: "SOLUSDT", direction: "SELL", entry: 100, stopLoss: 105, target1: 95, target2: 90, quantity: 2, initialPrice: 100 });
+    await stepSimulation(server.base, adminCookie, sell.id, "OPEN");
+    state = await stepSimulation(server.base, adminCookie, sell.id, "TARGET1");
+    assert.equal(state.session.activeTrade.target1Hit, true);
+    assert.equal(state.session.activeTrade.remainingPositionSize, 1);
+    assert.ok(state.session.activeTrade.stopLoss <= 100);
+    state = await stepSimulation(server.base, adminCookie, sell.id, "TARGET2");
+    assert.equal(state.status, "COMPLETED");
+    assert.equal(state.session.history[0].status, "WIN");
+
+    await stopServer(server.child);
+    server = await startServer({ port, dbPath });
+    const adminCookieAfterReload = await login(server.base);
+    const persisted = await authedJson(server.base, adminCookieAfterReload, "/api/admin/simulations/current");
+    assert.equal(persisted.id, sell.id);
+    assert.equal(persisted.status, "COMPLETED");
+  } finally {
+    await stopServer(server.child);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("controlled simulation covers stop, timeout, loss of strength, cancel and event history", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "oraculo-controlled-sim-events-"));
+  const dbPath = path.join(dir, "oraculo.sqlite");
+  const port = 5137;
+  const server = await startServer({ port, dbPath });
+  try {
+    const adminCookie = await login(server.base);
+
+    const stopBeforePartial = await startSimulation(server.base, adminCookie, { symbol: "BTCUSDT" });
+    await stepSimulation(server.base, adminCookie, stopBeforePartial.id, "OPEN");
+    let state = await stepSimulation(server.base, adminCookie, stopBeforePartial.id, "STOP");
+    assert.equal(state.status, "COMPLETED");
+    assert.equal(state.session.history[0].status, "LOSS");
+    assert.equal(state.session.history[0].exitReason, "STOP_LOSS");
+
+    const stopAfterPartial = await startSimulation(server.base, adminCookie, { symbol: "ETHUSDT" });
+    await stepSimulation(server.base, adminCookie, stopAfterPartial.id, "OPEN");
+    state = await stepSimulation(server.base, adminCookie, stopAfterPartial.id, "TARGET1");
+    const stopAfterBe = await stepSimulation(server.base, adminCookie, stopAfterPartial.id, "STOP");
+    assert.equal(stopAfterBe.session.history[0].exitReason, "BREAKEVEN");
+    assert.equal(stopAfterBe.session.history[0].partialPnlUSDC > 0, true);
+
+    const timeout = await startSimulation(server.base, adminCookie, { symbol: "SOLUSDT" });
+    await stepSimulation(server.base, adminCookie, timeout.id, "OPEN");
+    state = await stepSimulation(server.base, adminCookie, timeout.id, "TIMEOUT");
+    assert.equal(state.session.history[0].exitReason, "TIMEOUT");
+
+    const loss = await startSimulation(server.base, adminCookie, { symbol: "BTCUSDT" });
+    await stepSimulation(server.base, adminCookie, loss.id, "OPEN");
+    state = await stepSimulation(server.base, adminCookie, loss.id, "LOSS_OF_STRENGTH");
+    assert.equal(state.session.history[0].exitReason, "LOSS_OF_STRENGTH");
+
+    const cancel = await startSimulation(server.base, adminCookie, { symbol: "ETHUSDT" });
+    await stepSimulation(server.base, adminCookie, cancel.id, "OPEN");
+    state = await json(await fetch(`${server.base}/api/admin/simulations/${cancel.id}/cancel`, { method: "POST", headers: { Cookie: adminCookie } }));
+    assert.equal(state.status, "CANCELLED");
+    assert.equal(state.session.activeTrade, null);
+    const events = await simulationEvents(server.base, adminCookie, cancel.id);
+    assert.ok(events.some((event) => event.step === "CANCEL"));
   } finally {
     await stopServer(server.child);
     rmSync(dir, { recursive: true, force: true });

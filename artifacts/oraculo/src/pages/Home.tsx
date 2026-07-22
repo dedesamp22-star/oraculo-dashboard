@@ -25,6 +25,7 @@ import { DemoStatsPanel }    from '../components/DemoStatsPanel';
 import { MarketRadarPanel }  from '../components/MarketRadarPanel';
 import { DemoAgentsPanel }   from '../components/DemoAgentsPanel';
 import { RobotDiagnosticsPanel } from '../components/RobotDiagnosticsPanel';
+import { ControlledSimulationPanel } from '../components/ControlledSimulationPanel';
 import { getAuth, loginUser, logoutUser, type AuthUser } from '../lib/demoApi';
 import { APP_DISPLAY_NAME, APP_NAME, APP_VERSION } from '@shared/appVersion';
 
@@ -1102,6 +1103,7 @@ export default function Home() {
             selectedSymbol={radar.symbol}
             onSelectSymbol={radar.setSymbol}
           />
+          {authUser.role === 'admin' && <ControlledSimulationPanel />}
           <RobotDiagnosticsPanel user={authUser} />
           <MarketRadarPanel
             analysis={radar.analysis}
@@ -1153,6 +1155,12 @@ export default function Home() {
         <div className="hidden lg:block">
           <RobotDiagnosticsPanel user={authUser} />
         </div>
+
+        {authUser.role === 'admin' && (
+          <div className="hidden lg:block">
+            <ControlledSimulationPanel />
+          </div>
+        )}
 
         <section className="hidden lg:block bg-card/50 backdrop-blur-md border border-border p-4 sm:p-6 relative overflow-hidden">
           <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-primary/50 to-transparent" />

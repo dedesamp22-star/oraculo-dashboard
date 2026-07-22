@@ -44,6 +44,62 @@ export interface WorkerDiagnosticsResponse {
   history: Array<WorkerDiagnosticUserDto | WorkerDiagnosticAdminDto>;
 }
 
+export type ControlledSimulationStatus = 'INACTIVE' | 'ACTIVE' | 'COMPLETED' | 'CANCELLED' | 'ERROR';
+export type ControlledSimulationStep =
+  | 'OPEN'
+  | 'MOVE'
+  | 'TARGET1'
+  | 'PARTIAL'
+  | 'BREAKEVEN'
+  | 'TRAILING'
+  | 'TARGET2'
+  | 'STOP'
+  | 'LOSS_OF_STRENGTH'
+  | 'TIMEOUT'
+  | 'CANCEL';
+
+export interface ControlledSimulationScenario {
+  symbol: string;
+  direction: 'BUY' | 'SELL';
+  entry: number;
+  stopLoss: number;
+  target1: number;
+  target2: number;
+  quantity: number;
+  riskAmount: number;
+  maxDurationMs: number;
+  initialPrice: number;
+}
+
+export interface ControlledSimulationDto {
+  id: string;
+  userId: string;
+  simulationUserId: string;
+  status: ControlledSimulationStatus;
+  scenario: ControlledSimulationScenario;
+  currentStep: string;
+  startedAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+  cancelledAt: string | null;
+  lastEvent: string | null;
+  error: string | null;
+  session: DemoSession;
+  allowedSteps: ControlledSimulationStep[];
+}
+
+export interface ControlledSimulationEventDto {
+  id: string;
+  simulationId: string;
+  userId: string;
+  step: ControlledSimulationStep;
+  idempotencyKey: string;
+  status: 'APPLIED' | 'IGNORED' | 'ERROR';
+  message: string;
+  snapshot: Record<string, unknown>;
+  createdAt: string;
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return await apiJson<T>(path, {
     ...init,
@@ -147,6 +203,32 @@ export async function submitDemoPrice(price: number, pair?: string): Promise<Dem
 
 export async function getWorkerDiagnostics(limit = 10): Promise<WorkerDiagnosticsResponse> {
   return await request<WorkerDiagnosticsResponse>(`/api/worker/diagnostics?limit=${limit}`);
+}
+
+export async function getControlledSimulation(): Promise<ControlledSimulationDto | null> {
+  return await request<ControlledSimulationDto | null>('/api/admin/simulations/current');
+}
+
+export async function startControlledSimulation(scenario: Partial<ControlledSimulationScenario>): Promise<ControlledSimulationDto> {
+  return await request<ControlledSimulationDto>('/api/admin/simulations', {
+    method: 'POST',
+    body: JSON.stringify(scenario),
+  });
+}
+
+export async function stepControlledSimulation(id: string, step: ControlledSimulationStep, extra: Record<string, unknown> = {}): Promise<ControlledSimulationDto> {
+  return await request<ControlledSimulationDto>(`/api/admin/simulations/${encodeURIComponent(id)}/step`, {
+    method: 'POST',
+    body: JSON.stringify({ step, idempotencyKey: `${step}:${Date.now()}`, ...extra }),
+  });
+}
+
+export async function cancelControlledSimulation(id: string): Promise<ControlledSimulationDto> {
+  return await request<ControlledSimulationDto>(`/api/admin/simulations/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
+}
+
+export async function getControlledSimulationEvents(id: string): Promise<ControlledSimulationEventDto[]> {
+  return await request<ControlledSimulationEventDto[]>(`/api/admin/simulations/${encodeURIComponent(id)}/events`);
 }
 
 export async function persistOpenPosition(trade: DemoTrade): Promise<void> {
