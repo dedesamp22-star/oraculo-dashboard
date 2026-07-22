@@ -998,7 +998,24 @@ test("health endpoint reports API and Binance state", async () => {
     assert.equal(health.api.ok, true);
     assert.ok(["ok", "degraded"].includes(health.status));
     assert.equal(typeof health.api.uptimeSec, "number");
+    assert.equal(typeof health.api.startedAt, "string");
+    assert.equal(typeof health.api.pid, "number");
+    assert.equal(typeof health.api.nodeVersion, "string");
+    assert.equal(typeof health.api.responseLatencyMs, "number");
     assert.equal(typeof health.binance.ok, "boolean");
+    assert.equal(typeof health.system.cpus, "number");
+    assert.equal(typeof health.system.totalMemory, "number");
+    assert.equal(typeof health.system.freeMemory, "number");
+    assert.equal(typeof health.worker.active, "boolean");
+    assert.equal(typeof health.worker.automationUsers, "number");
+    assert.equal(typeof health.worker.diagnosticsStored, "number");
+    assert.equal(typeof health.worker.engineVersion, "string");
+    assert.equal(health.sqlite.integrity, "ok");
+    assert.equal(health.sqlite.journalMode, "wal");
+    assert.equal(typeof health.sqlite.databaseBytes, "number");
+    assert.equal(typeof health.sqlite.walBytes, "number");
+    assert.equal(typeof health.sessions.active, "number");
+    assert.equal(typeof health.notifications.stored, "number");
     assert.equal(typeof health.generatedAt, "string");
   } finally {
     await stopServer(server.child);

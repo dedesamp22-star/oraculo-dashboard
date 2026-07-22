@@ -27,6 +27,7 @@ import { DemoAgentsPanel }   from '../components/DemoAgentsPanel';
 import { RobotDiagnosticsPanel } from '../components/RobotDiagnosticsPanel';
 import { ControlledSimulationPanel } from '../components/ControlledSimulationPanel';
 import { NotificationsPanel } from '../components/NotificationsPanel';
+import { ObservabilityPanel } from '../components/ObservabilityPanel';
 import { getAuth, loginUser, logoutUser, type AuthUser } from '../lib/demoApi';
 import { APP_DISPLAY_NAME, APP_NAME, APP_VERSION } from '@shared/appVersion';
 
@@ -1106,6 +1107,9 @@ export default function Home() {
             onSelectSymbol={radar.setSymbol}
           />
           {authUser.role === 'admin' && <ControlledSimulationPanel />}
+          {authUser.role === 'admin' && (
+            <ObservabilityPanel health={apiHealth.health} loading={apiHealth.loading} error={apiHealth.error} />
+          )}
           <RobotDiagnosticsPanel user={authUser} />
           <MarketRadarPanel
             analysis={radar.analysis}
@@ -1165,6 +1169,12 @@ export default function Home() {
         {authUser.role === 'admin' && (
           <div className="hidden lg:block">
             <ControlledSimulationPanel />
+          </div>
+        )}
+
+        {authUser.role === 'admin' && (
+          <div className="hidden lg:block">
+            <ObservabilityPanel health={apiHealth.health} loading={apiHealth.loading} error={apiHealth.error} />
           </div>
         )}
 

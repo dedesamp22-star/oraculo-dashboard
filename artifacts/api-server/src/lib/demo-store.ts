@@ -1,5 +1,5 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import { mkdirSync, chmodSync } from "node:fs";
+import { existsSync, mkdirSync, chmodSync, statSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -144,6 +144,37 @@ export interface WorkerDiagnosticAdminDto extends WorkerDiagnosticUserDto {
   lastError: string | null;
   engineVersion: string;
   full: Record<string, unknown>;
+}
+
+export interface StoreObservabilitySnapshot {
+  sqlite: {
+    databasePath: string;
+    databaseBytes: number;
+    walBytes: number;
+    shmBytes: number;
+    journalMode: string;
+    pageCount: number;
+    pageSize: number;
+    freelistCount: number;
+    integrity: "ok" | "error";
+    integrityError: string | null;
+  };
+  sessions: {
+    active: number;
+    expired: number;
+    revoked: number;
+  };
+  worker: {
+    automationUsers: number;
+    diagnosticsStored: number;
+    latest: WorkerDiagnosticAdminDto | null;
+  };
+  notifications: {
+    stored: number;
+    unread: number;
+    pushSubscriptions: number;
+    deliveries: number;
+  };
 }
 
 export type ControlledSimulationStatus = "INACTIVE" | "ACTIVE" | "COMPLETED" | "CANCELLED" | "ERROR";
@@ -626,8 +657,10 @@ function sanitizeFailure(value: unknown): string | null {
 
 export class DemoStore {
   db: DatabaseSync;
+  private dbPath: string;
 
   constructor(dbPath = process.env["ORACULO_DB_PATH"] ?? path.resolve(process.cwd(), "data", "oraculo.sqlite")) {
+    this.dbPath = dbPath;
     const dataDir = path.dirname(dbPath);
     mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     try { chmodSync(dataDir, 0o700); } catch { /* best effort on Windows */ }
@@ -1401,6 +1434,70 @@ export class DemoStore {
     const mapper = user.role === "admin" ? diagnosticAdminFromRow : diagnosticUserFromRow;
     const history = rows.map(mapper);
     return { current: history[0] ?? null, history };
+  }
+
+  getObservabilitySnapshot(): StoreObservabilitySnapshot {
+    const fileBytes = (filePath: string): number => {
+      try {
+        return existsSync(filePath) ? statSync(filePath).size : 0;
+      } catch {
+        return 0;
+      }
+    };
+    const scalar = <T>(sql: string, fallback: T): T => {
+      try {
+        const row = this.db.prepare(sql).get() as Record<string, unknown> | undefined;
+        const value = row ? Object.values(row)[0] : undefined;
+        return value == null ? fallback : value as T;
+      } catch {
+        return fallback;
+      }
+    };
+    let integrity: "ok" | "error" = "ok";
+    let integrityError: string | null = null;
+    try {
+      const row = this.db.prepare("PRAGMA integrity_check").get() as Record<string, unknown> | undefined;
+      const result = String(row ? Object.values(row)[0] : "");
+      if (result !== "ok") {
+        integrity = "error";
+        integrityError = result || "integrity_check failed";
+      }
+    } catch (err) {
+      integrity = "error";
+      integrityError = err instanceof Error ? err.message : String(err);
+    }
+    const latestRow = this.db.prepare("SELECT * FROM worker_diagnostics ORDER BY cycle_finished_at DESC LIMIT 1").get() as Record<string, unknown> | undefined;
+    const now = Date.now();
+    return {
+      sqlite: {
+        databasePath: this.dbPath,
+        databaseBytes: fileBytes(this.dbPath),
+        walBytes: fileBytes(`${this.dbPath}-wal`),
+        shmBytes: fileBytes(`${this.dbPath}-shm`),
+        journalMode: String(scalar("PRAGMA journal_mode", "unknown")),
+        pageCount: Number(scalar("PRAGMA page_count", 0)),
+        pageSize: Number(scalar("PRAGMA page_size", 0)),
+        freelistCount: Number(scalar("PRAGMA freelist_count", 0)),
+        integrity,
+        integrityError,
+      },
+      sessions: {
+        active: Number(scalar(`SELECT COUNT(*) FROM auth_sessions WHERE revoked_at IS NULL AND expires_at > ${now}`, 0)),
+        expired: Number(scalar(`SELECT COUNT(*) FROM auth_sessions WHERE revoked_at IS NULL AND expires_at <= ${now}`, 0)),
+        revoked: Number(scalar("SELECT COUNT(*) FROM auth_sessions WHERE revoked_at IS NOT NULL", 0)),
+      },
+      worker: {
+        automationUsers: this.getAutomationUsers().length,
+        diagnosticsStored: Number(scalar("SELECT COUNT(*) FROM worker_diagnostics", 0)),
+        latest: latestRow ? diagnosticAdminFromRow(latestRow) : null,
+      },
+      notifications: {
+        stored: Number(scalar("SELECT COUNT(*) FROM notifications", 0)),
+        unread: Number(scalar("SELECT COUNT(*) FROM notifications WHERE read_at IS NULL", 0)),
+        pushSubscriptions: Number(scalar("SELECT COUNT(*) FROM push_subscriptions WHERE revoked_at IS NULL", 0)),
+        deliveries: Number(scalar("SELECT COUNT(*) FROM notification_deliveries", 0)),
+      },
+    };
   }
 
   private simulationUserId(admin: AuthUser): string {
