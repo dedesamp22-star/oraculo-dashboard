@@ -1,6 +1,7 @@
 import type { DemoSession, DemoTrade } from './demo';
 import type { EngineResult } from './analysis';
 import { apiJson } from './apiClient';
+import type { ApiHealth } from '../hooks/useApiHealth';
 
 export interface AuthUser {
   id: string;
@@ -302,6 +303,10 @@ export async function putNotificationPreferences(prefs: Partial<NotificationPref
 
 export async function getPushPublicKey(): Promise<{ publicKey: string | null; configured: boolean }> {
   return await request<{ publicKey: string | null; configured: boolean }>('/api/push/public-key');
+}
+
+export async function getAdminObservability(): Promise<ApiHealth> {
+  return await request<ApiHealth>('/api/admin/observability');
 }
 
 export async function listPushSubscriptions(): Promise<PushSubscriptionDto[]> {

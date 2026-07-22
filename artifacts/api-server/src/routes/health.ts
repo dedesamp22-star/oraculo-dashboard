@@ -3,6 +3,7 @@ import os from "node:os";
 import { HealthCheckResponse } from "@workspace/api-zod";
 import { checkBinanceHealth } from "../lib/binance-client";
 import { demoStore } from "../lib/demo-store-instance";
+import { requireAdmin, requireAuth } from "./auth";
 import { APP_METADATA } from "@shared/appVersion";
 
 const router: IRouter = Router();
@@ -14,6 +15,27 @@ router.get("/healthz", (_req, res) => {
 });
 
 router.get("/health", async (_req, res) => {
+  const started = process.hrtime.bigint();
+  const binance = await checkBinanceHealth();
+  const responseLatencyMs = Number((process.hrtime.bigint() - started) / 1_000_000n);
+  res.json({
+    ...APP_METADATA,
+    status: binance.ok ? "ok" : "degraded",
+    api: {
+      ok: true,
+      uptimeSec: Math.round(process.uptime()),
+      startedAt,
+      pid: process.pid,
+      nodeVersion: process.version,
+      memory: process.memoryUsage(),
+      responseLatencyMs,
+    },
+    binance,
+    generatedAt: new Date().toISOString(),
+  });
+});
+
+router.get("/admin/observability", requireAuth, requireAdmin, async (_req, res) => {
   const started = process.hrtime.bigint();
   const binance = await checkBinanceHealth();
   const observability = demoStore.getObservabilitySnapshot();
@@ -58,7 +80,17 @@ router.get("/health", async (_req, res) => {
       lastError: workerLatest?.lastError ?? null,
       engineVersion: workerLatest?.engineVersion ?? APP_METADATA.version,
     },
-    sqlite: observability.sqlite,
+    sqlite: {
+      databaseBytes: observability.sqlite.databaseBytes,
+      walBytes: observability.sqlite.walBytes,
+      shmBytes: observability.sqlite.shmBytes,
+      journalMode: observability.sqlite.journalMode,
+      pageCount: observability.sqlite.pageCount,
+      pageSize: observability.sqlite.pageSize,
+      freelistCount: observability.sqlite.freelistCount,
+      integrity: observability.sqlite.integrity,
+      integrityError: observability.sqlite.integrityError,
+    },
     sessions: observability.sessions,
     notifications: observability.notifications,
     generatedAt: new Date().toISOString(),

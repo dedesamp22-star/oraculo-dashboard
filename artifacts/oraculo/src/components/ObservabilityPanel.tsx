@@ -1,6 +1,8 @@
+import { useEffect, useState } from 'react';
 import { Activity, AlertTriangle, Cpu, Database, Gauge, HardDrive, Server, Users } from 'lucide-react';
 
 import type { ApiHealth } from '../hooks/useApiHealth';
+import { getAdminObservability } from '../lib/demoApi';
 
 function bytes(value: number | null | undefined): string {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return '--';
@@ -45,7 +47,40 @@ function Metric({ label, value, tone = 'neutral' }: { label: string; value: stri
   );
 }
 
-export function ObservabilityPanel({ health, loading, error }: { health: ApiHealth | null; loading: boolean; error: string | null }) {
+const POLL_MS = 30_000;
+
+export function ObservabilityPanel({ publicHealth, publicError }: { publicHealth: ApiHealth | null; publicError: string | null }) {
+  const [health, setHealth] = useState<ApiHealth | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const safeLoad = async () => {
+      if (cancelled) return;
+      try {
+        const data = await getAdminObservability();
+        if (cancelled) return;
+        setHealth(data);
+        setError(null);
+      } catch (err) {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : 'Falha ao carregar observabilidade.');
+        setHealth(null);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    void safeLoad();
+    const timer = window.setInterval(() => void safeLoad(), POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  const baseHealth = health ?? publicHealth;
+  const displayError = error ?? publicError;
   const memoryUsed = health?.api.memory.rss;
   const memoryFree = health?.system?.freeMemory;
   const memoryTotal = health?.system?.totalMemory;
@@ -66,21 +101,21 @@ export function ObservabilityPanel({ health, loading, error }: { health: ApiHeal
             </div>
           </div>
           <span className={`text-[9px] font-mono font-bold uppercase tracking-[0.14em] ${error ? 'text-[#ff4444]' : health?.status === 'ok' ? 'text-[#00ff66]' : 'text-[#ffaa00]'}`}>
-            {error ? 'offline' : loading ? 'checando' : health?.status ?? '--'}
+            {displayError ? 'offline' : loading ? 'checando' : baseHealth?.status ?? '--'}
           </span>
         </div>
 
-        {error && (
+        {displayError && (
           <div className="flex items-start gap-2 border border-[#ff4444]/40 bg-[#ff4444]/10 p-3 text-xs font-mono text-[#ffaaaa]">
             <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-            <span>{error}</span>
+            <span>{displayError}</span>
           </div>
         )}
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-          <Metric label="API uptime" value={seconds(health?.api.uptimeSec)} tone={health?.api.ok ? 'ok' : 'bad'} />
+          <Metric label="API uptime" value={seconds(baseHealth?.api.uptimeSec)} tone={baseHealth?.api.ok ? 'ok' : 'bad'} />
           <Metric label="Latencia health" value={health?.api.responseLatencyMs == null ? '--' : `${health.api.responseLatencyMs}ms`} tone="neutral" />
-          <Metric label="Binance" value={health?.binance.ok ? `${health.binance.latencyMs ?? 0}ms` : 'degradada'} tone={health?.binance.ok ? 'ok' : 'warn'} />
+          <Metric label="Binance" value={baseHealth?.binance.ok ? `${baseHealth.binance.latencyMs ?? 0}ms` : 'degradada'} tone={baseHealth?.binance.ok ? 'ok' : 'warn'} />
           <Metric label="Worker" value={workerOk ? 'ativo' : health?.worker?.lastError ? 'erro' : 'aguardando'} tone={workerOk ? 'ok' : health?.worker?.lastError ? 'bad' : 'warn'} />
         </div>
 

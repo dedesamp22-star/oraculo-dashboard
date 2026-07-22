@@ -44,7 +44,6 @@ export interface ApiHealth {
     engineVersion: string;
   };
   sqlite?: {
-    databasePath: string;
     databaseBytes: number;
     walBytes: number;
     shmBytes: number;

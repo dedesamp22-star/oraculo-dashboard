@@ -1003,6 +1003,44 @@ test("health endpoint reports API and Binance state", async () => {
     assert.equal(typeof health.api.nodeVersion, "string");
     assert.equal(typeof health.api.responseLatencyMs, "number");
     assert.equal(typeof health.binance.ok, "boolean");
+    assert.equal(health.system, undefined);
+    assert.equal(health.worker, undefined);
+    assert.equal(health.sqlite, undefined);
+    assert.equal(health.sessions, undefined);
+    assert.equal(health.notifications, undefined);
+    assert.equal(typeof health.generatedAt, "string");
+  } finally {
+    await stopServer(server.child);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("admin observability exposes expanded health only to admins", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "oraculo-demo-observability-"));
+  const dbPath = path.join(dir, "oraculo.sqlite");
+  const port = 5139;
+  const server = await startServer({ port, dbPath });
+  try {
+    const unauthenticated = await fetch(`${server.base}/api/admin/observability`);
+    assert.equal(unauthenticated.status, 401);
+
+    const adminCookie = await login(server.base);
+    await createUser(server.base, adminCookie, {
+      username: "observability-user",
+      name: "Observability User",
+      password: "observability-user-password",
+      role: "user",
+    });
+    const userCookie = await loginAs(server.base, "observability-user", "observability-user-password");
+
+    const forbidden = await fetch(`${server.base}/api/admin/observability`, { headers: { Cookie: userCookie } });
+    assert.equal(forbidden.status, 403);
+
+    const res = await fetch(`${server.base}/api/admin/observability`, { headers: { Cookie: adminCookie } });
+    assert.equal(res.status, 200);
+    const health = await json(res);
+    assert.equal(health.version, "0.5");
+    assert.equal(health.buildChannel, "homologation");
     assert.equal(typeof health.system.cpus, "number");
     assert.equal(typeof health.system.totalMemory, "number");
     assert.equal(typeof health.system.freeMemory, "number");
@@ -1014,9 +1052,11 @@ test("health endpoint reports API and Binance state", async () => {
     assert.equal(health.sqlite.journalMode, "wal");
     assert.equal(typeof health.sqlite.databaseBytes, "number");
     assert.equal(typeof health.sqlite.walBytes, "number");
+    assert.equal(health.sqlite.databasePath, undefined);
     assert.equal(typeof health.sessions.active, "number");
     assert.equal(typeof health.notifications.stored, "number");
-    assert.equal(typeof health.generatedAt, "string");
+    assert.equal(JSON.stringify(health).includes("password_hash"), false);
+    assert.equal(JSON.stringify(health).includes("token_hash"), false);
   } finally {
     await stopServer(server.child);
     rmSync(dir, { recursive: true, force: true });

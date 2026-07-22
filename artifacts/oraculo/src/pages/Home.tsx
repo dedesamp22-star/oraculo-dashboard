@@ -1108,7 +1108,7 @@ export default function Home() {
           />
           {authUser.role === 'admin' && <ControlledSimulationPanel />}
           {authUser.role === 'admin' && (
-            <ObservabilityPanel health={apiHealth.health} loading={apiHealth.loading} error={apiHealth.error} />
+            <ObservabilityPanel publicHealth={apiHealth.health} publicError={apiHealth.error} />
           )}
           <RobotDiagnosticsPanel user={authUser} />
           <MarketRadarPanel
@@ -1174,7 +1174,7 @@ export default function Home() {
 
         {authUser.role === 'admin' && (
           <div className="hidden lg:block">
-            <ObservabilityPanel health={apiHealth.health} loading={apiHealth.loading} error={apiHealth.error} />
+            <ObservabilityPanel publicHealth={apiHealth.health} publicError={apiHealth.error} />
           </div>
         )}
 
