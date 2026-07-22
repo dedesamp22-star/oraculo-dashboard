@@ -48,6 +48,10 @@ async function startServer({ port, dbPath }) {
       ORACULO_INITIAL_ADMIN_PASSWORD: "local-test-password",
       ORACULO_SESSION_SECRET: "local-test-session-secret-32-bytes",
       ORACULO_REQUIRE_HTTPS: process.env.ORACULO_REQUIRE_HTTPS ?? "false",
+      ORACULO_TELEGRAM_BOT_TOKEN: "123456:test-bot-token-not-real",
+      ORACULO_TELEGRAM_WEBHOOK_SECRET: "telegram-webhook-secret-test",
+      ORACULO_TELEGRAM_BOT_USERNAME: "OraculoTestBot",
+      ORACULO_TELEGRAM_MOCK: "true",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -196,6 +200,15 @@ async function subscribeDummyPush(base, cookie, endpoint) {
   });
   assert.equal(res.status, 200);
   return await json(res);
+}
+
+async function waitFor(condition, message, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.fail(message);
 }
 
 async function runHomologationTradeFlow(base, cookie, trade) {
@@ -795,6 +808,125 @@ test("notifications are private, idempotent, readable, preference-aware and push
     await fetch(`${server.base}/api/notifications/test`, { method: "POST", headers: { Cookie: userCookie } });
     assert.equal((await notifications(server.base, userCookie)).items.length, 0);
   } finally {
+    await stopServer(server.child);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Telegram integration links private chats, protects secrets and delivers idempotent alerts", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "oraculo-telegram-"));
+  const dbPath = path.join(dir, "oraculo.sqlite");
+  const port = 5148;
+  const server = await startServer({ port, dbPath });
+  let db;
+  try {
+    assert.equal((await fetch(`${server.base}/api/integrations/telegram/status`)).status, 401);
+
+    const adminCookie = await login(server.base);
+    await createUser(server.base, adminCookie, {
+      username: "telegramuser",
+      name: "Telegram User",
+      password: "telegram-user-safe-123",
+      role: "user",
+    });
+    const userCookie = await loginAs(server.base, "telegramuser", "telegram-user-safe-123");
+
+    let status = await authedJson(server.base, adminCookie, "/api/integrations/telegram/status");
+    assert.equal(status.configured, true);
+    assert.equal(status.connected, false);
+    assert.equal(JSON.stringify(status).includes("chat_id"), false);
+    assert.equal(JSON.stringify(status).includes("test-bot-token"), false);
+
+    const linkRes = await fetch(`${server.base}/api/integrations/telegram/link-code`, {
+      method: "POST",
+      headers: { Cookie: adminCookie },
+    });
+    assert.equal(linkRes.status, 200);
+    const link = await json(linkRes);
+    assert.match(link.code, /^[A-Z0-9]{8}$/);
+    assert.ok(link.deepLink.includes("OraculoTestBot"));
+
+    db = new DatabaseSync(dbPath);
+    const codeRows = db.prepare("SELECT code_hash, used_at, expires_at FROM telegram_link_codes").all();
+    assert.equal(codeRows.length, 1);
+    assert.notEqual(codeRows[0].code_hash, link.code);
+    assert.equal(codeRows[0].used_at, null);
+    assert.ok(Date.parse(codeRows[0].expires_at) > Date.now());
+
+    const badSecret = await fetch(`${server.base}/api/integrations/telegram/webhook`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-telegram-bot-api-secret-token": "bad" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(badSecret.status, 401);
+
+    const groupUpdate = await fetch(`${server.base}/api/integrations/telegram/webhook`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-telegram-bot-api-secret-token": "telegram-webhook-secret-test" },
+      body: JSON.stringify({ message: { chat: { id: -10, type: "group" }, text: `/start ${link.code}` } }),
+    });
+    assert.equal(groupUpdate.status, 200);
+    assert.equal((await json(groupUpdate)).reason, "private_chat_required");
+
+    const connectRes = await fetch(`${server.base}/api/integrations/telegram/webhook`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-telegram-bot-api-secret-token": "telegram-webhook-secret-test" },
+      body: JSON.stringify({ message: { chat: { id: 987654, type: "private" }, from: { username: "denilson" }, text: `/start ${link.code}` } }),
+    });
+    assert.equal(connectRes.status, 200);
+    assert.equal((await json(connectRes)).linked, true);
+    assert.notEqual(db.prepare("SELECT used_at FROM telegram_link_codes WHERE code_hash = ?").get(codeRows[0].code_hash).used_at, null);
+
+    const reuseRes = await fetch(`${server.base}/api/integrations/telegram/webhook`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-telegram-bot-api-secret-token": "telegram-webhook-secret-test" },
+      body: JSON.stringify({ message: { chat: { id: 222, type: "private" }, text: `/start ${link.code}` } }),
+    });
+    assert.equal((await json(reuseRes)).reason, "invalid_or_expired_code");
+
+    status = await authedJson(server.base, adminCookie, "/api/integrations/telegram/status");
+    assert.equal(status.connected, true);
+    assert.equal(status.telegramUsername, "denilson");
+    assert.equal(JSON.stringify(status).includes("987654"), false);
+
+    await setNotificationPrefs(server.base, adminCookie, { telegram: true, includeSimulation: true });
+    const testRes = await fetch(`${server.base}/api/integrations/telegram/test`, { method: "POST", headers: { Cookie: adminCookie } });
+    assert.equal(testRes.status, 200);
+    await waitFor(() => Number(db.prepare("SELECT COUNT(*) AS count FROM notification_deliveries WHERE provider = 'telegram' AND status = 'delivered'").get().count) === 1, "telegram test delivery was not flushed");
+    let deliveryCount = db.prepare("SELECT COUNT(*) AS count FROM notification_deliveries WHERE provider = 'telegram' AND status = 'delivered'").get().count;
+    assert.equal(Number(deliveryCount), 1);
+
+    const trade = sampleTrade({ id: "telegram_btc", pair: "BTCUSDT", positionSize: 2, remainingPositionSize: 2 });
+    await postPosition(server.base, adminCookie, trade);
+    await postPrice(server.base, adminCookie, trade.pair, trade.target1);
+    await postPrice(server.base, adminCookie, trade.pair, trade.target1);
+    await postPrice(server.base, adminCookie, trade.pair, trade.target1 + 1);
+    await postPrice(server.base, adminCookie, trade.pair, trade.stopLoss);
+
+    const adminAlerts = await notifications(server.base, adminCookie, "?limit=80");
+    const types = adminAlerts.items.map((item) => item.type);
+    assert.equal(types.filter((type) => type === "demo_entry_opened").length, 1);
+    assert.equal(types.filter((type) => type === "partial_executed").length, 1);
+    assert.equal(types.filter((type) => type === "breakeven_moved").length, 1);
+    assert.equal(types.filter((type) => type === "trailing_updated").length <= 1, true);
+    assert.equal(types.some((type) => type === "stop_loss" || type === "target2_hit" || type === "loss_of_strength" || type === "timeout"), true);
+
+    const simulation = await startSimulation(server.base, adminCookie, { symbol: "ETHUSDT" });
+    await stepSimulation(server.base, adminCookie, simulation.id, "OPEN");
+    const simAlert = (await notifications(server.base, adminCookie, "?source=HOMOLOGATION&limit=20")).items[0];
+    assert.equal(simAlert.source, "HOMOLOGATION");
+
+    const userTelegram = await authedJson(server.base, userCookie, "/api/integrations/telegram/status");
+    assert.equal(userTelegram.connected, false);
+    assert.equal((await notifications(server.base, userCookie)).items.length, 0);
+    assert.equal(JSON.stringify(adminAlerts).includes("test-bot-token"), false);
+    assert.equal(server.logs().includes("test-bot-token"), false);
+
+    const disconnect = await fetch(`${server.base}/api/integrations/telegram`, { method: "DELETE", headers: { Cookie: adminCookie } });
+    assert.equal(disconnect.status, 200);
+    assert.equal((await authedJson(server.base, adminCookie, "/api/integrations/telegram/status")).connected, false);
+  } finally {
+    db?.close();
     await stopServer(server.child);
     rmSync(dir, { recursive: true, force: true });
   }

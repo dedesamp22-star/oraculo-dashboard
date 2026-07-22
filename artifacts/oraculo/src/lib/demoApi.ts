@@ -148,6 +148,22 @@ export interface PushSubscriptionDto {
   updatedAt: string;
 }
 
+export interface TelegramStatusDto {
+  configured: boolean;
+  connected: boolean;
+  botUsername: string | null;
+  telegramUsername: string | null;
+  linkedAt: string | null;
+  lastDeliveryAt: string | null;
+}
+
+export interface TelegramLinkCodeDto {
+  code: string;
+  expiresAt: string;
+  botUsername: string | null;
+  deepLink: string | null;
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return await apiJson<T>(path, {
     ...init,
@@ -329,6 +345,22 @@ export async function deletePushSubscription(id: string): Promise<{ removed: boo
 
 export async function sendTestNotification(): Promise<NotificationDto | null> {
   return await request<NotificationDto | null>('/api/notifications/test', { method: 'POST' });
+}
+
+export async function getTelegramStatus(): Promise<TelegramStatusDto> {
+  return await request<TelegramStatusDto>('/api/integrations/telegram/status');
+}
+
+export async function createTelegramLinkCode(): Promise<TelegramLinkCodeDto> {
+  return await request<TelegramLinkCodeDto>('/api/integrations/telegram/link-code', { method: 'POST' });
+}
+
+export async function sendTelegramTest(): Promise<NotificationDto | null> {
+  return await request<NotificationDto | null>('/api/integrations/telegram/test', { method: 'POST' });
+}
+
+export async function disconnectTelegram(): Promise<{ disconnected: boolean }> {
+  return await request<{ disconnected: boolean }>('/api/integrations/telegram', { method: 'DELETE' });
 }
 
 export async function persistOpenPosition(trade: DemoTrade): Promise<void> {

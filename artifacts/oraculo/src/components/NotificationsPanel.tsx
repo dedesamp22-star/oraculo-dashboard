@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Bell, BellOff, CheckCheck, Send, ShieldAlert, Smartphone, X } from 'lucide-react';
+import { Bell, BellOff, CheckCheck, ExternalLink, Send, ShieldAlert, Smartphone, X } from 'lucide-react';
 
 import {
+  createTelegramLinkCode,
   deletePushSubscription,
+  disconnectTelegram,
+  getTelegramStatus,
   getNotificationPreferences,
   getNotifications,
   getPushPublicKey,
@@ -11,11 +14,14 @@ import {
   markNotificationRead,
   putNotificationPreferences,
   sendTestNotification,
+  sendTelegramTest,
   subscribePush,
   type NotificationDto,
   type NotificationPreferences,
   type NotificationSource,
   type PushSubscriptionDto,
+  type TelegramLinkCodeDto,
+  type TelegramStatusDto,
 } from '../lib/demoApi';
 
 function severityColor(severity: NotificationDto['severity']): string {
@@ -47,19 +53,23 @@ export function NotificationsPanel() {
   const [unread, setUnread] = useState(0);
   const [prefs, setPrefs] = useState<NotificationPreferences | null>(null);
   const [subscriptions, setSubscriptions] = useState<PushSubscriptionDto[]>([]);
+  const [telegram, setTelegram] = useState<TelegramStatusDto | null>(null);
+  const [telegramCode, setTelegramCode] = useState<TelegramLinkCodeDto | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = async () => {
     try {
-      const [notifications, preferences, pushSubs] = await Promise.all([
+      const [notifications, preferences, pushSubs, telegramStatus] = await Promise.all([
         getNotifications(30, source),
         getNotificationPreferences(),
         listPushSubscriptions(),
+        getTelegramStatus(),
       ]);
       setItems(notifications.items);
       setUnread(notifications.unreadCount);
       setPrefs(preferences);
       setSubscriptions(pushSubs);
+      setTelegram(telegramStatus);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Falha ao carregar alertas.');
@@ -104,6 +114,37 @@ export function NotificationsPanel() {
   const togglePref = async (key: keyof NotificationPreferences, value: boolean) => {
     const next = await putNotificationPreferences({ [key]: value });
     setPrefs(next);
+  };
+
+  const connectTelegram = async () => {
+    try {
+      const code = await createTelegramLinkCode();
+      setTelegramCode(code);
+      await putNotificationPreferences({ telegram: true });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Falha ao conectar Telegram.');
+    }
+  };
+
+  const testTelegram = async () => {
+    try {
+      await sendTelegramTest();
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Falha ao testar Telegram.');
+    }
+  };
+
+  const revokeTelegram = async () => {
+    try {
+      await disconnectTelegram();
+      setTelegramCode(null);
+      await putNotificationPreferences({ telegram: false });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Falha ao desconectar Telegram.');
+    }
   };
 
   return (
@@ -156,10 +197,51 @@ export function NotificationsPanel() {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-[10px] font-mono">
               <label className="flex items-center gap-2 border border-border/50 p-2"><input type="checkbox" checked={prefs.internal} onChange={(event) => void togglePref('internal', event.target.checked)} /> Internos</label>
               <label className="flex items-center gap-2 border border-border/50 p-2"><input type="checkbox" checked={prefs.push} onChange={(event) => void togglePref('push', event.target.checked)} /> Push</label>
+              <label className="flex items-center gap-2 border border-border/50 p-2"><input type="checkbox" checked={prefs.telegram} onChange={(event) => void togglePref('telegram', event.target.checked)} /> Telegram</label>
               <label className="flex items-center gap-2 border border-border/50 p-2"><input type="checkbox" checked={prefs.includeBlockedEntries} onChange={(event) => void togglePref('includeBlockedEntries', event.target.checked)} /> Bloqueios</label>
               <label className="flex items-center gap-2 border border-border/50 p-2"><input type="checkbox" checked={prefs.includeSimulation} onChange={(event) => void togglePref('includeSimulation', event.target.checked)} /> Homologacao</label>
             </div>
           )}
+
+          <div className="border border-border/50 bg-background/20 p-3">
+            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="text-[10px] font-mono font-bold uppercase tracking-[0.16em] text-primary">Telegram</p>
+                <p className="mt-1 text-[11px] font-mono text-muted-foreground">
+                  {!telegram?.configured ? 'Bot nao configurado neste ambiente.' : telegram.connected ? `Conectado${telegram.telegramUsername ? ` a @${telegram.telegramUsername}` : ''}.` : 'Desconectado.'}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {!telegram?.connected && (
+                  <button type="button" onClick={() => void connectTelegram()} className="min-h-11 border border-border px-3 text-[10px] font-mono uppercase tracking-[0.12em]">
+                    Conectar Telegram
+                  </button>
+                )}
+                {telegram?.connected && (
+                  <>
+                    <button type="button" onClick={() => void testTelegram()} className="min-h-11 border border-border px-3 text-[10px] font-mono uppercase tracking-[0.12em]">
+                      Testar
+                    </button>
+                    <button type="button" onClick={() => void revokeTelegram()} className="min-h-11 border border-border px-3 text-[10px] font-mono uppercase tracking-[0.12em] text-[#ffaa00]">
+                      Desconectar
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+            {telegramCode && (
+              <div className="mt-3 border border-primary/40 bg-primary/5 p-3 text-[11px] font-mono">
+                <p className="uppercase tracking-[0.12em] text-primary">Codigo temporario</p>
+                <p className="mt-1 text-lg font-bold tracking-[0.18em]">{telegramCode.code}</p>
+                <p className="mt-1 text-muted-foreground">No Telegram, envie /start {telegramCode.code}. Expira em {fmtDate(telegramCode.expiresAt)}.</p>
+                {telegramCode.deepLink && (
+                  <a href={telegramCode.deepLink} target="_blank" rel="noreferrer" className="mt-2 inline-flex min-h-10 items-center gap-2 border border-border px-3 text-[10px] uppercase tracking-[0.12em]">
+                    Abrir bot <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                )}
+              </div>
+            )}
+          </div>
 
           {subscriptions.length > 0 && (
             <div className="grid grid-cols-1 gap-1">

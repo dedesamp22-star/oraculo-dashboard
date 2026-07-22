@@ -275,6 +275,22 @@ export interface PushSubscriptionDto {
   updatedAt: string;
 }
 
+export interface TelegramStatusDto {
+  configured: boolean;
+  connected: boolean;
+  botUsername: string | null;
+  telegramUsername: string | null;
+  linkedAt: string | null;
+  lastDeliveryAt: string | null;
+}
+
+export interface TelegramLinkCodeDto {
+  code: string;
+  expiresAt: string;
+  botUsername: string | null;
+  deepLink: string | null;
+}
+
 export class HttpError extends Error {
   constructor(public status: number, message: string) {
     super(message);
@@ -664,6 +680,51 @@ function pushSubscriptionFromRow(row: Record<string, unknown>): PushSubscription
 function sanitizeFailure(value: unknown): string | null {
   if (value == null) return null;
   return String(value).replace(/[A-Za-z0-9_-]{24,}/g, "[redacted]").slice(0, 300);
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function telegramConfigured(): boolean {
+  return !!process.env["ORACULO_TELEGRAM_BOT_TOKEN"];
+}
+
+function telegramBotUsername(): string | null {
+  const username = process.env["ORACULO_TELEGRAM_BOT_USERNAME"]?.trim().replace(/^@/, "") ?? "";
+  return username || null;
+}
+
+function telegramApiUrl(pathname: string): string {
+  const token = process.env["ORACULO_TELEGRAM_BOT_TOKEN"];
+  if (!token) throw new HttpError(503, "Telegram is not configured");
+  return `https://api.telegram.org/bot${token}/${pathname}`;
+}
+
+function sanitizeTelegramText(value: unknown): string {
+  return String(value ?? "")
+    .replace(/[A-Za-z0-9_-]{24,}/g, "[redacted]")
+    .replace(/[<>]/g, "")
+    .slice(0, 3500);
+}
+
+function notificationTelegramMessage(notification: NotificationDto, role: UserRole): string {
+  const prefix = notification.source === "HOMOLOGATION" ? "[HOMOLOGACAO]\n" : "";
+  const lines = [
+    `${prefix}ORACULO — ${notification.title.toUpperCase()}`,
+    "",
+    notification.symbol ? `Ativo: ${notification.symbol}` : null,
+    `Status: ${notification.message}`,
+    `Ambiente: ${notification.source}`,
+  ].filter(Boolean) as string[];
+  const metadata = notification.metadata ?? {};
+  if (role === "admin") {
+    for (const key of ["scoreContextual", "scoreOperacional", "decisionState", "decisiveReason", "exitReason", "status"]) {
+      const value = metadata[key];
+      if (value !== undefined && value !== null) lines.push(`${key}: ${String(value).slice(0, 180)}`);
+    }
+  }
+  return sanitizeTelegramText(lines.join("\n"));
 }
 
 export class DemoStore {
@@ -1088,6 +1149,48 @@ export class DemoStore {
             ON notification_deliveries(notification_id, provider);
         `);
         this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (7, 'notifications', ?)").run(nowIso());
+      });
+    }
+    const v8 = this.db.prepare("SELECT version FROM schema_migrations WHERE version = 8").get();
+    if (!v8) {
+      this.transaction(() => {
+        const addColumn = (table: string, column: string, definition: string) => {
+          const exists = (this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((row) => row.name === column);
+          if (!exists) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+        };
+        addColumn("notification_deliveries", "attempt_count", "attempt_count INTEGER NOT NULL DEFAULT 0");
+        addColumn("notification_deliveries", "next_attempt_at", "next_attempt_at TEXT");
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS telegram_connections (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            chat_id TEXT NOT NULL,
+            telegram_username TEXT,
+            status TEXT NOT NULL CHECK (status IN ('ACTIVE','REVOKED')),
+            linked_at TEXT NOT NULL,
+            revoked_at TEXT,
+            last_delivery_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          CREATE UNIQUE INDEX IF NOT EXISTS telegram_connections_user_active_idx
+            ON telegram_connections(user_id)
+            WHERE status = 'ACTIVE';
+          CREATE UNIQUE INDEX IF NOT EXISTS telegram_connections_chat_active_idx
+            ON telegram_connections(chat_id)
+            WHERE status = 'ACTIVE';
+          CREATE TABLE IF NOT EXISTS telegram_link_codes (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            code_hash TEXT NOT NULL UNIQUE,
+            expires_at TEXT NOT NULL,
+            used_at TEXT,
+            created_at TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS telegram_link_codes_user_idx
+            ON telegram_link_codes(user_id, created_at);
+        `);
+        this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (8, 'telegram_notifications', ?)").run(nowIso());
       });
     }
   }
@@ -1903,6 +2006,8 @@ export class DemoStore {
     const row = this.db.prepare("SELECT * FROM notifications WHERE user_id = ? AND idempotency_key = ?").get(userId, idempotencyKey.slice(0, 240)) as Record<string, unknown> | undefined;
     if (!row) return null;
     this.queuePushDeliveries(userId, String(row.id));
+    this.queueTelegramDeliveries(userId, String(row.id));
+    void this.flushTelegramDeliveries(userId, String(row.id));
     return notificationFromRow(row, this.getUser(userId)?.role ?? "user");
   }
 
@@ -1967,6 +2072,102 @@ export class DemoStore {
     }
   }
 
+  private queueTelegramDeliveries(userId: string, notificationId: string): void {
+    const prefs = this.getNotificationPreferences(userId);
+    if (!prefs.telegram) return;
+    const connection = this.db.prepare("SELECT * FROM telegram_connections WHERE user_id = ? AND status = 'ACTIVE' ORDER BY linked_at DESC LIMIT 1")
+      .get(userId) as Record<string, unknown> | undefined;
+    if (!connection) return;
+    const now = nowIso();
+    const existing = this.db.prepare(`
+      SELECT id FROM notification_deliveries
+      WHERE notification_id = ? AND provider = 'telegram' AND subscription_id = ?
+    `).get(notificationId, String(connection.id));
+    if (existing) return;
+    this.db.prepare(`
+      INSERT INTO notification_deliveries
+        (id, notification_id, provider, subscription_id, status, failure_reason, created_at, updated_at, attempt_count, next_attempt_at)
+      VALUES (?, ?, 'telegram', ?, 'queued', NULL, ?, ?, 0, NULL)
+    `).run(newId("dlv"), notificationId, String(connection.id), now, now);
+  }
+
+  async flushTelegramDeliveries(userId: string, notificationId?: string): Promise<void> {
+    const maxAttempts = envInt("ORACULO_TELEGRAM_MAX_ATTEMPTS", 3, 1, 10);
+    const now = nowIso();
+    const rows = this.db.prepare(`
+      SELECT d.*, n.user_id, c.chat_id, c.id AS connection_id, n.id AS notification_id
+      FROM notification_deliveries d
+      JOIN notifications n ON n.id = d.notification_id
+      JOIN telegram_connections c ON c.id = d.subscription_id AND c.status = 'ACTIVE'
+      WHERE n.user_id = ?
+        AND d.provider = 'telegram'
+        AND d.status IN ('queued','failed')
+        AND d.attempt_count < ?
+        AND (? IS NULL OR d.notification_id = ?)
+        AND (d.next_attempt_at IS NULL OR d.next_attempt_at <= ?)
+      ORDER BY d.created_at ASC
+      LIMIT 10
+    `).all(userId, maxAttempts, notificationId ?? null, notificationId ?? null, now) as Record<string, unknown>[];
+    for (const delivery of rows) {
+      try {
+        const notificationRow = this.db.prepare("SELECT * FROM notifications WHERE id = ? AND user_id = ?")
+          .get(String(delivery.notification_id), userId) as Record<string, unknown> | undefined;
+        if (!notificationRow) continue;
+        const user = this.getUser(userId);
+        const notification = notificationFromRow(notificationRow, user?.role ?? "user");
+        const message = notificationTelegramMessage(notification, user?.role ?? "user");
+        await this.sendTelegramMessage(String(delivery.chat_id), message);
+        this.db.prepare(`
+          UPDATE notification_deliveries
+          SET status = 'delivered', failure_reason = NULL, attempt_count = attempt_count + 1, updated_at = ?, next_attempt_at = NULL
+          WHERE id = ?
+        `).run(nowIso(), String(delivery.id));
+        this.db.prepare("UPDATE telegram_connections SET last_delivery_at = ?, updated_at = ? WHERE id = ?")
+          .run(nowIso(), nowIso(), String(delivery.connection_id));
+      } catch (err) {
+        const attempt = Number(delivery.attempt_count ?? 0) + 1;
+        const failure = sanitizeFailure(err) ?? "telegram delivery failed";
+        const permanent = failure.includes("chat not found") || failure.includes("bot was blocked") || failure.includes("forbidden");
+        if (permanent) {
+          this.db.prepare("UPDATE telegram_connections SET status = 'REVOKED', revoked_at = ?, updated_at = ? WHERE id = ?")
+            .run(nowIso(), nowIso(), String(delivery.connection_id));
+        }
+        const status = permanent || attempt >= maxAttempts ? "failed" : "queued";
+        const backoffMs = Math.min(15 * 60_000, 2 ** Math.max(0, attempt - 1) * 30_000);
+        const nextAttemptAt = status === "queued" ? new Date(Date.now() + backoffMs).toISOString() : null;
+        this.db.prepare(`
+          UPDATE notification_deliveries
+          SET status = ?, failure_reason = ?, attempt_count = ?, updated_at = ?, next_attempt_at = ?
+          WHERE id = ?
+        `).run(status, failure, attempt, nowIso(), nextAttemptAt, String(delivery.id));
+      }
+    }
+  }
+
+  private async sendTelegramMessage(chatId: string, text: string): Promise<void> {
+    if (process.env["ORACULO_TELEGRAM_MOCK"] === "true") return;
+    if (!telegramConfigured()) throw new Error("Telegram provider is not configured");
+    const response = await fetch(telegramApiUrl("sendMessage"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        disable_web_page_preview: true,
+      }),
+    });
+    if (!response.ok) {
+      let description = `telegram ${response.status}`;
+      try {
+        const payload = await response.json() as { description?: string };
+        if (payload.description) description = payload.description;
+      } catch {
+        // Telegram failures must not break the worker.
+      }
+      throw new Error(description);
+    }
+  }
+
   getPushPublicKey(): { publicKey: string | null; configured: boolean } {
     const publicKey = process.env["ORACULO_VAPID_PUBLIC_KEY"] ?? null;
     return { publicKey, configured: !!publicKey && !!process.env["ORACULO_VAPID_PRIVATE_KEY"] };
@@ -2011,6 +2212,105 @@ export class DemoStore {
   removeInvalidPushSubscription(userId: string, id: string, reason: unknown): void {
     this.db.prepare("UPDATE push_subscriptions SET revoked_at = ?, failure_reason = ?, updated_at = ? WHERE user_id = ? AND id = ?")
       .run(nowIso(), sanitizeFailure(reason), nowIso(), userId, id);
+  }
+
+  getTelegramStatus(userId: string): TelegramStatusDto {
+    const row = this.db.prepare("SELECT * FROM telegram_connections WHERE user_id = ? AND status = 'ACTIVE' ORDER BY linked_at DESC LIMIT 1")
+      .get(userId) as Record<string, unknown> | undefined;
+    return {
+      configured: telegramConfigured(),
+      connected: !!row,
+      botUsername: telegramBotUsername(),
+      telegramUsername: row?.telegram_username == null ? null : String(row.telegram_username),
+      linkedAt: row?.linked_at == null ? null : String(row.linked_at),
+      lastDeliveryAt: row?.last_delivery_at == null ? null : String(row.last_delivery_at),
+    };
+  }
+
+  createTelegramLinkCode(userId: string): TelegramLinkCodeDto {
+    if (!telegramConfigured()) throw new HttpError(503, "Telegram is not configured");
+    const now = Date.now();
+    const ttlMs = envInt("ORACULO_TELEGRAM_LINK_TTL_SECONDS", 600, 60, 3600) * 1000;
+    const expiresAt = new Date(now + ttlMs).toISOString();
+    const code = randomBytes(5).toString("base64url").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8).padEnd(8, "7");
+    const id = newId("tglc");
+    this.db.prepare("DELETE FROM telegram_link_codes WHERE user_id = ? AND (used_at IS NOT NULL OR expires_at <= ?)").run(userId, nowIso());
+    this.db.prepare(`
+      INSERT INTO telegram_link_codes (id, user_id, code_hash, expires_at, used_at, created_at)
+      VALUES (?, ?, ?, ?, NULL, ?)
+    `).run(id, userId, sha256(code), expiresAt, nowIso());
+    const botUsername = telegramBotUsername();
+    return {
+      code,
+      expiresAt,
+      botUsername,
+      deepLink: botUsername ? `https://t.me/${botUsername}?start=${encodeURIComponent(code)}` : null,
+    };
+  }
+
+  disconnectTelegram(userId: string): { disconnected: boolean } {
+    const result = this.db.prepare(`
+      UPDATE telegram_connections
+      SET status = 'REVOKED', revoked_at = ?, updated_at = ?
+      WHERE user_id = ? AND status = 'ACTIVE'
+    `).run(nowIso(), nowIso(), userId);
+    return { disconnected: result.changes > 0 };
+  }
+
+  processTelegramWebhook(body: unknown): { ok: boolean; linked: boolean; reason?: string } {
+    const update = body as Record<string, unknown>;
+    const message = update.message as Record<string, unknown> | undefined;
+    if (!message) return { ok: true, linked: false, reason: "ignored_update" };
+    const chat = message.chat as Record<string, unknown> | undefined;
+    const text = typeof message.text === "string" ? message.text.trim() : "";
+    if (!chat || String(chat.type) !== "private") return { ok: true, linked: false, reason: "private_chat_required" };
+    const match = text.match(/^\/start(?:@\w+)?\s+([A-Za-z0-9_-]{4,64})$/);
+    if (!match) return { ok: true, linked: false, reason: "link_code_required" };
+    const codeHash = sha256(match[1].toUpperCase());
+    const now = nowIso();
+    const codeRow = this.db.prepare(`
+      SELECT * FROM telegram_link_codes
+      WHERE code_hash = ? AND used_at IS NULL AND expires_at > ?
+      ORDER BY created_at DESC
+      LIMIT 1
+    `).get(codeHash, now) as Record<string, unknown> | undefined;
+    if (!codeRow) return { ok: true, linked: false, reason: "invalid_or_expired_code" };
+    const chatId = String(chat.id ?? "");
+    if (!chatId || chatId.length > 80) return { ok: true, linked: false, reason: "invalid_chat_id" };
+    const from = message.from as Record<string, unknown> | undefined;
+    const username = typeof from?.username === "string" ? from.username.slice(0, 120) : null;
+    this.transaction(() => {
+      this.db.prepare("UPDATE telegram_link_codes SET used_at = ? WHERE id = ? AND used_at IS NULL").run(now, String(codeRow.id));
+      this.db.prepare("UPDATE telegram_connections SET status = 'REVOKED', revoked_at = ?, updated_at = ? WHERE user_id = ? AND status = 'ACTIVE'")
+        .run(now, now, String(codeRow.user_id));
+      this.db.prepare("UPDATE telegram_connections SET status = 'REVOKED', revoked_at = ?, updated_at = ? WHERE chat_id = ? AND status = 'ACTIVE'")
+        .run(now, now, chatId);
+      this.db.prepare(`
+        INSERT INTO telegram_connections
+          (id, user_id, chat_id, telegram_username, status, linked_at, revoked_at, last_delivery_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 'ACTIVE', ?, NULL, NULL, ?, ?)
+      `).run(newId("tgl"), String(codeRow.user_id), chatId, username, now, now, now);
+    });
+    void this.sendTelegramMessage(chatId, "ORACULO — Telegram conectado com sucesso. Seus alertas do Oraculo podem chegar por aqui.").catch(() => undefined);
+    return { ok: true, linked: true };
+  }
+
+  createTelegramTestNotification(user: AuthUser): NotificationDto | null {
+    const status = this.getTelegramStatus(user.id);
+    if (!status.connected) throw new HttpError(409, "Telegram is not connected");
+    const prefs = this.getNotificationPreferences(user.id);
+    if (!prefs.telegram) this.putNotificationPreferences(user.id, { telegram: true });
+    const notification = this.createNotification(user.id, {
+      type: "test",
+      title: "Teste Telegram",
+      message: "Mensagem de teste enviada pelo Oraculo.",
+      severity: "info",
+      source: "SYSTEM",
+      idempotencyKey: `${user.id}:telegram_test:${Math.floor(Date.now() / 60_000)}`,
+      adminMetadata: user.role === "admin" ? { provider: "telegram" } : {},
+    });
+    if (notification) void this.flushTelegramDeliveries(user.id, notification.id);
+    return notification;
   }
 
   createTestNotification(user: AuthUser): NotificationDto | null {
