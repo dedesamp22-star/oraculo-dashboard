@@ -132,6 +132,9 @@ export interface WorkerDiagnosticUserDto {
   summary: string;
   decision: string;
   score: number | null;
+  scoreContextual?: number | null;
+  scoreOperacional?: number | null;
+  decisionState?: string | null;
   generatedAt: string;
   nextCycleAt: string | null;
 }
@@ -526,6 +529,11 @@ function tradeFromRow(row: Record<string, unknown>): DemoTrade {
 }
 
 function diagnosticUserFromRow(row: Record<string, unknown>): WorkerDiagnosticUserDto {
+  const userPayload = jsonParse<Record<string, unknown>>(row.user_json, {});
+  const optionalNumber = (value: unknown): number | null | undefined => {
+    if (value === undefined) return undefined;
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
+  };
   return {
     id: String(row.id),
     symbol: String(row.symbol),
@@ -535,6 +543,9 @@ function diagnosticUserFromRow(row: Record<string, unknown>): WorkerDiagnosticUs
     summary: String(row.summary),
     decision: String(row.decision),
     score: row.score == null ? null : Number(row.score),
+    scoreContextual: optionalNumber(userPayload.scoreContextual),
+    scoreOperacional: optionalNumber(userPayload.scoreOperacional),
+    decisionState: typeof userPayload.decisionState === "string" ? userPayload.decisionState : undefined,
     generatedAt: String(row.cycle_finished_at),
     nextCycleAt: row.next_cycle_at == null ? null : String(row.next_cycle_at),
   };

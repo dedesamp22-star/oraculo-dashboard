@@ -1,25 +1,22 @@
-import { mkdirSync } from 'node:fs';
-import { readdirSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
 import path from 'node:path';
+import ts from 'typescript';
 
 const workspaceRoot = fileURLToPath(new URL('../../../', import.meta.url));
-const pnpmRoot = path.join(workspaceRoot, 'node_modules', '.pnpm');
-const esbuildDir = readdirSync(pnpmRoot).find((name) => name.startsWith('esbuild@'));
-if (!esbuildDir) throw new Error('esbuild not found in pnpm store');
-const require = createRequire(path.join(pnpmRoot, esbuildDir, 'node_modules', 'esbuild', 'package.json'));
-const { build } = require('esbuild');
+const sourcePath = path.join(workspaceRoot, 'artifacts', 'shared', 'marketDecisionEngine.ts');
+const outDir = fileURLToPath(new URL('./.tmp/', import.meta.url));
+const outFile = path.join(outDir, 'marketRadar.mjs');
 
-mkdirSync(new URL('./.tmp/', import.meta.url), { recursive: true });
+mkdirSync(outDir, { recursive: true });
 
-await build({
-  absWorkingDir: fileURLToPath(new URL('../', import.meta.url)),
-  entryPoints: ['src/lib/marketRadar.ts'],
-  outfile: fileURLToPath(new URL('./.tmp/marketRadar.mjs', import.meta.url)),
-  bundle: true,
-  format: 'esm',
-  platform: 'node',
-  sourcemap: false,
-  logLevel: 'silent',
+const source = `${readFileSync(sourcePath, 'utf8')}\nexport { analyzeMarketDecision as analyzeMarketRadar };\n`;
+const output = ts.transpileModule(source, {
+  compilerOptions: {
+    module: ts.ModuleKind.ESNext,
+    target: ts.ScriptTarget.ES2022,
+    verbatimModuleSyntax: true,
+  },
 });
+
+writeFileSync(outFile, output.outputText);

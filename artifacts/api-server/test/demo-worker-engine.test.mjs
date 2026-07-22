@@ -11,7 +11,7 @@ const root = path.resolve(import.meta.dirname, "..");
 async function loadEngine() {
   const dir = mkdtempSync(path.join(tmpdir(), "oraculo-engine-"));
   const outfile = path.join(dir, "demo-worker-engine.mjs");
-  const source = readFileSync(path.join(root, "src", "lib", "demo-worker-engine.ts"), "utf8");
+  const source = readFileSync(path.join(root, "..", "shared", "marketDecisionEngine.ts"), "utf8");
   const output = ts.transpileModule(source, {
     compilerOptions: {
       module: ts.ModuleKind.ESNext,

@@ -10,7 +10,7 @@
       "@shared/*": ["../shared/*"]
     }
   },
-  "include": ["src", "../shared/appVersion.ts"],
+  "include": ["src", "../shared/*.ts"],
   "references": [
     {
       "path": "../../lib/db"

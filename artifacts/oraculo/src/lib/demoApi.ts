@@ -26,6 +26,9 @@ export interface WorkerDiagnosticUserDto {
   summary: string;
   decision: string;
   score: number | null;
+  scoreContextual?: number | null;
+  scoreOperacional?: number | null;
+  decisionState?: string | null;
   generatedAt: string;
   nextCycleAt: string | null;
 }

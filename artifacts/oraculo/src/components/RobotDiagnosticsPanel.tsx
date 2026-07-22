@@ -34,8 +34,10 @@ function AdminDetails({ diagnostic }: { diagnostic: WorkerDiagnosticAdminDto }) 
   const full = diagnostic.full;
   const indicators = (full.indicators ?? {}) as Record<string, unknown>;
   const score = (full.score ?? {}) as Record<string, unknown>;
+  const decision = (full.decision ?? {}) as Record<string, unknown>;
   const filters = (full.filters ?? {}) as { approved?: string[]; rejected?: string[]; all?: Array<Record<string, unknown>> };
   const reasons = (full.reasons ?? {}) as { confirmations?: string[]; blocked?: string[]; risks?: string[] };
+  const missingConditions = Array.isArray(decision.missingConditions) ? decision.missingConditions.map(String) : [];
   return (
     <div className="border-t border-border/50">
       <button
@@ -61,7 +63,12 @@ function AdminDetails({ diagnostic }: { diagnostic: WorkerDiagnosticAdminDto }) 
                 </div>
               ))}
               <div><span className="block uppercase text-muted-foreground">score bruto</span><span>{smallValue(score.raw)}</span></div>
+              <div><span className="block uppercase text-muted-foreground">contextual</span><span>{smallValue(score.contextual)}</span></div>
+              <div><span className="block uppercase text-muted-foreground">operacional</span><span>{smallValue(score.operacional)}</span></div>
               <div><span className="block uppercase text-muted-foreground">score final</span><span>{smallValue(score.final)}</span></div>
+              <div><span className="block uppercase text-muted-foreground">estado</span><span>{smallValue(decision.state)}</span></div>
+              <div><span className="block uppercase text-muted-foreground">gatilho</span><span>{smallValue(decision.triggerStage)}</span></div>
+              <div><span className="block uppercase text-muted-foreground">R/R</span><span>{smallValue(decision.rrStatus)}</span></div>
             </div>
           </div>
           <div className="border border-border/50 bg-background/20 p-3">
@@ -79,6 +86,8 @@ function AdminDetails({ diagnostic }: { diagnostic: WorkerDiagnosticAdminDto }) 
           <div className="md:col-span-2 border border-border/50 bg-background/20 p-3">
             <p className="text-[9px] font-mono uppercase tracking-[0.16em] text-muted-foreground">Motivo completo</p>
             <div className="mt-2 grid grid-cols-1 gap-1 text-[10px] font-mono text-muted-foreground">
+              {typeof decision.decisiveReason === 'string' && <span>Decisivo: {decision.decisiveReason}</span>}
+              {missingConditions.length > 0 && <span>Falta: {missingConditions.slice(0, 5).join(', ')}</span>}
               {[...(reasons.confirmations ?? []), ...(reasons.blocked ?? []), ...(reasons.risks ?? [])].slice(0, 12).map((reason, index) => (
                 <span key={`${reason}-${index}`}>{reason}</span>
               ))}
@@ -143,8 +152,11 @@ export function RobotDiagnosticsPanel({ user }: { user: AuthUser }) {
             <span className="text-2xl font-mono font-bold tabular-nums">{current?.score ?? '--'}</span>
           </div>
           <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2 text-[10px] font-mono">
+            <div><span className="block uppercase text-muted-foreground">Estado</span><span>{current?.decisionState ?? '--'}</span></div>
             <div><span className="block uppercase text-muted-foreground">Direcao</span><span>{current?.direction ?? '--'}</span></div>
             <div><span className="block uppercase text-muted-foreground">Qualidade</span><span>{current?.quality ?? '--'}</span></div>
+            <div><span className="block uppercase text-muted-foreground">Contexto</span><span>{current?.scoreContextual ?? '--'}</span></div>
+            <div><span className="block uppercase text-muted-foreground">Operacional</span><span>{current?.scoreOperacional ?? current?.score ?? '--'}</span></div>
             <div><span className="block uppercase text-muted-foreground">Horario</span><span>{fmtDate(current?.generatedAt)}</span></div>
             <div><span className="block uppercase text-muted-foreground">Proximo ciclo</span><span>{fmtDate(current?.nextCycleAt)}</span></div>
           </div>

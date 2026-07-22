@@ -86,11 +86,12 @@ export function useMarketRadar(enabled = true): MarketRadarState {
       const lastUpdate = new Date();
 
       setState((prev) => {
-        if (lastSignalKeyRef.current === next.signalKey && prev.analysis?.symbol === activeSymbol) {
+        const previousAnalysis = prev.analysis;
+        if (lastSignalKeyRef.current === next.signalKey && previousAnalysis?.symbol === activeSymbol) {
           return {
             analysis: {
               ...next,
-              generatedAt: prev.analysis.generatedAt,
+              generatedAt: previousAnalysis.generatedAt,
             },
             loading: false,
             error: null,
