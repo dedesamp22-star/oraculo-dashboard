@@ -29,6 +29,15 @@ test("service worker keeps API network-only and caches only static assets", () =
   assert.match(sw, /OFFLINE_URL = '\/offline\.html'/);
 });
 
+test("service worker supports safe push payloads without caching API data", () => {
+  const sw = readFileSync(path.join(dist, "sw.js"), "utf8");
+  assert.match(sw, /addEventListener\('push'/);
+  assert.match(sw, /showNotification/);
+  assert.match(sw, /notificationclick/);
+  assert.match(sw, /payload\.title/);
+  assert.doesNotMatch(sw, /password|cookie|oraculo_session|SQLite|strategySecret/i);
+});
+
 test("offline page does not expose private demo data", () => {
   const offline = readFileSync(path.join(dist, "offline.html"), "utf8");
   assert.match(offline, /Sem conexão|Sem conex/);

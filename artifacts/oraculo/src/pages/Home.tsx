@@ -26,6 +26,7 @@ import { MarketRadarPanel }  from '../components/MarketRadarPanel';
 import { DemoAgentsPanel }   from '../components/DemoAgentsPanel';
 import { RobotDiagnosticsPanel } from '../components/RobotDiagnosticsPanel';
 import { ControlledSimulationPanel } from '../components/ControlledSimulationPanel';
+import { NotificationsPanel } from '../components/NotificationsPanel';
 import { getAuth, loginUser, logoutUser, type AuthUser } from '../lib/demoApi';
 import { APP_DISPLAY_NAME, APP_NAME, APP_VERSION } from '@shared/appVersion';
 
@@ -1094,6 +1095,7 @@ export default function Home() {
         </div>
 
         <div className={`${mobileTab === 'panel' ? 'flex' : 'hidden'} lg:hidden flex-col gap-3`}>
+          <NotificationsPanel />
           <MobilePanelOverview session={demoSession} />
           <DemoAgentsPanel
             agents={demoAgents.agents}
@@ -1131,7 +1133,11 @@ export default function Home() {
         </div>
 
         <div className="hidden lg:block">
-        <MarketRadarPanel
+          <NotificationsPanel />
+        </div>
+
+        <div className="hidden lg:block">
+          <MarketRadarPanel
           analysis={radar.analysis}
           loading={radar.loading}
           error={radar.error}

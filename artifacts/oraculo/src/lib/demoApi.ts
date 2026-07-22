@@ -100,6 +100,50 @@ export interface ControlledSimulationEventDto {
   createdAt: string;
 }
 
+export type NotificationSeverity = 'info' | 'success' | 'warning' | 'critical';
+export type NotificationSource = 'DEMO' | 'HOMOLOGATION' | 'SYSTEM';
+
+export interface NotificationPreferences {
+  internal: boolean;
+  push: boolean;
+  telegram: boolean;
+  importantOnly: boolean;
+  includeBlockedEntries: boolean;
+  includeSimulation: boolean;
+  mutedUntil: string | null;
+  quietHours: { enabled: boolean; start: string; end: string };
+  enabledTypes: string[];
+}
+
+export interface NotificationDto {
+  id: string;
+  type: string;
+  title: string;
+  message: string;
+  severity: NotificationSeverity;
+  symbol: string | null;
+  source: NotificationSource;
+  relatedEventId: string | null;
+  readAt: string | null;
+  createdAt: string;
+  deliveryStatus: string;
+  failureReason: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface NotificationsResponse {
+  unreadCount: number;
+  items: NotificationDto[];
+}
+
+export interface PushSubscriptionDto {
+  id: string;
+  endpointHash: string;
+  userAgent: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return await apiJson<T>(path, {
     ...init,
@@ -229,6 +273,54 @@ export async function cancelControlledSimulation(id: string): Promise<Controlled
 
 export async function getControlledSimulationEvents(id: string): Promise<ControlledSimulationEventDto[]> {
   return await request<ControlledSimulationEventDto[]>(`/api/admin/simulations/${encodeURIComponent(id)}/events`);
+}
+
+export async function getNotifications(limit = 30, source?: NotificationSource): Promise<NotificationsResponse> {
+  const query = new URLSearchParams({ limit: String(limit) });
+  if (source) query.set('source', source);
+  return await request<NotificationsResponse>(`/api/notifications?${query.toString()}`);
+}
+
+export async function markNotificationRead(id: string): Promise<NotificationDto> {
+  return await request<NotificationDto>(`/api/notifications/${encodeURIComponent(id)}/read`, { method: 'POST' });
+}
+
+export async function markAllNotificationsRead(): Promise<{ read: number }> {
+  return await request<{ read: number }>('/api/notifications/read-all', { method: 'POST' });
+}
+
+export async function getNotificationPreferences(): Promise<NotificationPreferences> {
+  return await request<NotificationPreferences>('/api/notification-preferences');
+}
+
+export async function putNotificationPreferences(prefs: Partial<NotificationPreferences>): Promise<NotificationPreferences> {
+  return await request<NotificationPreferences>('/api/notification-preferences', {
+    method: 'PUT',
+    body: JSON.stringify(prefs),
+  });
+}
+
+export async function getPushPublicKey(): Promise<{ publicKey: string | null; configured: boolean }> {
+  return await request<{ publicKey: string | null; configured: boolean }>('/api/push/public-key');
+}
+
+export async function listPushSubscriptions(): Promise<PushSubscriptionDto[]> {
+  return await request<PushSubscriptionDto[]>('/api/push/subscriptions');
+}
+
+export async function subscribePush(subscription: PushSubscriptionJSON): Promise<PushSubscriptionDto> {
+  return await request<PushSubscriptionDto>('/api/push/subscribe', {
+    method: 'POST',
+    body: JSON.stringify(subscription),
+  });
+}
+
+export async function deletePushSubscription(id: string): Promise<{ removed: boolean }> {
+  return await request<{ removed: boolean }>(`/api/push/subscribe/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export async function sendTestNotification(): Promise<NotificationDto | null> {
+  return await request<NotificationDto | null>('/api/notifications/test', { method: 'POST' });
 }
 
 export async function persistOpenPosition(trade: DemoTrade): Promise<void> {

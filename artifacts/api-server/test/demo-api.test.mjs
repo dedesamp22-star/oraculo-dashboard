@@ -174,6 +174,30 @@ async function simulationEvents(base, cookie, id) {
   return await authedJson(base, cookie, `/api/admin/simulations/${id}/events`);
 }
 
+async function notifications(base, cookie, query = "") {
+  return await authedJson(base, cookie, `/api/notifications${query}`);
+}
+
+async function setNotificationPrefs(base, cookie, body) {
+  const res = await fetch(`${base}/api/notification-preferences`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Cookie: cookie },
+    body: JSON.stringify(body),
+  });
+  assert.equal(res.status, 200);
+  return await json(res);
+}
+
+async function subscribeDummyPush(base, cookie, endpoint) {
+  const res = await fetch(`${base}/api/push/subscribe`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: cookie },
+    body: JSON.stringify({ endpoint, keys: { p256dh: "dummy-p256dh", auth: "dummy-auth" } }),
+  });
+  assert.equal(res.status, 200);
+  return await json(res);
+}
+
 async function runHomologationTradeFlow(base, cookie, trade) {
   const initialSession = await authedJson(base, cookie, "/api/demo/session");
   assert.equal(initialSession.activeTrade, null);
@@ -696,6 +720,105 @@ test("controlled simulation covers stop, timeout, loss of strength, cancel and e
     assert.equal(state.session.activeTrade, null);
     const events = await simulationEvents(server.base, adminCookie, cancel.id);
     assert.ok(events.some((event) => event.step === "CANCEL"));
+  } finally {
+    await stopServer(server.child);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("notifications are private, idempotent, readable, preference-aware and push-ready", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "oraculo-notifications-"));
+  const dbPath = path.join(dir, "oraculo.sqlite");
+  const port = 5138;
+  const server = await startServer({ port, dbPath });
+  try {
+    assert.equal((await fetch(`${server.base}/api/notifications`)).status, 401);
+
+    const adminCookie = await login(server.base);
+    await createUser(server.base, adminCookie, {
+      username: "alertuser",
+      name: "Alert User",
+      password: "alert-user-safe-123",
+      role: "user",
+    });
+    const userCookie = await loginAs(server.base, "alertuser", "alert-user-safe-123");
+
+    let adminAlerts = await notifications(server.base, adminCookie);
+    assert.equal(adminAlerts.unreadCount, 0);
+
+    await subscribeDummyPush(server.base, adminCookie, "https://push.example.test/device-a");
+    await subscribeDummyPush(server.base, adminCookie, "https://push.example.test/device-b");
+    const pushList = await authedJson(server.base, adminCookie, "/api/push/subscriptions");
+    assert.equal(pushList.length, 2);
+    assert.equal(JSON.stringify(pushList).includes("dummy-auth"), false);
+
+    await setNotificationPrefs(server.base, adminCookie, { push: true, includeBlockedEntries: true });
+    await fetch(`${server.base}/api/notifications/test`, { method: "POST", headers: { Cookie: adminCookie } });
+    await fetch(`${server.base}/api/notifications/test`, { method: "POST", headers: { Cookie: adminCookie } });
+    adminAlerts = await notifications(server.base, adminCookie);
+    assert.equal(adminAlerts.items.filter((item) => item.type === "test").length, 1);
+
+    const trade = sampleTrade({ id: "alert_btc", pair: "BTCUSDT", positionSize: 2, remainingPositionSize: 2 });
+    await postPosition(server.base, adminCookie, trade);
+    await postPrice(server.base, adminCookie, trade.pair, trade.target1);
+    await postPrice(server.base, adminCookie, trade.pair, trade.target1);
+    await postPrice(server.base, adminCookie, trade.pair, trade.target1 + 1);
+    await postPrice(server.base, adminCookie, trade.pair, trade.target2);
+
+    adminAlerts = await notifications(server.base, adminCookie, "?limit=50");
+    const types = adminAlerts.items.map((item) => item.type);
+    assert.equal(types.filter((type) => type === "demo_entry_opened").length, 1);
+    assert.equal(types.filter((type) => type === "target1_hit").length, 1);
+    assert.equal(types.filter((type) => type === "partial_executed").length, 1);
+    assert.equal(types.filter((type) => type === "breakeven_moved").length, 1);
+    assert.equal(types.filter((type) => type === "trailing_updated").length <= 1, true);
+    assert.equal(types.filter((type) => type === "target2_hit").length, 1);
+    assert.equal(JSON.stringify(adminAlerts).includes("password"), false);
+    assert.equal(JSON.stringify(adminAlerts).includes("oraculo_session"), false);
+
+    const unreadBefore = adminAlerts.unreadCount;
+    await fetch(`${server.base}/api/notifications/${adminAlerts.items[0].id}/read`, { method: "POST", headers: { Cookie: adminCookie } });
+    adminAlerts = await notifications(server.base, adminCookie);
+    assert.equal(adminAlerts.unreadCount, unreadBefore - 1);
+    await fetch(`${server.base}/api/notifications/read-all`, { method: "POST", headers: { Cookie: adminCookie } });
+    adminAlerts = await notifications(server.base, adminCookie);
+    assert.equal(adminAlerts.unreadCount, 0);
+
+    const userAlerts = await notifications(server.base, userCookie, "?limit=50");
+    assert.equal(userAlerts.items.some((item) => item.relatedEventId === "alert_btc"), false);
+
+    await setNotificationPrefs(server.base, userCookie, { internal: false });
+    await fetch(`${server.base}/api/notifications/test`, { method: "POST", headers: { Cookie: userCookie } });
+    assert.equal((await notifications(server.base, userCookie)).items.length, 0);
+
+    await setNotificationPrefs(server.base, userCookie, { internal: true, quietHours: { enabled: true, start: "00:00", end: "23:59" } });
+    await fetch(`${server.base}/api/notifications/test`, { method: "POST", headers: { Cookie: userCookie } });
+    assert.equal((await notifications(server.base, userCookie)).items.length, 0);
+  } finally {
+    await stopServer(server.child);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("simulation notifications are marked HOMOLOGATION and normal demo history stays separate", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "oraculo-notifications-sim-"));
+  const dbPath = path.join(dir, "oraculo.sqlite");
+  const port = 5139;
+  const server = await startServer({ port, dbPath });
+  try {
+    const adminCookie = await login(server.base);
+    const sim = await startSimulation(server.base, adminCookie, { symbol: "SOLUSDT" });
+    await stepSimulation(server.base, adminCookie, sim.id, "OPEN");
+    await stepSimulation(server.base, adminCookie, sim.id, "TARGET1");
+    await stepSimulation(server.base, adminCookie, sim.id, "TARGET2");
+    const alerts = await notifications(server.base, adminCookie, "?source=HOMOLOGATION&limit=20");
+    assert.ok(alerts.items.some((item) => item.type === "simulation_started"));
+    assert.ok(alerts.items.some((item) => item.type === "simulation_event"));
+    assert.ok(alerts.items.some((item) => item.type === "simulation_completed"));
+    assert.equal(alerts.items.every((item) => item.source === "HOMOLOGATION"), true);
+    assert.equal(JSON.stringify(alerts).includes("CONTROLLED_SIMULATION"), true);
+    const realSession = await authedJson(server.base, adminCookie, "/api/demo/session");
+    assert.equal(realSession.history.some((trade) => trade.id.startsWith("sim_trade_")), false);
   } finally {
     await stopServer(server.child);
     rmSync(dir, { recursive: true, force: true });

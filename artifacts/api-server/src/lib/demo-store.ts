@@ -202,6 +202,45 @@ export interface ControlledSimulationEventDto {
   createdAt: string;
 }
 
+export type NotificationSeverity = "info" | "success" | "warning" | "critical";
+export type NotificationSource = "DEMO" | "HOMOLOGATION" | "SYSTEM";
+
+export interface NotificationPreferences {
+  internal: boolean;
+  push: boolean;
+  telegram: boolean;
+  importantOnly: boolean;
+  includeBlockedEntries: boolean;
+  includeSimulation: boolean;
+  mutedUntil: string | null;
+  quietHours: { enabled: boolean; start: string; end: string };
+  enabledTypes: string[];
+}
+
+export interface NotificationDto {
+  id: string;
+  type: string;
+  title: string;
+  message: string;
+  severity: NotificationSeverity;
+  symbol: string | null;
+  source: NotificationSource;
+  relatedEventId: string | null;
+  readAt: string | null;
+  createdAt: string;
+  deliveryStatus: string;
+  failureReason: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PushSubscriptionDto {
+  id: string;
+  endpointHash: string;
+  userAgent: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export class HttpError extends Error {
   constructor(public status: number, message: string) {
     super(message);
@@ -511,6 +550,78 @@ function simulationStatusFromRow(row: Record<string, unknown>): ControlledSimula
 
 function simulationTradeId(id: string): string {
   return `sim_trade_${id}`;
+}
+
+const DEFAULT_NOTIFICATION_TYPES = [
+  "automation_enabled",
+  "automation_disabled",
+  "opportunity_approved",
+  "demo_entry_opened",
+  "target1_hit",
+  "partial_executed",
+  "breakeven_moved",
+  "trailing_updated",
+  "target2_hit",
+  "stop_loss",
+  "loss_of_strength",
+  "timeout",
+  "worker_error",
+  "binance_error",
+  "sqlite_error",
+  "session_expired",
+  "simulation_started",
+  "simulation_event",
+  "simulation_completed",
+  "simulation_cancelled",
+  "test",
+];
+
+function defaultNotificationPreferences(): NotificationPreferences {
+  return {
+    internal: true,
+    push: false,
+    telegram: false,
+    importantOnly: false,
+    includeBlockedEntries: false,
+    includeSimulation: true,
+    mutedUntil: null,
+    quietHours: { enabled: false, start: "22:00", end: "07:00" },
+    enabledTypes: [...DEFAULT_NOTIFICATION_TYPES],
+  };
+}
+
+function notificationFromRow(row: Record<string, unknown>, role: UserRole): NotificationDto {
+  const dto: NotificationDto = {
+    id: String(row.id),
+    type: String(row.type),
+    title: String(row.title),
+    message: String(row.message),
+    severity: String(row.severity) as NotificationSeverity,
+    symbol: row.symbol == null ? null : String(row.symbol),
+    source: String(row.source) as NotificationSource,
+    relatedEventId: row.related_event_id == null ? null : String(row.related_event_id),
+    readAt: row.read_at == null ? null : String(row.read_at),
+    createdAt: String(row.created_at),
+    deliveryStatus: String(row.delivery_status),
+    failureReason: row.failure_reason == null ? null : String(row.failure_reason),
+  };
+  if (role === "admin") dto.metadata = jsonParse<Record<string, unknown>>(String(row.admin_metadata_json ?? "{}"), {});
+  return dto;
+}
+
+function pushSubscriptionFromRow(row: Record<string, unknown>): PushSubscriptionDto {
+  return {
+    id: String(row.id),
+    endpointHash: String(row.endpoint_hash),
+    userAgent: row.user_agent == null ? null : String(row.user_agent),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function sanitizeFailure(value: unknown): string | null {
+  if (value == null) return null;
+  return String(value).replace(/[A-Za-z0-9_-]{24,}/g, "[redacted]").slice(0, 300);
 }
 
 export class DemoStore {
@@ -873,6 +984,68 @@ export class DemoStore {
         this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (6, 'controlled_simulations', ?)").run(nowIso());
       });
     }
+    const v7 = this.db.prepare("SELECT version FROM schema_migrations WHERE version = 7").get();
+    if (!v7) {
+      this.transaction(() => {
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS notification_preferences (
+            user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            preferences_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          CREATE TABLE IF NOT EXISTS notifications (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            type TEXT NOT NULL,
+            title TEXT NOT NULL,
+            message TEXT NOT NULL,
+            severity TEXT NOT NULL CHECK (severity IN ('info','success','warning','critical')),
+            symbol TEXT,
+            source TEXT NOT NULL CHECK (source IN ('DEMO','HOMOLOGATION','SYSTEM')),
+            related_event_id TEXT,
+            idempotency_key TEXT NOT NULL,
+            read_at TEXT,
+            delivery_status TEXT NOT NULL,
+            failure_reason TEXT,
+            admin_metadata_json TEXT NOT NULL DEFAULT '{}',
+            user_metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL
+          );
+          CREATE UNIQUE INDEX IF NOT EXISTS notifications_dedupe_idx
+            ON notifications(user_id, idempotency_key);
+          CREATE INDEX IF NOT EXISTS notifications_user_time_idx
+            ON notifications(user_id, created_at);
+          CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            endpoint_hash TEXT NOT NULL,
+            endpoint TEXT NOT NULL,
+            p256dh TEXT NOT NULL,
+            auth TEXT NOT NULL,
+            user_agent TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            revoked_at TEXT,
+            failure_reason TEXT
+          );
+          CREATE UNIQUE INDEX IF NOT EXISTS push_subscriptions_user_endpoint_idx
+            ON push_subscriptions(user_id, endpoint_hash);
+          CREATE TABLE IF NOT EXISTS notification_deliveries (
+            id TEXT PRIMARY KEY,
+            notification_id TEXT NOT NULL REFERENCES notifications(id) ON DELETE CASCADE,
+            provider TEXT NOT NULL,
+            subscription_id TEXT,
+            status TEXT NOT NULL,
+            failure_reason TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS notification_deliveries_notification_idx
+            ON notification_deliveries(notification_id, provider);
+        `);
+        this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (7, 'notifications', ?)").run(nowIso());
+      });
+    }
   }
 
   private applyInitialAdminEnv(): void {
@@ -1176,6 +1349,43 @@ export class DemoStore {
         SELECT * FROM worker_diagnostics
         WHERE user_id = ? AND symbol = ? AND fingerprint = ?
       `).get(input.userId, input.symbol, input.fingerprint) as Record<string, unknown>;
+      if (input.status === "APPROVED") {
+        this.createNotification(input.userId, {
+          type: "opportunity_approved",
+          title: "Oportunidade aprovada",
+          message: `${input.symbol}: entrada ${input.direction} aprovada pelo robo.`,
+          severity: "success",
+          symbol: input.symbol,
+          source: "DEMO",
+          relatedEventId: input.fingerprint,
+          idempotencyKey: `${input.userId}:opportunity_approved:${input.symbol}:${input.fingerprint}`,
+          adminMetadata: input.adminPayload,
+        });
+      } else if (input.status === "BLOCKED") {
+        this.createNotification(input.userId, {
+          type: "entry_blocked_exhaustion",
+          title: "Entrada bloqueada",
+          message: `${input.symbol}: entrada bloqueada pelos filtros de risco/exaustao.`,
+          severity: "warning",
+          symbol: input.symbol,
+          source: "DEMO",
+          relatedEventId: input.fingerprint,
+          idempotencyKey: `${input.userId}:entry_blocked:${input.symbol}:${input.fingerprint}`,
+          adminMetadata: input.adminPayload,
+        });
+      } else if (input.status === "ERROR") {
+        this.createNotification(input.userId, {
+          type: "worker_error",
+          title: "Erro do worker",
+          message: `${input.symbol}: o ciclo do robo falhou.`,
+          severity: "critical",
+          symbol: input.symbol,
+          source: "SYSTEM",
+          relatedEventId: input.fingerprint,
+          idempotencyKey: `${input.userId}:worker_error:${input.symbol}:${input.fingerprint}`,
+          adminMetadata: { error: sanitizeFailure(input.lastError), engineVersion: input.engineVersion },
+        });
+      }
       return diagnosticAdminFromRow(row);
     });
   }
@@ -1303,6 +1513,17 @@ export class DemoStore {
           (id, user_id, simulation_user_id, status, scenario_json, current_step, started_at, updated_at)
         VALUES (?, ?, ?, 'ACTIVE', ?, 'CREATED', ?, ?)
       `).run(simulationId, admin.id, simulationUserId, JSON.stringify(scenario), now, now);
+      this.createNotification(admin.id, {
+        type: "simulation_started",
+        title: "HOMOLOGACAO iniciada",
+        message: `Simulacao controlada iniciada em ${scenario.symbol}.`,
+        severity: "info",
+        symbol: scenario.symbol,
+        source: "HOMOLOGATION",
+        relatedEventId: simulationId,
+        idempotencyKey: `${admin.id}:simulation_started:${simulationId}:${scenario.symbol}`,
+        adminMetadata: { scenario },
+      });
       return this.simulationDto(this.getSimulationRow(admin.id, simulationId));
     });
   }
@@ -1336,6 +1557,21 @@ export class DemoStore {
     `).run(id, simulationId, userId, step, idempotencyKey, status, message, JSON.stringify(snapshot), now);
     const row = this.db.prepare("SELECT * FROM controlled_simulation_events WHERE simulation_id = ? AND idempotency_key = ?")
       .get(simulationId, idempotencyKey) as Record<string, unknown>;
+    const type = step === "CANCEL"
+      ? "simulation_cancelled"
+      : ["TARGET2", "STOP", "TIMEOUT", "LOSS_OF_STRENGTH"].includes(step)
+        ? "simulation_completed"
+        : "simulation_event";
+    this.createNotification(userId, {
+      type,
+      title: type === "simulation_cancelled" ? "HOMOLOGACAO cancelada" : type === "simulation_completed" ? "HOMOLOGACAO concluida" : "Evento de HOMOLOGACAO",
+      message: `HOMOLOGACAO: ${message}`,
+      severity: status === "ERROR" ? "critical" : type === "simulation_cancelled" ? "warning" : "info",
+      source: "HOMOLOGATION",
+      relatedEventId: String(row.id),
+      idempotencyKey: `${userId}:${type}:${simulationId}:${idempotencyKey}`,
+      adminMetadata: { step, status, simulationId, snapshot },
+    });
     return simulationEventFromRow(row);
   }
 
@@ -1460,6 +1696,227 @@ export class DemoStore {
     return this.simulationDto(this.getSimulationRow(admin.id, id));
   }
 
+  getNotificationPreferences(userId: string): NotificationPreferences {
+    const row = this.db.prepare("SELECT preferences_json FROM notification_preferences WHERE user_id = ?").get(userId) as Record<string, unknown> | undefined;
+    const prefs = row ? jsonParse<NotificationPreferences>(String(row.preferences_json), defaultNotificationPreferences()) : defaultNotificationPreferences();
+    return { ...defaultNotificationPreferences(), ...prefs, quietHours: { ...defaultNotificationPreferences().quietHours, ...(prefs.quietHours ?? {}) } };
+  }
+
+  putNotificationPreferences(userId: string, body: unknown): NotificationPreferences {
+    const input = body as Partial<NotificationPreferences>;
+    const current = this.getNotificationPreferences(userId);
+    const next: NotificationPreferences = {
+      ...current,
+      internal: input.internal === undefined ? current.internal : input.internal === true,
+      push: input.push === undefined ? current.push : input.push === true,
+      telegram: input.telegram === undefined ? current.telegram : input.telegram === true,
+      importantOnly: input.importantOnly === undefined ? current.importantOnly : input.importantOnly === true,
+      includeBlockedEntries: input.includeBlockedEntries === undefined ? current.includeBlockedEntries : input.includeBlockedEntries === true,
+      includeSimulation: input.includeSimulation === undefined ? current.includeSimulation : input.includeSimulation === true,
+      mutedUntil: typeof input.mutedUntil === "string" ? input.mutedUntil : input.mutedUntil === null ? null : current.mutedUntil,
+      quietHours: typeof input.quietHours === "object" && input.quietHours
+        ? { ...current.quietHours, ...input.quietHours, enabled: input.quietHours.enabled === true }
+        : current.quietHours,
+      enabledTypes: Array.isArray(input.enabledTypes)
+        ? input.enabledTypes.filter((item) => typeof item === "string").slice(0, 80)
+        : current.enabledTypes,
+    };
+    this.db.prepare(`
+      INSERT INTO notification_preferences (user_id, preferences_json, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(user_id) DO UPDATE SET preferences_json = excluded.preferences_json, updated_at = excluded.updated_at
+    `).run(userId, JSON.stringify(next), nowIso());
+    return next;
+  }
+
+  private notificationAllowed(userId: string, input: { type: string; severity: NotificationSeverity; source: NotificationSource }): boolean {
+    const prefs = this.getNotificationPreferences(userId);
+    if (!prefs.internal) return false;
+    if (prefs.mutedUntil && Date.parse(prefs.mutedUntil) > Date.now()) return false;
+    if (input.source === "HOMOLOGATION" && !prefs.includeSimulation) return false;
+    if (input.type === "entry_blocked_exhaustion" && !prefs.includeBlockedEntries) return false;
+    if (prefs.importantOnly && !["warning", "critical"].includes(input.severity)) return false;
+    if (prefs.enabledTypes.length > 0 && !prefs.enabledTypes.includes(input.type)) return false;
+    if (prefs.quietHours.enabled && !["critical"].includes(input.severity)) {
+      const now = new Date();
+      const current = now.getHours() * 60 + now.getMinutes();
+      const [startH, startM] = prefs.quietHours.start.split(":").map(Number);
+      const [endH, endM] = prefs.quietHours.end.split(":").map(Number);
+      const start = (Number.isFinite(startH) ? startH : 22) * 60 + (Number.isFinite(startM) ? startM : 0);
+      const end = (Number.isFinite(endH) ? endH : 7) * 60 + (Number.isFinite(endM) ? endM : 0);
+      const quiet = start <= end ? current >= start && current < end : current >= start || current < end;
+      if (quiet) return false;
+    }
+    return true;
+  }
+
+  createNotification(userId: string, input: {
+    type: string;
+    title: string;
+    message: string;
+    severity?: NotificationSeverity;
+    symbol?: string | null;
+    source?: NotificationSource;
+    relatedEventId?: string | null;
+    idempotencyKey?: string;
+    adminMetadata?: Record<string, unknown>;
+    userMetadata?: Record<string, unknown>;
+  }): NotificationDto | null {
+    const source = input.source ?? "DEMO";
+    const severity = input.severity ?? "info";
+    const type = input.type.slice(0, 120);
+    if (!this.notificationAllowed(userId, { type, severity, source })) return null;
+    const symbol = input.symbol ? input.symbol.toUpperCase().slice(0, 32) : null;
+    const relatedEventId = input.relatedEventId?.slice(0, 160) ?? null;
+    const idempotencyKey = input.idempotencyKey ?? [userId, type, relatedEventId ?? "none", symbol ?? "none"].join(":");
+    const now = nowIso();
+    const id = newId("ntf");
+    this.db.prepare(`
+      INSERT OR IGNORE INTO notifications
+        (id, user_id, type, title, message, severity, symbol, source, related_event_id, idempotency_key,
+         delivery_status, failure_reason, admin_metadata_json, user_metadata_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'internal', NULL, ?, ?, ?)
+    `).run(
+      id,
+      userId,
+      type,
+      input.title.slice(0, 180),
+      input.message.slice(0, 600),
+      severity,
+      symbol,
+      source,
+      relatedEventId,
+      idempotencyKey.slice(0, 240),
+      JSON.stringify(input.adminMetadata ?? {}),
+      JSON.stringify(input.userMetadata ?? {}),
+      now,
+    );
+    this.pruneNotifications(userId);
+    const row = this.db.prepare("SELECT * FROM notifications WHERE user_id = ? AND idempotency_key = ?").get(userId, idempotencyKey.slice(0, 240)) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    this.queuePushDeliveries(userId, String(row.id));
+    return notificationFromRow(row, this.getUser(userId)?.role ?? "user");
+  }
+
+  private pruneNotifications(userId: string): void {
+    const keep = envInt("ORACULO_NOTIFICATION_LIMIT", 200, 50, 2000);
+    this.db.prepare(`
+      DELETE FROM notifications
+      WHERE user_id = ?
+        AND id NOT IN (
+          SELECT id FROM notifications
+          WHERE user_id = ?
+          ORDER BY created_at DESC
+          LIMIT ?
+        )
+    `).run(userId, userId, keep);
+  }
+
+  getNotifications(user: AuthUser, query: unknown = {}) {
+    const input = query as Record<string, unknown>;
+    const limit = Math.max(1, Math.min(100, Math.floor(Number(input.limit ?? 30))));
+    const rows = this.db.prepare(`
+      SELECT * FROM notifications
+      WHERE user_id = ?
+        AND (? IS NULL OR type = ?)
+        AND (? IS NULL OR source = ?)
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(
+      user.id,
+      typeof input.type === "string" && input.type ? input.type : null,
+      typeof input.type === "string" && input.type ? input.type : null,
+      typeof input.source === "string" && input.source ? input.source : null,
+      typeof input.source === "string" && input.source ? input.source : null,
+      limit,
+    ) as Record<string, unknown>[];
+    const unread = this.db.prepare("SELECT COUNT(*) AS count FROM notifications WHERE user_id = ? AND read_at IS NULL").get(user.id) as Record<string, unknown>;
+    return { unreadCount: Number(unread.count ?? 0), items: rows.map((row) => notificationFromRow(row, user.role)) };
+  }
+
+  markNotificationRead(userId: string, id: string): NotificationDto {
+    this.db.prepare("UPDATE notifications SET read_at = COALESCE(read_at, ?) WHERE user_id = ? AND id = ?").run(nowIso(), userId, id);
+    const row = this.db.prepare("SELECT * FROM notifications WHERE user_id = ? AND id = ?").get(userId, id) as Record<string, unknown> | undefined;
+    if (!row) throw new HttpError(404, "notification not found");
+    return notificationFromRow(row, this.getUser(userId)?.role ?? "user");
+  }
+
+  markAllNotificationsRead(userId: string): { read: number } {
+    const result = this.db.prepare("UPDATE notifications SET read_at = COALESCE(read_at, ?) WHERE user_id = ? AND read_at IS NULL").run(nowIso(), userId);
+    return { read: Number(result.changes) };
+  }
+
+  private queuePushDeliveries(userId: string, notificationId: string): void {
+    const prefs = this.getNotificationPreferences(userId);
+    if (!prefs.push) return;
+    const subscriptions = this.db.prepare("SELECT * FROM push_subscriptions WHERE user_id = ? AND revoked_at IS NULL").all(userId) as Record<string, unknown>[];
+    for (const subscription of subscriptions) {
+      this.db.prepare(`
+        INSERT INTO notification_deliveries
+          (id, notification_id, provider, subscription_id, status, failure_reason, created_at, updated_at)
+        VALUES (?, ?, 'webpush', ?, 'queued', NULL, ?, ?)
+      `).run(newId("dlv"), notificationId, String(subscription.id), nowIso(), nowIso());
+    }
+  }
+
+  getPushPublicKey(): { publicKey: string | null; configured: boolean } {
+    const publicKey = process.env["ORACULO_VAPID_PUBLIC_KEY"] ?? null;
+    return { publicKey, configured: !!publicKey && !!process.env["ORACULO_VAPID_PRIVATE_KEY"] };
+  }
+
+  listPushSubscriptions(userId: string): PushSubscriptionDto[] {
+    return (this.db.prepare("SELECT * FROM push_subscriptions WHERE user_id = ? AND revoked_at IS NULL ORDER BY updated_at DESC").all(userId) as Record<string, unknown>[])
+      .map(pushSubscriptionFromRow);
+  }
+
+  subscribePush(userId: string, body: unknown, userAgent?: string): PushSubscriptionDto {
+    const input = body as Record<string, unknown>;
+    const endpoint = nonEmptyString(input.endpoint, "endpoint", 2000);
+    const keys = input.keys as Record<string, unknown> | undefined;
+    const p256dh = nonEmptyString(keys?.p256dh, "p256dh", 500);
+    const auth = nonEmptyString(keys?.auth, "auth", 500);
+    const endpointHash = createHash("sha256").update(endpoint).digest("hex");
+    const now = nowIso();
+    const id = newId("push");
+    this.db.prepare(`
+      INSERT INTO push_subscriptions (id, user_id, endpoint_hash, endpoint, p256dh, auth, user_agent, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(user_id, endpoint_hash) DO UPDATE SET
+        endpoint = excluded.endpoint,
+        p256dh = excluded.p256dh,
+        auth = excluded.auth,
+        user_agent = excluded.user_agent,
+        revoked_at = NULL,
+        failure_reason = NULL,
+        updated_at = excluded.updated_at
+    `).run(id, userId, endpointHash, endpoint, p256dh, auth, userAgent ?? null, now, now);
+    const row = this.db.prepare("SELECT * FROM push_subscriptions WHERE user_id = ? AND endpoint_hash = ?").get(userId, endpointHash) as Record<string, unknown>;
+    return pushSubscriptionFromRow(row);
+  }
+
+  deletePushSubscription(userId: string, id: string): { removed: boolean } {
+    const result = this.db.prepare("UPDATE push_subscriptions SET revoked_at = ?, updated_at = ? WHERE user_id = ? AND id = ? AND revoked_at IS NULL")
+      .run(nowIso(), nowIso(), userId, id);
+    return { removed: result.changes > 0 };
+  }
+
+  removeInvalidPushSubscription(userId: string, id: string, reason: unknown): void {
+    this.db.prepare("UPDATE push_subscriptions SET revoked_at = ?, failure_reason = ?, updated_at = ? WHERE user_id = ? AND id = ?")
+      .run(nowIso(), sanitizeFailure(reason), nowIso(), userId, id);
+  }
+
+  createTestNotification(user: AuthUser): NotificationDto | null {
+    return this.createNotification(user.id, {
+      type: "test",
+      title: "Teste de alerta",
+      message: "Alerta interno e Push preparados para este dispositivo.",
+      severity: "info",
+      source: "SYSTEM",
+      idempotencyKey: `${user.id}:test:${Math.floor(Date.now() / 60_000)}`,
+      adminMetadata: user.role === "admin" ? { provider: "internal-webpush", telegram: "prepared" } : {},
+    });
+  }
+
   tradeManagementSettings(userId: string) {
     return this.getSetting(userId, "demo.tradeManagement", {
       maxDurationMs: DEFAULT_MAX_DURATION_MS,
@@ -1476,6 +1933,16 @@ export class DemoStore {
     const symbol = typeof input.symbol === "string" && input.symbol.trim() ? input.symbol.toUpperCase() : "BTCUSDT";
     const next = { enabled, symbol };
     this.setSetting(userId, "demo.automation", next);
+    this.createNotification(userId, {
+      type: enabled ? "automation_enabled" : "automation_disabled",
+      title: enabled ? "Automacao ativada" : "Automacao desativada",
+      message: enabled ? `Robo demo ativado para ${symbol}.` : "Robo demo desativado.",
+      severity: enabled ? "success" : "warning",
+      symbol,
+      source: "DEMO",
+      relatedEventId: `automation:${symbol}`,
+      idempotencyKey: `${userId}:automation:${enabled}:${symbol}:${Math.floor(Date.now() / 60_000)}`,
+    });
     return next;
   }
 
@@ -1567,6 +2034,17 @@ export class DemoStore {
       throw err;
     }
     this.setSetting(userId, `demo.priceHistory.${position.id}`, [{ price: position.entry, at: position.openTime }]);
+    this.createNotification(userId, {
+      type: "demo_entry_opened",
+      title: "Entrada demo aberta",
+      message: `${position.pair}: ${position.direction} aberta em ${position.entry}.`,
+      severity: "success",
+      symbol: position.pair,
+      source: "DEMO",
+      relatedEventId: position.id,
+      idempotencyKey: `${userId}:demo_entry_opened:${position.id}:${position.pair}`,
+      adminMetadata: { trade: position },
+    });
     return position;
   }
 
@@ -1795,6 +2273,39 @@ export class DemoStore {
     stats.maxDrawdown = Math.max(stats.maxDrawdown, stats.peakBalance - newBalance);
     stats.safetyLimited = isSafetyLimited(stats);
     this.putAccount(userId, { balance: newBalance, configuredBalance: account.configuredBalance, dailyStats: stats });
+    this.createNotification(userId, {
+      type: "target1_hit",
+      title: "Alvo 1 atingido",
+      message: `${latest.pair}: Alvo 1 atingido em ${latest.target1}.`,
+      severity: "success",
+      symbol: latest.pair,
+      source: "DEMO",
+      relatedEventId: latest.id,
+      idempotencyKey: `${userId}:target1_hit:${latest.id}:${latest.pair}`,
+      adminMetadata: { tradeId: latest.id, target1: latest.target1 },
+    });
+    this.createNotification(userId, {
+      type: "partial_executed",
+      title: "Parcial executada",
+      message: `${latest.pair}: parcial de 50% realizada; PnL ${partialPnlUSDC.toFixed(4)}.`,
+      severity: "success",
+      symbol: latest.pair,
+      source: "DEMO",
+      relatedEventId: latest.id,
+      idempotencyKey: `${userId}:partial_executed:${latest.id}:${latest.pair}`,
+      adminMetadata: { closedSize, remainingPositionSize, partialPnlUSDC },
+    });
+    this.createNotification(userId, {
+      type: "breakeven_moved",
+      title: "Stop em breakeven",
+      message: `${latest.pair}: stop movido para ${stopLoss.toFixed(8)}.`,
+      severity: "success",
+      symbol: latest.pair,
+      source: "DEMO",
+      relatedEventId: latest.id,
+      idempotencyKey: `${userId}:breakeven_moved:${latest.id}:${latest.pair}`,
+      adminMetadata: { stopLoss, bufferPct },
+    });
     return withReason;
   }
 
@@ -1819,6 +2330,18 @@ export class DemoStore {
     this.db.prepare("UPDATE demo_positions SET stop_loss = ?, updated_at = ? WHERE user_id = ? AND id = ? AND status = 'OPEN'")
       .run(nextStop, nowIso(), userId, trade.id);
     const next = { ...trade, stopLoss: nextStop };
+    const bucket = Math.floor(Date.now() / envInt("ORACULO_TRAILING_ALERT_COOLDOWN_MS", 300_000, 60_000, 3_600_000));
+    this.createNotification(userId, {
+      type: "trailing_updated",
+      title: "Trailing atualizado",
+      message: `${trade.pair}: stop ajustado para ${nextStop.toFixed(8)}.`,
+      severity: "info",
+      symbol: trade.pair,
+      source: "DEMO",
+      relatedEventId: trade.id,
+      idempotencyKey: `${userId}:trailing_updated:${trade.id}:${bucket}`,
+      adminMetadata: { nextStop, adaptivePct, price },
+    });
     return this.appendPositionReason(userId, next, `TRAILING: stop ajustado para ${nextStop.toFixed(8)} usando ${(adaptivePct * 100).toFixed(3)}% adaptativo pela volatilidade recente.`);
   }
 
@@ -1896,6 +2419,24 @@ export class DemoStore {
     stats.maxDrawdown = Math.max(stats.maxDrawdown, stats.peakBalance - newBalance);
     stats.safetyLimited = stats.totalTrades >= 8 || stats.consecutiveLosses >= 3 || stats.dailyPnL <= -(stats.startOfDayBalance * 0.03);
     this.putAccount(userId, { balance: newBalance, configuredBalance: account.configuredBalance, dailyStats: stats });
+    const alertType = exitReason === "TARGET_2"
+      ? "target2_hit"
+      : exitReason === "TIMEOUT"
+        ? "timeout"
+        : exitReason === "LOSS_OF_STRENGTH"
+          ? "loss_of_strength"
+          : "stop_loss";
+    this.createNotification(userId, {
+      type: alertType,
+      title: exitReason === "TARGET_2" ? "Alvo 2 atingido" : exitReason === "TIMEOUT" ? "Fechamento por timeout" : exitReason === "LOSS_OF_STRENGTH" ? "Fechamento por perda de forca" : "Stop acionado",
+      message: `${position.pair}: posicao encerrada por ${exitReason}; PnL ${pnlUSDC.toFixed(4)}.`,
+      severity: exitReason === "TARGET_2" ? "success" : exitReason === "BREAKEVEN" ? "info" : "warning",
+      symbol: position.pair,
+      source: "DEMO",
+      relatedEventId: position.id,
+      idempotencyKey: `${userId}:${alertType}:${position.id}:${position.pair}`,
+      adminMetadata: { exitReason, pnlUSDC, status, closePrice },
+    });
     return closed;
   }
 
