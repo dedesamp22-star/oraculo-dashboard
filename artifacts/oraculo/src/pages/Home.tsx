@@ -24,6 +24,7 @@ import { DemoHistoryPanel }  from '../components/DemoHistoryPanel';
 import { DemoStatsPanel }    from '../components/DemoStatsPanel';
 import { MarketRadarPanel }  from '../components/MarketRadarPanel';
 import { DemoAgentsPanel }   from '../components/DemoAgentsPanel';
+import { RobotDiagnosticsPanel } from '../components/RobotDiagnosticsPanel';
 import { getAuth, loginUser, logoutUser, type AuthUser } from '../lib/demoApi';
 import { APP_DISPLAY_NAME, APP_NAME, APP_VERSION } from '@shared/appVersion';
 
@@ -1071,6 +1072,7 @@ export default function Home() {
             symbol={radar.symbol}
             onSymbolChange={radar.setSymbol}
           />
+          <RobotDiagnosticsPanel user={authUser} />
 
           <button
             onClick={() => setMobileChartOpen(open => !open)}
@@ -1100,6 +1102,7 @@ export default function Home() {
             selectedSymbol={radar.symbol}
             onSelectSymbol={radar.setSymbol}
           />
+          <RobotDiagnosticsPanel user={authUser} />
           <MarketRadarPanel
             analysis={radar.analysis}
             loading={radar.loading}
@@ -1145,6 +1148,10 @@ export default function Home() {
           selectedSymbol={radar.symbol}
           onSelectSymbol={radar.setSymbol}
         />
+        </div>
+
+        <div className="hidden lg:block">
+          <RobotDiagnosticsPanel user={authUser} />
         </div>
 
         <section className="hidden lg:block bg-card/50 backdrop-blur-md border border-border p-4 sm:p-6 relative overflow-hidden">

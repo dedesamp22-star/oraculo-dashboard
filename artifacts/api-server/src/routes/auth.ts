@@ -63,6 +63,15 @@ export const requireAuth: RequestHandler = (req, res, next) => {
   next();
 };
 
+export const requireAdmin: RequestHandler = (req, res, next) => {
+  const user = (req as AuthenticatedRequest).user;
+  if (!user || user.role !== "admin") {
+    res.status(403).json({ error: "Admin required" });
+    return;
+  }
+  next();
+};
+
 function handle(res: { status: (code: number) => { json: (body: unknown) => void }; json: (body: unknown) => void }, fn: () => unknown): void {
   try {
     res.json(fn());

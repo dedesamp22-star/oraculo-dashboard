@@ -14,6 +14,36 @@ export interface AuthState {
   user?: AuthUser;
 }
 
+export type WorkerDiagnosticStatus = 'APPROVED' | 'BLOCKED' | 'WAIT' | 'ERROR';
+
+export interface WorkerDiagnosticUserDto {
+  id: string;
+  symbol: string;
+  status: WorkerDiagnosticStatus;
+  direction: string;
+  quality: string;
+  summary: string;
+  decision: string;
+  score: number | null;
+  generatedAt: string;
+  nextCycleAt: string | null;
+}
+
+export interface WorkerDiagnosticAdminDto extends WorkerDiagnosticUserDto {
+  workerActive: boolean;
+  automationActive: boolean;
+  cycleDurationMs: number;
+  latencyMs: number | null;
+  lastError: string | null;
+  engineVersion: string;
+  full: Record<string, unknown>;
+}
+
+export interface WorkerDiagnosticsResponse {
+  current: WorkerDiagnosticUserDto | WorkerDiagnosticAdminDto | null;
+  history: Array<WorkerDiagnosticUserDto | WorkerDiagnosticAdminDto>;
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return await apiJson<T>(path, {
     ...init,
@@ -113,6 +143,10 @@ export async function submitDemoPrice(price: number, pair?: string): Promise<Dem
     method: 'POST',
     body: JSON.stringify({ price, pair }),
   });
+}
+
+export async function getWorkerDiagnostics(limit = 10): Promise<WorkerDiagnosticsResponse> {
+  return await request<WorkerDiagnosticsResponse>(`/api/worker/diagnostics?limit=${limit}`);
 }
 
 export async function persistOpenPosition(trade: DemoTrade): Promise<void> {

@@ -177,6 +177,75 @@ async function runHomologationTradeFlow(base, cookie, trade) {
   return closed;
 }
 
+function getUserId(dbPath, username) {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const row = db.prepare("SELECT id FROM users WHERE username = ?").get(username);
+    assert.ok(row?.id, `missing user ${username}`);
+    return String(row.id);
+  } finally {
+    db.close();
+  }
+}
+
+function upsertDiagnostic(db, {
+  userId,
+  symbol = "BTCUSDT",
+  status = "WAIT",
+  decision = "SEM ENTRADA",
+  direction = "AGUARDAR",
+  score = 0,
+  fingerprint = `${userId}:${symbol}:${status}`,
+  minutesAgo = 0,
+  adminPayload = {},
+  userPayload = {},
+}) {
+  const finished = new Date(Date.now() - minutesAgo * 60_000).toISOString();
+  const started = new Date(Date.now() - minutesAgo * 60_000 - 1200).toISOString();
+  const summary = userPayload.summary ?? `${symbol} ${status}`;
+  const quality = userPayload.quality ?? (score >= 70 ? "valida" : "aguardar");
+  db.prepare(`
+    INSERT INTO worker_diagnostics
+      (id, user_id, symbol, status, worker_active, automation_active, cycle_started_at, cycle_finished_at,
+       cycle_duration_ms, latency_ms, decision, score, direction, quality, summary, next_cycle_at, last_error,
+       engine_version, fingerprint, admin_json, user_json, created_at, updated_at)
+    VALUES (?, ?, ?, ?, 1, 1, ?, ?, 1200, 48, ?, ?, ?, ?, ?, ?, ?, '0.5', ?, ?, ?, ?, ?)
+    ON CONFLICT(user_id, symbol, fingerprint) DO UPDATE SET
+      cycle_finished_at = excluded.cycle_finished_at,
+      score = excluded.score,
+      summary = excluded.summary,
+      admin_json = excluded.admin_json,
+      user_json = excluded.user_json,
+      updated_at = excluded.updated_at
+  `).run(
+    `diag_${userId}_${symbol}_${fingerprint}`.replace(/[^a-zA-Z0-9_]/g, "_"),
+    userId,
+    symbol,
+    status,
+    started,
+    finished,
+    decision,
+    score,
+    direction,
+    quality,
+    summary,
+    new Date(Date.now() + 30_000).toISOString(),
+    status === "ERROR" ? "simulated worker error" : null,
+    fingerprint,
+    JSON.stringify({
+      symbol,
+      indicators: { ema9: 100, ema21: 99.8, ema200: 98.4, atr: 12, volumeRelative: 1.2 },
+      filters: { approved: ["Tendencia 1H"], rejected: status === "BLOCKED" ? ["R/R"] : [], all: [] },
+      score: { raw: score + 5, final: score, penalties: status === "BLOCKED" ? ["R/R"] : [] },
+      strategySecret: "admin-only",
+      ...adminPayload,
+    }),
+    JSON.stringify({ symbol, status, direction, quality, summary, ...userPayload }),
+    finished,
+    finished,
+  );
+}
+
 test("0.4 homologation integrated flow persists and isolates admin and second user", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "oraculo-demo-homologation-"));
   const dbPath = path.join(dir, "oraculo.sqlite");
@@ -354,6 +423,75 @@ test("multiuser auth isolates demo data and protects sessions", async () => {
     assert.equal(logout.status, 200);
     const afterLogout = await fetch(`${server.base}/api/demo/session`, { headers: { Cookie: aliceCookie } });
     assert.equal(afterLogout.status, 401);
+  } finally {
+    await stopServer(server.child);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("worker diagnostics API separates admin details, user DTOs, history, dedupe, and isolation", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "oraculo-worker-diagnostics-"));
+  const dbPath = path.join(dir, "oraculo.sqlite");
+  const port = 5134;
+  let server = await startServer({ port, dbPath });
+  try {
+    const unauthorized = await fetch(`${server.base}/api/worker/diagnostics`);
+    assert.equal(unauthorized.status, 401);
+
+    const adminCookie = await login(server.base);
+    await createUser(server.base, adminCookie, {
+      username: "cliente",
+      name: "Cliente",
+      password: "cliente-safe-123",
+      role: "user",
+    });
+    const userCookie = await loginAs(server.base, "cliente", "cliente-safe-123");
+    const adminId = getUserId(dbPath, "admin");
+    const userId = getUserId(dbPath, "cliente");
+
+    const db = new DatabaseSync(dbPath);
+    try {
+      upsertDiagnostic(db, { userId: adminId, symbol: "BTCUSDT", status: "WAIT", decision: "SEM ENTRADA", direction: "AGUARDAR", score: 35, fingerprint: "btc-wait", minutesAgo: 6 });
+      upsertDiagnostic(db, { userId: adminId, symbol: "ETHUSDT", status: "APPROVED", decision: "BUY", direction: "COMPRA", score: 82, fingerprint: "eth-buy", minutesAgo: 5 });
+      upsertDiagnostic(db, { userId: adminId, symbol: "SOLUSDT", status: "APPROVED", decision: "SELL", direction: "VENDA", score: 78, fingerprint: "sol-sell", minutesAgo: 4 });
+      upsertDiagnostic(db, { userId: adminId, symbol: "BTCUSDT", status: "BLOCKED", decision: "SEM ENTRADA", direction: "AGUARDAR", score: 62, fingerprint: "btc-blocked", minutesAgo: 3 });
+      upsertDiagnostic(db, { userId: adminId, symbol: "ETHUSDT", status: "ERROR", decision: "ERROR", direction: "ERRO", score: null, fingerprint: "eth-error", minutesAgo: 2 });
+      upsertDiagnostic(db, { userId: adminId, symbol: "SOLUSDT", status: "WAIT", decision: "SEM ENTRADA", direction: "AGUARDAR", score: 40, fingerprint: "dedupe-window", minutesAgo: 1, userPayload: { summary: "primeira leitura" } });
+      upsertDiagnostic(db, { userId: adminId, symbol: "SOLUSDT", status: "WAIT", decision: "SEM ENTRADA", direction: "AGUARDAR", score: 44, fingerprint: "dedupe-window", minutesAgo: 0, userPayload: { summary: "leitura atualizada" } });
+      upsertDiagnostic(db, { userId, symbol: "BTCUSDT", status: "BLOCKED", decision: "SEM ENTRADA", direction: "AGUARDAR", score: 51, fingerprint: "user-btc-blocked", minutesAgo: 0 });
+    } finally {
+      db.close();
+    }
+
+    const userAdminRoute = await fetch(`${server.base}/api/worker/diagnostics/admin`, { headers: { Cookie: userCookie } });
+    assert.equal(userAdminRoute.status, 403);
+
+    const userDiagnostics = await authedJson(server.base, userCookie, "/api/worker/diagnostics?limit=10");
+    assert.equal(userDiagnostics.history.length, 1);
+    assert.equal(userDiagnostics.current.symbol, "BTCUSDT");
+    assert.equal(userDiagnostics.current.status, "BLOCKED");
+    assert.equal(userDiagnostics.current.full, undefined);
+    assert.equal(JSON.stringify(userDiagnostics).includes("strategySecret"), false);
+
+    const adminDiagnostics = await authedJson(server.base, adminCookie, "/api/worker/diagnostics?limit=10");
+    assert.equal(adminDiagnostics.history.length, 6);
+    assert.equal(adminDiagnostics.current.symbol, "SOLUSDT");
+    assert.equal(adminDiagnostics.current.summary, "leitura atualizada");
+    assert.ok(adminDiagnostics.current.full);
+    assert.equal(adminDiagnostics.current.full.strategySecret, "admin-only");
+    assert.deepEqual(new Set(adminDiagnostics.history.map((item) => item.symbol)), new Set(["BTCUSDT", "ETHUSDT", "SOLUSDT"]));
+    assert.ok(adminDiagnostics.history.some((item) => item.status === "WAIT"));
+    assert.ok(adminDiagnostics.history.some((item) => item.status === "APPROVED" && item.decision === "BUY"));
+    assert.ok(adminDiagnostics.history.some((item) => item.status === "APPROVED" && item.decision === "SELL"));
+    assert.ok(adminDiagnostics.history.some((item) => item.status === "BLOCKED"));
+    assert.ok(adminDiagnostics.history.some((item) => item.status === "ERROR"));
+
+    await stopServer(server.child);
+    server = await startServer({ port, dbPath });
+    const adminAfterReload = await login(server.base);
+    const persisted = await authedJson(server.base, adminAfterReload, "/api/worker/diagnostics?limit=10");
+    assert.equal(persisted.history.length, 6);
+    assert.equal(persisted.current.summary, "leitura atualizada");
   } finally {
     await stopServer(server.child);
     rmSync(dir, { recursive: true, force: true });

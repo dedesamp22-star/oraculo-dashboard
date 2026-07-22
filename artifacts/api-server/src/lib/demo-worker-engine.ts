@@ -17,7 +17,7 @@ export interface Candle {
   closeTime: number;
 }
 
-interface TrendDetails {
+export interface TrendDetails {
   trend: RadarTrend;
   ema9: number;
   ema21: number;
@@ -25,12 +25,13 @@ interface TrendDetails {
   ema21Slope: number;
 }
 
-interface QualityFilter {
+export interface QualityFilter {
   name: string;
   passed: boolean;
   reason: string;
   penalty?: number;
   severity?: QualitySeverity;
+  details?: Record<string, string | number | boolean | null>;
 }
 
 interface TriggerResult {
@@ -44,7 +45,7 @@ interface TriggerResult {
   retestValid: boolean;
 }
 
-interface RadarLikeAnalysis {
+export interface RadarLikeAnalysis {
   symbol: DemoSymbol;
   displayPrice: number | null;
   decisionPrice: number | null;
@@ -70,6 +71,12 @@ interface RadarLikeAnalysis {
   scoreItems: Array<{ label: string; points: number; detail: string }>;
   volume: { current: number; average20: number; relative: number; delta5: number; expanding: boolean; veryWeak: boolean } | null;
   signalKey: string;
+  diagnostics: {
+    trend1h: TrendDetails | null;
+    trend15m: TrendDetails | null;
+    rawScore: number;
+    supportResistanceZone: string;
+  };
 }
 
 const BINANCE_BASE = "https://api.binance.us/api/v3";
@@ -407,6 +414,7 @@ export function qualityFilters(
         ? `Reteste valido com tolerancia de ${(cfg.retestTolerancePct * 100).toFixed(2)}% na zona ${trigger.level?.toFixed(4) ?? "estrutural"}.`
         : "Rompimento imediato nao abre trade demo; falta toque e fechamento posterior a favor.",
       severity: "block",
+      details: { kind: trigger.kind, level: trigger.level, retestValid: trigger.retestValid },
     },
     {
       name: "Distancia da EMA21",
@@ -414,6 +422,7 @@ export function qualityFilters(
       reason: `Distancia da EMA21 em ${(ema21Distance * 100).toFixed(2)}% (max ${(symbolCfg.maxEma21DistancePct * 100).toFixed(2)}% para ${symbol}).`,
       penalty: -20,
       severity: "block",
+      details: { ema21: trend15m.ema21, distancePct: ema21Distance, maxDistancePct: symbolCfg.maxEma21DistancePct },
     },
     {
       name: "Distancia da EMA9",
@@ -421,6 +430,7 @@ export function qualityFilters(
       reason: `Distancia da EMA9 em ${(ema9Distance * 100).toFixed(2)}% (max ${(symbolCfg.maxEma9DistancePct * 100).toFixed(2)}% para ${symbol}).`,
       penalty: -10,
       severity: "block",
+      details: { ema9: trend15m.ema9, distancePct: ema9Distance, maxDistancePct: symbolCfg.maxEma9DistancePct },
     },
     {
       name: "Movimento esticado",
@@ -428,6 +438,7 @@ export function qualityFilters(
       reason: `Movimento 5 velas ${(move5 * 100).toFixed(2)}%; ${move5AtrMultiple.toFixed(2)}x ATR. ${movementBlocks ? "Extensao relevante combinada com exaustao." : extensionRelevant ? "Extensao isolada vira penalidade, nao bloqueio." : "Dentro do contexto."}`,
       penalty: -20,
       severity: movementBlocks ? "block" : "penalty",
+      details: { move5Pct: move5, move5AtrMultiple, atr: currentAtr, extensionRelevant, extensionExtreme },
     },
     {
       name: "Sequencia de candles",
@@ -435,6 +446,7 @@ export function qualityFilters(
       reason: `${run} velas consecutivas na direcao da entrada. Quarta vela ${fourthAllowed ? "permitida por reteste, EMAs, volume e candle nao climatico" : "exige reteste valido sem exaustao"}.`,
       penalty: -15,
       severity: "block",
+      details: { sameDirectionCandles: run, fourthAllowed },
     },
     {
       name: "Candle climatico",
@@ -442,6 +454,7 @@ export function qualityFilters(
       reason: `Range ${(currentAtr > 0 ? lastRange / currentAtr : 0).toFixed(2)}x ATR; corpo ${(avgBody > 0 ? lastBody / avgBody : 0).toFixed(2)}x media.`,
       penalty: -25,
       severity: "block",
+      details: { atr: currentAtr, rangeAtrMultiple: currentAtr > 0 ? lastRange / currentAtr : null, bodyAverageMultiple: avgBody > 0 ? lastBody / avgBody : null, climactic },
     },
     {
       name: "Pavio contra entrada",
@@ -449,6 +462,7 @@ export function qualityFilters(
       reason: `Pavio contra entrada em ${(lastBody > 0 ? rejectionWick / lastBody : 0).toFixed(2)}x o corpo (max ${wickLimit.toFixed(1)}x).`,
       penalty: -15,
       severity: "block",
+      details: { rejectionWickBodyMultiple: lastBody > 0 ? rejectionWick / lastBody : null, wickLimit, wickExcess },
     },
     {
       name: "Volume compativel",
@@ -458,6 +472,7 @@ export function qualityFilters(
         : "Volume indisponivel.",
       penalty: -20,
       severity: volumeSeverity,
+      details: { volumeRelative, volumeDelta5: volume?.delta5 ?? null, expanding: volume?.expanding ?? false, veryWeak: volume?.veryWeak ?? false },
     },
   ];
 }
@@ -576,6 +591,12 @@ function analyzeRadarLike(input: {
     scoreItems,
     volume,
     signalKey,
+    diagnostics: {
+      trend1h: trend1hDetails,
+      trend15m: trend15mDetails,
+      rawScore,
+      supportResistanceZone: levels.support !== null && levels.resistance !== null ? "fora_da_zona_lateral" : "zona_indefinida",
+    },
   };
 }
 
@@ -649,7 +670,7 @@ export function analyzeDemoCandles(input: {
   };
 }
 
-export async function analyzeDemoSignal(symbol: string): Promise<{ price: number; signal: DemoSignalInput }> {
+export async function analyzeDemoSignal(symbol: string): Promise<{ price: number; signal: DemoSignalInput; analysis: RadarLikeAnalysis; filters: QualityFilter[] }> {
   const normalized = symbol.toUpperCase() as DemoSymbol;
   if (!ALLOWED_SYMBOLS.has(normalized)) throw new Error(`Unsupported demo symbol ${symbol}`);
   const [price, candles1h, candles15m, candles5m] = await Promise.all([
@@ -659,5 +680,5 @@ export async function analyzeDemoSignal(symbol: string): Promise<{ price: number
     fetchKlines(normalized, "5m", 80),
   ]);
   const result = analyzeDemoCandles({ symbol: normalized, displayPrice: price, candles1h, candles15m, candles5m });
-  return { price: result.price, signal: result.signal };
+  return { price: result.price, signal: result.signal, analysis: result.analysis, filters: result.filters };
 }

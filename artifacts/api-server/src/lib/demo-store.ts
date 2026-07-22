@@ -100,6 +100,52 @@ export interface DemoSignalInput {
   steps?: Array<{ number?: number; name?: string; value?: string; reason?: string }>;
 }
 
+export type WorkerDiagnosticStatus = "APPROVED" | "BLOCKED" | "WAIT" | "ERROR";
+
+export interface WorkerDiagnosticInput {
+  userId: string;
+  workerActive: boolean;
+  automationActive: boolean;
+  symbol: string;
+  cycleStartedAt: string;
+  cycleFinishedAt: string;
+  cycleDurationMs: number;
+  latencyMs: number | null;
+  decision: DemoDecision | "ERROR";
+  score: number | null;
+  direction: string;
+  nextCycleAt: string;
+  lastError: string | null;
+  engineVersion: string;
+  status: WorkerDiagnosticStatus;
+  fingerprint: string;
+  adminPayload: Record<string, unknown>;
+  userPayload: Record<string, unknown>;
+}
+
+export interface WorkerDiagnosticUserDto {
+  id: string;
+  symbol: string;
+  status: WorkerDiagnosticStatus;
+  direction: string;
+  quality: string;
+  summary: string;
+  decision: string;
+  score: number | null;
+  generatedAt: string;
+  nextCycleAt: string | null;
+}
+
+export interface WorkerDiagnosticAdminDto extends WorkerDiagnosticUserDto {
+  workerActive: boolean;
+  automationActive: boolean;
+  cycleDurationMs: number;
+  latencyMs: number | null;
+  lastError: string | null;
+  engineVersion: string;
+  full: Record<string, unknown>;
+}
+
 export class HttpError extends Error {
   constructor(public status: number, message: string) {
     super(message);
@@ -350,6 +396,34 @@ function tradeFromRow(row: Record<string, unknown>): DemoTrade {
     maxDurationMs: row.max_duration_ms == null ? undefined : Number(row.max_duration_ms),
     signalReasons: jsonParse(String(row.signal_reasons_json), []),
     marketConditions: String(row.market_conditions),
+  };
+}
+
+function diagnosticUserFromRow(row: Record<string, unknown>): WorkerDiagnosticUserDto {
+  return {
+    id: String(row.id),
+    symbol: String(row.symbol),
+    status: String(row.status) as WorkerDiagnosticStatus,
+    direction: String(row.direction),
+    quality: String(row.quality),
+    summary: String(row.summary),
+    decision: String(row.decision),
+    score: row.score == null ? null : Number(row.score),
+    generatedAt: String(row.cycle_finished_at),
+    nextCycleAt: row.next_cycle_at == null ? null : String(row.next_cycle_at),
+  };
+}
+
+function diagnosticAdminFromRow(row: Record<string, unknown>): WorkerDiagnosticAdminDto {
+  return {
+    ...diagnosticUserFromRow(row),
+    workerActive: Boolean(row.worker_active),
+    automationActive: Boolean(row.automation_active),
+    cycleDurationMs: Number(row.cycle_duration_ms),
+    latencyMs: row.latency_ms == null ? null : Number(row.latency_ms),
+    lastError: row.last_error == null ? null : String(row.last_error),
+    engineVersion: String(row.engine_version),
+    full: jsonParse<Record<string, unknown>>(row.admin_json, {}),
   };
 }
 
@@ -635,6 +709,43 @@ export class DemoStore {
         this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (4, 'multiuser_demo_auth', ?)").run(now);
       });
     }
+    const v5 = this.db.prepare("SELECT version FROM schema_migrations WHERE version = 5").get();
+    if (!v5) {
+      this.transaction(() => {
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS worker_diagnostics (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            symbol TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('APPROVED','BLOCKED','WAIT','ERROR')),
+            worker_active INTEGER NOT NULL,
+            automation_active INTEGER NOT NULL,
+            cycle_started_at TEXT NOT NULL,
+            cycle_finished_at TEXT NOT NULL,
+            cycle_duration_ms INTEGER NOT NULL,
+            latency_ms INTEGER,
+            decision TEXT NOT NULL,
+            score INTEGER,
+            direction TEXT NOT NULL,
+            quality TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            next_cycle_at TEXT,
+            last_error TEXT,
+            engine_version TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            admin_json TEXT NOT NULL,
+            user_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS worker_diagnostics_user_time_idx
+            ON worker_diagnostics(user_id, cycle_finished_at);
+          CREATE UNIQUE INDEX IF NOT EXISTS worker_diagnostics_dedupe_idx
+            ON worker_diagnostics(user_id, symbol, fingerprint);
+        `);
+        this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (5, 'worker_diagnostics', ?)").run(nowIso());
+      });
+    }
   }
 
   private applyInitialAdminEnv(): void {
@@ -866,6 +977,93 @@ export class DemoStore {
 
   getAutomation(userId: string) {
     return this.getSetting(userId, "demo.automation", { enabled: false, symbol: "BTCUSDT" });
+  }
+
+  recordWorkerDiagnostic(input: WorkerDiagnosticInput): WorkerDiagnosticAdminDto {
+    const now = nowIso();
+    const maxHistory = envInt("ORACULO_WORKER_DIAGNOSTIC_LIMIT", 40, 5, 500);
+    const summary = String(input.userPayload.summary ?? "Aguardando nova leitura do robo.");
+    const quality = String(input.userPayload.quality ?? "indefinida");
+    const id = newId("diag");
+    return this.transaction(() => {
+      this.db.prepare(`
+        INSERT INTO worker_diagnostics
+          (id, user_id, symbol, status, worker_active, automation_active, cycle_started_at, cycle_finished_at,
+           cycle_duration_ms, latency_ms, decision, score, direction, quality, summary, next_cycle_at, last_error,
+           engine_version, fingerprint, admin_json, user_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id, symbol, fingerprint) DO UPDATE SET
+          worker_active = excluded.worker_active,
+          automation_active = excluded.automation_active,
+          cycle_started_at = excluded.cycle_started_at,
+          cycle_finished_at = excluded.cycle_finished_at,
+          cycle_duration_ms = excluded.cycle_duration_ms,
+          latency_ms = excluded.latency_ms,
+          decision = excluded.decision,
+          score = excluded.score,
+          direction = excluded.direction,
+          quality = excluded.quality,
+          summary = excluded.summary,
+          next_cycle_at = excluded.next_cycle_at,
+          last_error = excluded.last_error,
+          engine_version = excluded.engine_version,
+          admin_json = excluded.admin_json,
+          user_json = excluded.user_json,
+          updated_at = excluded.updated_at
+      `).run(
+        id,
+        input.userId,
+        input.symbol,
+        input.status,
+        Number(input.workerActive),
+        Number(input.automationActive),
+        input.cycleStartedAt,
+        input.cycleFinishedAt,
+        input.cycleDurationMs,
+        input.latencyMs,
+        input.decision,
+        input.score,
+        input.direction,
+        quality,
+        summary,
+        input.nextCycleAt,
+        input.lastError,
+        input.engineVersion,
+        input.fingerprint,
+        JSON.stringify(input.adminPayload),
+        JSON.stringify(input.userPayload),
+        now,
+        now,
+      );
+      this.db.prepare(`
+        DELETE FROM worker_diagnostics
+        WHERE user_id = ?
+          AND id NOT IN (
+            SELECT id FROM worker_diagnostics
+            WHERE user_id = ?
+            ORDER BY cycle_finished_at DESC
+            LIMIT ?
+          )
+      `).run(input.userId, input.userId, maxHistory);
+      const row = this.db.prepare(`
+        SELECT * FROM worker_diagnostics
+        WHERE user_id = ? AND symbol = ? AND fingerprint = ?
+      `).get(input.userId, input.symbol, input.fingerprint) as Record<string, unknown>;
+      return diagnosticAdminFromRow(row);
+    });
+  }
+
+  getWorkerDiagnostics(user: AuthUser, limit = 10): { current: WorkerDiagnosticUserDto | WorkerDiagnosticAdminDto | null; history: Array<WorkerDiagnosticUserDto | WorkerDiagnosticAdminDto> } {
+    const safeLimit = Math.max(1, Math.min(50, Math.floor(limit)));
+    const rows = this.db.prepare(`
+      SELECT * FROM worker_diagnostics
+      WHERE user_id = ?
+      ORDER BY cycle_finished_at DESC
+      LIMIT ?
+    `).all(user.id, safeLimit) as Record<string, unknown>[];
+    const mapper = user.role === "admin" ? diagnosticAdminFromRow : diagnosticUserFromRow;
+    const history = rows.map(mapper);
+    return { current: history[0] ?? null, history };
   }
 
   tradeManagementSettings(userId: string) {
