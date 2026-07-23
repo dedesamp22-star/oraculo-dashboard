@@ -30,6 +30,7 @@ import { NotificationsPanel } from '../components/NotificationsPanel';
 import { ObservabilityPanel } from '../components/ObservabilityPanel';
 import { PremiumLanding } from '../components/PremiumLanding';
 import { getAuth, loginUser, logoutUser, type AuthUser } from '../lib/demoApi';
+import { resolveOracleVisualState, type OracleVisualState } from '../lib/oracleVisualState';
 import { APP_DISPLAY_NAME, APP_NAME, APP_VERSION } from '@shared/appVersion';
 
 // ── Formatters ────────────────────────────────────────────────────────────────
@@ -186,6 +187,30 @@ const STATUS_COLORS: Record<StepStatus, string> = {
   FAIL: '#ff4444',
   INFO: '#ffaa00',
 };
+
+const ORACLE_VISUAL_STATE_META: Record<OracleVisualState, { label: string; color: string }> = {
+  waiting: { label: 'Aguardando', color: '#D4AF37' },
+  analyzing: { label: 'Analisando', color: '#00D8FF' },
+  buy: { label: 'Compra', color: '#00FF88' },
+  sell: { label: 'Venda', color: '#FF4D4D' },
+};
+
+function OracleLiveStateBadge({ state }: { state: OracleVisualState }) {
+  const meta = ORACLE_VISUAL_STATE_META[state];
+  return (
+    <div
+      data-oracle-state={state}
+      className="flex min-h-9 items-center gap-2 border border-border/70 bg-card/50 px-3 text-[10px] font-mono uppercase tracking-[0.16em]"
+      style={{ color: meta.color, borderColor: `${meta.color}44`, boxShadow: `0 0 18px ${meta.color}12` }}
+    >
+      <span className="relative flex h-2.5 w-2.5">
+        <span className="absolute inline-flex h-full w-full animate-ping opacity-35" style={{ background: meta.color }} />
+        <span className="relative inline-flex h-2.5 w-2.5" style={{ background: meta.color }} />
+      </span>
+      <span>Nucleo {meta.label}</span>
+    </div>
+  );
+}
 
 function StepRow({ step, index }: { step: RuleStep; index: number }) {
   const [open, setOpen] = useState(false);
@@ -767,6 +792,12 @@ export default function Home() {
     serverError: demoServerError,
     setAutomationEnabled,
   } = useDemoTrading(isAuthenticated);
+  const oracleVisualState = resolveOracleVisualState({
+    authenticated: isAuthenticated,
+    apiError: apiHealth.error || demoServerError,
+    activeTrade: demoSession.activeTrade,
+    worker: apiHealth.health?.worker,
+  });
 
   // Feed live price into demo state machine every time price updates
   useEffect(() => {
@@ -894,7 +925,7 @@ export default function Home() {
   }
 
   if (!authUser) {
-    return <PremiumLanding loading={authLoading} error={authError} onLogin={handleLogin} />;
+    return <PremiumLanding loading={authLoading} error={authError} onLogin={handleLogin} oracleState={oracleVisualState} />;
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -931,6 +962,7 @@ export default function Home() {
           </h1>
         </div>
         <div className="hidden sm:flex items-center gap-3 text-xs font-mono text-primary bg-primary/10 px-4 py-2 border-l-2 border-primary">
+          <OracleLiveStateBadge state={oracleVisualState} />
           <Activity className="w-4 h-4" />
           <span className="tracking-widest">{authUser.username}</span>
           <button
@@ -943,6 +975,9 @@ export default function Home() {
       </header>
 
       <main className="w-full max-w-5xl flex flex-col gap-5 relative z-10">
+        <div className="sm:hidden">
+          <OracleLiveStateBadge state={oracleVisualState} />
+        </div>
 
         {/* ── Live price ──────────────────────────────────────────────────── */}
         <section className="hidden lg:block bg-card/50 backdrop-blur-md border border-border p-5 relative overflow-hidden">

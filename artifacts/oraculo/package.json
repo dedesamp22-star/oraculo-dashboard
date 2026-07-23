@@ -10,7 +10,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:radar": "node ./test/build-market-radar-test.mjs && node --test ./test/marketRadar.test.mjs",
     "test:agents": "node ./test/build-demo-agents-test.mjs && node --test ./test/demoAgents.test.mjs",
-    "test:pwa": "node --test ./test/pwa-assets.test.mjs"
+    "test:pwa": "node --test ./test/pwa-assets.test.mjs",
+    "test:visual-state": "node ./test/build-oracle-visual-state-test.mjs && node --test ./test/oracleVisualState.test.mjs"
   },
   "devDependencies": {
     "@hookform/resolvers": "^3.10.0",

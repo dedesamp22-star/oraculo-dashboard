@@ -12,14 +12,13 @@ import {
   Sparkles,
   Zap,
 } from 'lucide-react';
+import type { OracleVisualState } from '../lib/oracleVisualState';
 
 const PRODUCT_NAME = 'OR\u00c1CULO TRADE AI';
 const HERO_SUBTITLE = 'A intelig\u00eancia que observa o mercado antes de todos.';
 const SUPPORT_PHRASE = 'O mercado deixa sinais. O Oraculo interpreta.';
 const GUARDIAN_IMAGE_SRC = '/brand/oraculo-guardian.png';
 const INTRO_SESSION_KEY = 'oraculoGuardianIntroSeen';
-
-type OracleVisualState = 'waiting' | 'analyzing' | 'buy' | 'sell';
 
 const pillars = [
   { title: 'IA Proprietaria', text: 'Leitura tecnica estruturada para decisoes auditaveis.', icon: BrainCircuit, accent: '#00D8FF' },
@@ -49,10 +48,10 @@ function isOracleVisualState(value: string | null): value is OracleVisualState {
   return oracleStates.some((item) => item.key === value);
 }
 
-function readPreviewState(): OracleVisualState {
-  if (!import.meta.env.DEV || typeof window === 'undefined') return 'waiting';
+function readPreviewState(): OracleVisualState | null {
+  if (!import.meta.env.DEV || typeof window === 'undefined') return null;
   const value = new URLSearchParams(window.location.search).get('oracleState');
-  return isOracleVisualState(value) ? value : 'waiting';
+  return isOracleVisualState(value) ? value : null;
 }
 
 function scrollToId(id: string) {
@@ -275,13 +274,15 @@ function OracleStatePreview({ state, onChange }: {
   );
 }
 
-export function PremiumLanding({ loading, error, onLogin }: {
+export function PremiumLanding({ loading, error, onLogin, oracleState }: {
   loading: boolean;
   error: string | null;
   onLogin: (username: string, password: string) => void;
+  oracleState?: OracleVisualState;
 }) {
-  const [oraclePreviewState, setOraclePreviewState] = useState<OracleVisualState>(() => readPreviewState());
+  const [oraclePreviewState, setOraclePreviewState] = useState<OracleVisualState | null>(() => readPreviewState());
   const [introVisible, setIntroVisible] = useState(() => shouldShowIntro());
+  const visualState = oraclePreviewState ?? oracleState ?? 'waiting';
 
   useEffect(() => {
     const previousTitle = document.title;
@@ -312,7 +313,7 @@ export function PremiumLanding({ loading, error, onLogin }: {
   return (
     <div className="premium-shell min-h-screen overflow-x-hidden bg-[#09090B] text-[#F4F4F5]">
       {introVisible && <OracleIntro onDone={finishIntro} />}
-      <OracleStatePreview state={oraclePreviewState} onChange={handlePreviewStateChange} />
+      <OracleStatePreview state={visualState} onChange={handlePreviewStateChange} />
       <header className="fixed left-0 right-0 top-0 z-50 border-b border-[#232329]/70 bg-[#09090B]/72 backdrop-blur-xl">
         <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
           <PremiumLogo />
@@ -403,7 +404,7 @@ export function PremiumLanding({ loading, error, onLogin }: {
                 <span className="text-[#D4AF37]">Ativo</span>
               </div>
               <div className="absolute inset-0">
-                <OracleSoul state={oraclePreviewState} framed />
+                <OracleSoul state={visualState} framed />
               </div>
             </div>
           </div>
