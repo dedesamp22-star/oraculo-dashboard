@@ -1147,6 +1147,55 @@ test("health endpoint reports API and Binance state", async () => {
   }
 });
 
+test("public oracle state is sanitized and follows global operational state", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "oraculo-public-state-"));
+  const dbPath = path.join(dir, "oraculo.sqlite");
+  const port = 5148;
+  let server = await startServer({ port, dbPath });
+  try {
+    const initialRes = await fetch(`${server.base}/api/oracle/state`);
+    assert.equal(initialRes.status, 200);
+    const initial = await json(initialRes);
+    assert.deepEqual(Object.keys(initial).sort(), ["state", "updatedAt"]);
+    assert.equal(initial.state, "waiting");
+    assert.equal(JSON.stringify(initial).includes("admin"), false);
+    assert.equal(JSON.stringify(initial).includes("BTCUSDT"), false);
+
+    const adminCookie = await login(server.base);
+    await postPosition(server.base, adminCookie, sampleTrade({ direction: "BUY" }));
+    const buyState = await json(await fetch(`${server.base}/api/oracle/state`));
+    assert.equal(buyState.state, "buy");
+    assert.deepEqual(Object.keys(buyState).sort(), ["state", "updatedAt"]);
+
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.prepare("DELETE FROM demo_positions").run();
+      const adminId = getUserId(dbPath, "admin");
+      upsertDiagnostic(db, {
+        userId: adminId,
+        symbol: "ETHUSDT",
+        status: "APPROVED",
+        decision: "SELL",
+        direction: "SELL",
+        score: 82,
+        fingerprint: "public-sell-approved",
+      });
+    } finally {
+      db.close();
+    }
+
+    const sellState = await json(await fetch(`${server.base}/api/oracle/state`));
+    assert.equal(sellState.state, "sell");
+    assert.deepEqual(Object.keys(sellState).sort(), ["state", "updatedAt"]);
+    assert.equal(JSON.stringify(sellState).includes("ETHUSDT"), false);
+    assert.equal(JSON.stringify(sellState).includes("score"), false);
+    assert.equal(JSON.stringify(sellState).includes("strategySecret"), false);
+  } finally {
+    await stopServer(server.child);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("admin observability exposes expanded health only to admins", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "oraculo-demo-observability-"));
   const dbPath = path.join(dir, "oraculo.sqlite");

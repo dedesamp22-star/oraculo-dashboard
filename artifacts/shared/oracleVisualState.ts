@@ -17,7 +17,8 @@ interface WorkerLike {
 }
 
 export interface OracleVisualStateInput {
-  authenticated: boolean;
+  authenticated?: boolean;
+  requireAuthentication?: boolean;
   apiError?: unknown;
   activeTrade?: TradeLike | null;
   worker?: WorkerLike | null;
@@ -62,7 +63,8 @@ function isWorkerAnalyzing(worker: WorkerLike): boolean {
 }
 
 export function resolveOracleVisualState(input: OracleVisualStateInput): OracleVisualState {
-  if (!input.authenticated || input.apiError) return 'waiting';
+  const requireAuthentication = input.requireAuthentication ?? true;
+  if ((requireAuthentication && !input.authenticated) || input.apiError) return 'waiting';
 
   const openPositionState = directionToOracleVisualState(input.activeTrade?.direction);
   if (openPositionState) return openPositionState;

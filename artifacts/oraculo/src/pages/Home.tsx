@@ -14,6 +14,7 @@ import { useDemoAgents }        from '../hooks/useDemoAgents';
 import { useAutoAnalysis }      from '../hooks/useAutoAnalysis';
 import { useDemoAutoAnalysis }  from '../hooks/useDemoAutoAnalysis';
 import { useDemoTrading }       from '../hooks/useDemoTrading';
+import { useOracleGlobalState } from '../hooks/useOracleGlobalState';
 import { useOnlineStatus }      from '../hooks/useOnlineStatus';
 import { runEngine, type EngineResult, type RuleStep, type StepStatus, type Decision } from '../lib/analysis';
 import { fmtTimeSP, fmtSPNow, isOperational as checkOperational } from '../lib/schedule';
@@ -30,7 +31,7 @@ import { NotificationsPanel } from '../components/NotificationsPanel';
 import { ObservabilityPanel } from '../components/ObservabilityPanel';
 import { PremiumLanding } from '../components/PremiumLanding';
 import { getAuth, loginUser, logoutUser, type AuthUser } from '../lib/demoApi';
-import { resolveOracleVisualState, type OracleVisualState } from '../lib/oracleVisualState';
+import { resolveOracleVisualState, type OracleVisualState } from '@shared/oracleVisualState';
 import { APP_DISPLAY_NAME, APP_NAME, APP_VERSION } from '@shared/appVersion';
 
 // ── Formatters ────────────────────────────────────────────────────────────────
@@ -777,6 +778,7 @@ export default function Home() {
 
   const market = useBinanceData(isAuthenticated);
   const apiHealth = useApiHealth(isAuthenticated);
+  const publicOracle = useOracleGlobalState(!isAuthenticated);
   const radar = useMarketRadar(isAuthenticated);
   const demoAgents = useDemoAgents(radar.analysis);
 
@@ -925,7 +927,7 @@ export default function Home() {
   }
 
   if (!authUser) {
-    return <PremiumLanding loading={authLoading} error={authError} onLogin={handleLogin} oracleState={oracleVisualState} />;
+    return <PremiumLanding loading={authLoading} error={authError} onLogin={handleLogin} state={publicOracle.state} />;
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -933,7 +935,7 @@ export default function Home() {
   // ─────────────────────────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen w-full bg-background text-foreground font-sans selection:bg-primary/30 flex flex-col items-center p-4 sm:p-8 relative overflow-hidden">
+    <div className="premium-dashboard-shell min-h-screen w-full bg-background text-foreground font-sans selection:bg-primary/30 flex flex-col items-center p-4 sm:p-8 relative overflow-hidden">
 
       {/* Ambient glows */}
       <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-primary/5 rounded-full blur-[120px] pointer-events-none" />

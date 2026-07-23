@@ -35,6 +35,10 @@ router.get("/health", async (_req, res) => {
   });
 });
 
+router.get("/oracle/state", (_req, res) => {
+  res.json(demoStore.getPublicOracleState());
+});
+
 router.get("/admin/observability", requireAuth, requireAdmin, async (_req, res) => {
   const started = process.hrtime.bigint();
   const binance = await checkBinanceHealth();

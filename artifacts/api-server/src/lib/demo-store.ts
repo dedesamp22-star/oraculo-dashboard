@@ -2,6 +2,7 @@ import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypt
 import { existsSync, mkdirSync, chmodSync, statSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { resolveOracleVisualState, type OracleVisualState } from "@shared/oracleVisualState";
 
 export type TradeDirection = "BUY" | "SELL";
 export type TradeStatus = "OPEN" | "WIN" | "LOSS" | "BREAKEVEN";
@@ -178,6 +179,11 @@ export interface StoreObservabilitySnapshot {
     pushSubscriptions: number;
     deliveries: number;
   };
+}
+
+export interface PublicOracleState {
+  state: OracleVisualState;
+  updatedAt: string;
 }
 
 export type ControlledSimulationStatus = "INACTIVE" | "ACTIVE" | "COMPLETED" | "CANCELLED" | "ERROR";
@@ -1611,6 +1617,37 @@ export class DemoStore {
         pushSubscriptions: Number(scalar("SELECT COUNT(*) FROM push_subscriptions WHERE revoked_at IS NULL", 0)),
         deliveries: Number(scalar("SELECT COUNT(*) FROM notification_deliveries", 0)),
       },
+    };
+  }
+
+  getPublicOracleState(): PublicOracleState {
+    const openPosition = this.db.prepare(`
+      SELECT direction, updated_at
+      FROM demo_positions
+      WHERE status = 'OPEN'
+      ORDER BY updated_at DESC, open_time DESC
+      LIMIT 1
+    `).get() as Record<string, unknown> | undefined;
+    const latestDiagnostic = this.db.prepare(`
+      SELECT status, direction, decision, cycle_finished_at, updated_at
+      FROM worker_diagnostics
+      ORDER BY cycle_finished_at DESC
+      LIMIT 1
+    `).get() as Record<string, unknown> | undefined;
+
+    const state = resolveOracleVisualState({
+      requireAuthentication: false,
+      activeTrade: openPosition ? { direction: openPosition.direction } : null,
+      worker: latestDiagnostic ? {
+        lastStatus: latestDiagnostic.status,
+        lastDirection: latestDiagnostic.direction,
+        lastDecision: latestDiagnostic.decision,
+      } : null,
+    });
+
+    return {
+      state,
+      updatedAt: String(openPosition?.updated_at ?? latestDiagnostic?.cycle_finished_at ?? latestDiagnostic?.updated_at ?? nowIso()),
     };
   }
 

@@ -12,7 +12,7 @@ import {
   Sparkles,
   Zap,
 } from 'lucide-react';
-import type { OracleVisualState } from '../lib/oracleVisualState';
+import type { OracleVisualState } from '@shared/oracleVisualState';
 
 const PRODUCT_NAME = 'OR\u00c1CULO TRADE AI';
 const HERO_SUBTITLE = 'A intelig\u00eancia que observa o mercado antes de todos.';
@@ -29,11 +29,11 @@ const pillars = [
   { title: 'Execucao Inteligente', text: 'Base pronta para evoluir sem misturar modos ou riscos.', icon: Zap, accent: '#FF4D4D' },
 ];
 
-const oracleStates: Array<{ key: OracleVisualState; label: string; tone: string }> = [
-  { key: 'waiting', label: 'Aguardando', tone: '#D4AF37' },
-  { key: 'analyzing', label: 'Analisando', tone: '#00D8FF' },
-  { key: 'buy', label: 'Compra', tone: '#00FF88' },
-  { key: 'sell', label: 'Venda', tone: '#FF4D4D' },
+const oracleStates: Array<{ key: OracleVisualState; label: string; tone: string; message: string }> = [
+  { key: 'waiting', label: 'Aguardando', tone: '#D4AF37', message: 'O Oraculo observa o mercado.' },
+  { key: 'analyzing', label: 'Analisando', tone: '#00D8FF', message: 'Analisando milhares de possibilidades...' },
+  { key: 'buy', label: 'Compra', tone: '#00FF88', message: 'Oportunidade de compra detectada.' },
+  { key: 'sell', label: 'Venda', tone: '#FF4D4D', message: 'Pressao vendedora dominante.' },
 ];
 
 const introSteps = [
@@ -127,6 +127,8 @@ function OracleSoul({ state = 'waiting', framed = false }: { state?: OracleVisua
       <div className="premium-oracle-scan premium-oracle-scan-b" />
       <div className="premium-oracle-grid" />
       <div className="premium-oracle-art-wrap">
+        <div className="premium-oracle-eye premium-oracle-eye-left" />
+        <div className="premium-oracle-eye premium-oracle-eye-right" />
         <img
           src={GUARDIAN_IMAGE_SRC}
           alt="Oraculo Trade AI com guardiao, globo de mercado, touro, urso e candles"
@@ -141,6 +143,14 @@ function OracleSoul({ state = 'waiting', framed = false }: { state?: OracleVisua
         <div className="premium-oracle-ring premium-oracle-ring-a" />
         <div className="premium-oracle-ring premium-oracle-ring-b" />
         <div className="premium-oracle-ring premium-oracle-ring-c" />
+        <div className="premium-oracle-globe">
+          <div className="premium-oracle-equator" />
+          <div className="premium-oracle-meridian" />
+          <div className="premium-oracle-meridian premium-oracle-meridian-b" />
+          <div className="premium-oracle-signal premium-oracle-signal-a" />
+          <div className="premium-oracle-signal premium-oracle-signal-b" />
+          <div className="premium-oracle-signal premium-oracle-signal-c" />
+        </div>
         <div className="premium-oracle-energy premium-oracle-energy-bull" />
         <div className="premium-oracle-energy premium-oracle-energy-bear" />
       </div>
@@ -152,6 +162,9 @@ function OracleSoul({ state = 'waiting', framed = false }: { state?: OracleVisua
             <p className="text-[9px] font-bold uppercase tracking-[0.22em] text-[#F4F4F5]/45">Estado visual</p>
             <p className="mt-1 text-sm font-semibold uppercase tracking-[0.16em]" style={{ color: oracleStates.find((item) => item.key === state)?.tone ?? '#D4AF37' }}>
               {oracleStates.find((item) => item.key === state)?.label ?? 'Aguardando'}
+            </p>
+            <p key={state} className="premium-oracle-message mt-2 text-xs leading-5 text-[#F4F4F5]/64">
+              {oracleStates.find((item) => item.key === state)?.message ?? 'O Oraculo observa o mercado.'}
             </p>
           </div>
           <div className="grid grid-cols-4 gap-1.5">
@@ -169,10 +182,11 @@ function OracleSoul({ state = 'waiting', framed = false }: { state?: OracleVisua
   );
 }
 
-function LoginPanel({ loading, error, onLogin }: {
+function LoginPanel({ loading, error, onLogin, spotlight }: {
   loading: boolean;
   error: string | null;
   onLogin: (username: string, password: string) => void;
+  spotlight?: boolean;
 }) {
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
@@ -185,7 +199,7 @@ function LoginPanel({ loading, error, onLogin }: {
         event.preventDefault();
         onLogin(username, password);
       }}
-      className="mx-auto grid w-full max-w-5xl scroll-mt-28 gap-5 border border-[#232329] bg-[#111114]/70 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.35)] backdrop-blur-xl sm:grid-cols-[1fr_1.1fr] sm:p-6"
+      className={`premium-login-panel mx-auto grid w-full max-w-5xl scroll-mt-28 gap-5 border border-[#232329] bg-[#111114]/70 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.35)] backdrop-blur-xl sm:grid-cols-[1fr_1.1fr] sm:p-6 ${spotlight ? 'premium-login-panel-active' : ''}`}
     >
       <div className="flex min-h-[220px] flex-col justify-between border border-[#232329]/80 bg-[#09090B]/70 p-5">
         <div>
@@ -274,15 +288,21 @@ function OracleStatePreview({ state, onChange }: {
   );
 }
 
-export function PremiumLanding({ loading, error, onLogin, oracleState }: {
+export function PremiumLanding({ loading, error, onLogin, state }: {
   loading: boolean;
   error: string | null;
   onLogin: (username: string, password: string) => void;
-  oracleState?: OracleVisualState;
+  state?: OracleVisualState;
 }) {
   const [oraclePreviewState, setOraclePreviewState] = useState<OracleVisualState | null>(() => readPreviewState());
   const [introVisible, setIntroVisible] = useState(() => shouldShowIntro());
-  const visualState = oraclePreviewState ?? oracleState ?? 'waiting';
+  const [loginSpotlight, setLoginSpotlight] = useState(false);
+  const loginSpotlightTimerRef = useRef<number | null>(null);
+  const visualState = oraclePreviewState ?? state ?? 'waiting';
+
+  useEffect(() => () => {
+    if (loginSpotlightTimerRef.current !== null) window.clearTimeout(loginSpotlightTimerRef.current);
+  }, []);
 
   useEffect(() => {
     const previousTitle = document.title;
@@ -310,8 +330,15 @@ export function PremiumLanding({ loading, error, onLogin, oracleState }: {
     }
   };
 
+  const handleLoginFocus = () => {
+    setLoginSpotlight(true);
+    if (loginSpotlightTimerRef.current !== null) window.clearTimeout(loginSpotlightTimerRef.current);
+    loginSpotlightTimerRef.current = window.setTimeout(() => setLoginSpotlight(false), 1400);
+    scrollToId('login');
+  };
+
   return (
-    <div className="premium-shell min-h-screen overflow-x-hidden bg-[#09090B] text-[#F4F4F5]">
+    <div className={`premium-shell min-h-screen overflow-x-hidden bg-[#09090B] text-[#F4F4F5] ${loginSpotlight ? 'premium-shell-login-focus' : ''}`}>
       {introVisible && <OracleIntro onDone={finishIntro} />}
       <OracleStatePreview state={visualState} onChange={handlePreviewStateChange} />
       <header className="fixed left-0 right-0 top-0 z-50 border-b border-[#232329]/70 bg-[#09090B]/72 backdrop-blur-xl">
@@ -325,7 +352,7 @@ export function PremiumLanding({ loading, error, onLogin, oracleState }: {
           </nav>
           <button
             type="button"
-            onClick={() => scrollToId('login')}
+            onClick={handleLoginFocus}
             className="min-h-10 border border-[#00D8FF]/45 px-4 text-[10px] font-bold uppercase tracking-[0.18em] text-[#00D8FF] transition-all hover:bg-[#00D8FF]/10 hover:shadow-[0_0_22px_rgba(0,216,255,0.18)]"
           >
             Entrar
@@ -359,7 +386,7 @@ export function PremiumLanding({ loading, error, onLogin, oracleState }: {
               <div className="mt-9 flex flex-col gap-3 sm:flex-row">
                 <button
                   type="button"
-                  onClick={() => scrollToId('login')}
+                  onClick={handleLoginFocus}
                   className="group inline-flex min-h-12 items-center justify-center gap-2 border border-[#00D8FF] bg-[#00D8FF] px-6 text-sm font-bold uppercase tracking-[0.16em] text-[#09090B] shadow-[0_0_30px_rgba(0,216,255,0.2)] transition-all hover:translate-y-[-1px] hover:shadow-[0_0_42px_rgba(0,216,255,0.36)]"
                 >
                   Entrar no Oraculo
@@ -449,7 +476,7 @@ export function PremiumLanding({ loading, error, onLogin, oracleState }: {
         </section>
 
         <section className="relative z-10 px-4 py-16 sm:px-6 lg:px-8">
-          <LoginPanel loading={loading} error={error} onLogin={onLogin} />
+          <LoginPanel loading={loading} error={error} onLogin={onLogin} spotlight={loginSpotlight} />
         </section>
       </main>
     </div>

@@ -10,6 +10,20 @@ test('no session resolves to waiting even when private-looking data is provided'
   }), 'waiting');
 });
 
+test('public global state can use sanitized operational state without authentication', () => {
+  assert.equal(resolveOracleVisualState({
+    requireAuthentication: false,
+    authenticated: false,
+    worker: { lastStatus: 'APPROVED', lastDirection: 'BUY' },
+  }), 'buy');
+
+  assert.equal(resolveOracleVisualState({
+    requireAuthentication: false,
+    authenticated: false,
+    activeTrade: { direction: 'SELL' },
+  }), 'sell');
+});
+
 test('worker processing resolves to analyzing', () => {
   assert.equal(resolveOracleVisualState({
     authenticated: true,

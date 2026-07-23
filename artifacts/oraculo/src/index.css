@@ -158,6 +158,43 @@
     letter-spacing: 0;
   }
 
+  .premium-shell::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+    pointer-events: none;
+    background: rgba(0, 0, 0, 0);
+    backdrop-filter: blur(0);
+    transition: background 720ms ease, backdrop-filter 720ms ease;
+  }
+
+  .premium-shell-login-focus::before {
+    background: rgba(0, 0, 0, 0.28);
+    backdrop-filter: blur(3px);
+  }
+
+  .premium-dashboard-shell {
+    background:
+      radial-gradient(circle at 16% 8%, rgba(0, 216, 255, 0.08), transparent 28%),
+      radial-gradient(circle at 84% 18%, rgba(212, 175, 55, 0.06), transparent 30%),
+      #09090b;
+  }
+
+  .premium-login-panel {
+    position: relative;
+    transition: border-color 760ms ease, box-shadow 760ms ease, transform 760ms ease, background 760ms ease;
+  }
+
+  .premium-login-panel-active {
+    z-index: 56;
+    border-color: rgba(0, 216, 255, 0.72);
+    background: rgba(17, 17, 20, 0.86);
+    box-shadow: 0 34px 130px rgba(0, 216, 255, 0.14), 0 24px 80px rgba(0, 0, 0, 0.42);
+    transform: translateY(-3px);
+    animation: premium-login-arrive 840ms ease both;
+  }
+
   .premium-grid-bg {
     position: absolute;
     inset: 0;
@@ -313,6 +350,7 @@
     --oracle-tone: #d4af37;
     --oracle-tone-soft: rgba(212, 175, 55, 0.2);
     --oracle-tone-glow: rgba(212, 175, 55, 0.32);
+    transition: filter 760ms ease, opacity 760ms ease;
   }
 
   .premium-oracle-soul[data-oracle-state="analyzing"] {
@@ -351,6 +389,7 @@
     filter: blur(24px);
     opacity: 0.7;
     animation: premium-oracle-breathe 9s ease-in-out infinite;
+    transition: background 820ms ease, opacity 820ms ease, filter 820ms ease;
   }
 
   .premium-oracle-art-wrap {
@@ -365,6 +404,7 @@
       linear-gradient(90deg, transparent 0%, black 10%, black 88%, transparent 100%),
       linear-gradient(180deg, transparent 0%, black 6%, black 86%, transparent 100%);
     mask-composite: intersect;
+    animation: premium-guardian-breath 11s ease-in-out infinite;
   }
 
   .premium-oracle-art-wrap::before {
@@ -405,6 +445,32 @@
     object-position: center;
     filter: saturate(1.08) contrast(1.04) drop-shadow(0 0 38px rgba(212, 175, 55, 0.1));
     animation: premium-art-depth 18s ease-in-out infinite;
+    transition: filter 820ms ease, opacity 820ms ease;
+  }
+
+  .premium-oracle-eye {
+    position: absolute;
+    top: 25.6%;
+    z-index: 5;
+    width: clamp(18px, 3.2vw, 34px);
+    height: clamp(6px, 1vw, 11px);
+    border-radius: 9999px;
+    background: radial-gradient(circle, rgba(255, 255, 255, 0.9), var(--oracle-tone) 38%, transparent 72%);
+    filter: blur(1px);
+    opacity: 0.86;
+    box-shadow: 0 0 18px var(--oracle-tone), 0 0 38px var(--oracle-tone-glow);
+    animation: premium-eye-pulse 4.6s ease-in-out infinite;
+    transition: background 760ms ease, box-shadow 760ms ease, opacity 760ms ease;
+  }
+
+  .premium-oracle-eye-left {
+    left: calc(50% - min(8.8vw, 64px));
+    transform: rotate(-7deg);
+  }
+
+  .premium-oracle-eye-right {
+    left: calc(50% + min(5.8vw, 38px));
+    transform: rotate(7deg);
   }
 
   .premium-oracle-grid {
@@ -475,9 +541,25 @@
     animation: premium-energy-rise 5.5s ease-in-out infinite;
   }
 
+  .premium-oracle-soul[data-oracle-state="buy"] .premium-oracle-globe {
+    animation-duration: 7s;
+    box-shadow:
+      inset -28px -34px 80px rgba(0, 0, 0, 0.42),
+      inset 18px 18px 44px rgba(255, 255, 255, 0.08),
+      0 0 96px rgba(0, 255, 136, 0.36);
+  }
+
   .premium-oracle-soul[data-oracle-state="sell"] .premium-oracle-energy-bear {
     opacity: 0.82;
     animation: premium-energy-fall 5.5s ease-in-out infinite;
+  }
+
+  .premium-oracle-soul[data-oracle-state="sell"] .premium-oracle-globe {
+    animation-duration: 7s;
+    box-shadow:
+      inset -28px -34px 80px rgba(0, 0, 0, 0.52),
+      inset 18px 18px 44px rgba(255, 255, 255, 0.05),
+      0 0 96px rgba(255, 77, 77, 0.34);
   }
 
   .premium-oracle-soul[data-oracle-state="analyzing"] .premium-oracle-scan {
@@ -486,6 +568,10 @@
 
   .premium-oracle-soul[data-oracle-state="analyzing"] .premium-oracle-ring {
     border-style: dashed;
+  }
+
+  .premium-oracle-soul[data-oracle-state="analyzing"] .premium-oracle-globe {
+    animation-duration: 6.8s;
   }
 
   .premium-oracle-ring-a {
@@ -520,6 +606,7 @@
       inset 18px 18px 44px rgba(255, 255, 255, 0.06),
       0 0 80px var(--oracle-tone-glow);
     animation: premium-globe-life 11s ease-in-out infinite;
+    transition: border-color 820ms ease, background 820ms ease, box-shadow 820ms ease;
   }
 
   .premium-oracle-globe::before {
@@ -644,6 +731,11 @@
     background: rgba(9, 9, 11, 0.58);
     padding: 14px;
     backdrop-filter: blur(12px);
+    transition: border-color 760ms ease, box-shadow 760ms ease, background 760ms ease;
+  }
+
+  .premium-oracle-message {
+    animation: premium-message-in 720ms ease both;
   }
 
   @media (max-width: 1023px) {
@@ -742,7 +834,9 @@
     .premium-oracle-scan-b,
     .premium-candle-field,
     .premium-oracle-art,
+    .premium-oracle-art-wrap,
     .premium-oracle-art-wrap::after,
+    .premium-oracle-eye,
     .premium-oracle-energy-bull,
     .premium-oracle-energy-bear {
       animation: none;
@@ -772,6 +866,11 @@
   @keyframes premium-candle-drift {
     0%, 100% { transform: skewX(-9deg) translateX(0); opacity: 0.1; }
     50% { transform: skewX(-9deg) translateX(-28px); opacity: 0.18; }
+  }
+
+  @keyframes premium-login-arrive {
+    0% { opacity: 0.72; transform: translateY(8px) scale(0.992); }
+    100% { opacity: 1; transform: translateY(-3px) scale(1); }
   }
 
   @keyframes premium-oracle-breathe {
@@ -812,6 +911,22 @@
   @keyframes premium-art-depth {
     0%, 100% { transform: translate3d(0, 0, 0) scale(1); filter: saturate(1.05) contrast(1.04) drop-shadow(0 0 38px rgba(212, 175, 55, 0.1)); }
     50% { transform: translate3d(0, -5px, 0) scale(1.006); filter: saturate(1.12) contrast(1.06) drop-shadow(0 0 46px var(--oracle-tone-soft)); }
+  }
+
+  @keyframes premium-guardian-breath {
+    0%, 100% { transform: translateY(0) scale(1); filter: brightness(1); }
+    50% { transform: translateY(-3px) scale(1.004); filter: brightness(1.08); }
+  }
+
+  @keyframes premium-eye-pulse {
+    0%, 100% { opacity: 0.52; transform: translateY(0) scaleX(0.92); }
+    45% { opacity: 1; transform: translateY(-1px) scaleX(1.08); }
+    58% { opacity: 0.78; transform: translateY(0) scaleX(0.98); }
+  }
+
+  @keyframes premium-message-in {
+    0% { opacity: 0; transform: translateY(5px); filter: blur(3px); }
+    100% { opacity: 1; transform: translateY(0); filter: blur(0); }
   }
 
   @keyframes premium-art-reflection {
