@@ -28,6 +28,7 @@ import { RobotDiagnosticsPanel } from '../components/RobotDiagnosticsPanel';
 import { ControlledSimulationPanel } from '../components/ControlledSimulationPanel';
 import { NotificationsPanel } from '../components/NotificationsPanel';
 import { ObservabilityPanel } from '../components/ObservabilityPanel';
+import { PremiumLanding } from '../components/PremiumLanding';
 import { getAuth, loginUser, logoutUser, type AuthUser } from '../lib/demoApi';
 import { APP_DISPLAY_NAME, APP_NAME, APP_VERSION } from '@shared/appVersion';
 
@@ -893,7 +894,7 @@ export default function Home() {
   }
 
   if (!authUser) {
-    return <LoginScreen loading={authLoading} error={authError} onLogin={handleLogin} />;
+    return <PremiumLanding loading={authLoading} error={authError} onLogin={handleLogin} />;
   }
 
   // ─────────────────────────────────────────────────────────────────────────
