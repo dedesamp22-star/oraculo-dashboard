@@ -34,6 +34,18 @@ const oracleStates: Array<{ key: OracleVisualState; label: string; tone: string 
   { key: 'sell', label: 'Venda', tone: '#FF4D4D' },
 ];
 
+const DEV_ORACLE_PREVIEW = import.meta.env.DEV;
+
+function isOracleVisualState(value: string | null): value is OracleVisualState {
+  return oracleStates.some((item) => item.key === value);
+}
+
+function readPreviewState(): OracleVisualState {
+  if (!DEV_ORACLE_PREVIEW || typeof window === 'undefined') return 'waiting';
+  const value = new URLSearchParams(window.location.search).get('oracleState');
+  return isOracleVisualState(value) ? value : 'waiting';
+}
+
 function scrollToId(id: string) {
   document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -170,11 +182,44 @@ function LoginPanel({ loading, error, onLogin }: {
   );
 }
 
+function OracleStatePreview({ state, onChange }: {
+  state: OracleVisualState;
+  onChange: (state: OracleVisualState) => void;
+}) {
+  if (!DEV_ORACLE_PREVIEW) return null;
+
+  return (
+    <div className="fixed bottom-3 left-3 right-3 z-[60] mx-auto max-w-xl border border-[#232329] bg-[#09090B]/88 p-2 shadow-[0_18px_70px_rgba(0,0,0,0.38)] backdrop-blur-xl sm:bottom-5 sm:left-auto sm:right-5 sm:mx-0">
+      <p className="mb-2 px-1 text-[9px] font-bold uppercase tracking-[0.18em] text-[#F4F4F5]/45">Preview local do Oraculo Core</p>
+      <div className="grid grid-cols-4 gap-1.5">
+        {oracleStates.map((item) => (
+          <button
+            key={item.key}
+            type="button"
+            onClick={() => onChange(item.key)}
+            className="min-h-9 border px-2 text-[9px] font-bold uppercase tracking-[0.12em] transition-all"
+            style={{
+              borderColor: state === item.key ? item.tone : '#232329',
+              color: state === item.key ? item.tone : 'rgba(244,244,245,0.56)',
+              background: state === item.key ? `${item.tone}18` : 'rgba(17,17,20,0.7)',
+              boxShadow: state === item.key ? `0 0 22px ${item.tone}22` : 'none',
+            }}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function PremiumLanding({ loading, error, onLogin }: {
   loading: boolean;
   error: string | null;
   onLogin: (username: string, password: string) => void;
 }) {
+  const [oraclePreviewState, setOraclePreviewState] = useState<OracleVisualState>(() => readPreviewState());
+
   useEffect(() => {
     const previousTitle = document.title;
     document.title = `${PRODUCT_NAME} 0.6`;
@@ -183,8 +228,17 @@ export function PremiumLanding({ loading, error, onLogin }: {
     };
   }, []);
 
+  const handlePreviewStateChange = (nextState: OracleVisualState) => {
+    setOraclePreviewState(nextState);
+    if (!DEV_ORACLE_PREVIEW) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set('oracleState', nextState);
+    window.history.replaceState(null, '', url);
+  };
+
   return (
     <div className="premium-shell min-h-screen overflow-x-hidden bg-[#09090B] text-[#F4F4F5]">
+      <OracleStatePreview state={oraclePreviewState} onChange={handlePreviewStateChange} />
       <header className="fixed left-0 right-0 top-0 z-50 border-b border-[#232329]/70 bg-[#09090B]/72 backdrop-blur-xl">
         <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
           <PremiumLogo />
@@ -274,7 +328,7 @@ export function PremiumLanding({ loading, error, onLogin }: {
                 <span className="text-[#D4AF37]">Soul Online</span>
               </div>
               <div className="absolute inset-0">
-                <OracleSoul framed />
+                <OracleSoul state={oraclePreviewState} framed />
               </div>
             </div>
           </div>
