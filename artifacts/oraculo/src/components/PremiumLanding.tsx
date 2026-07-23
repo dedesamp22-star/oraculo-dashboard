@@ -5,6 +5,7 @@ import {
   Bell,
   BrainCircuit,
   ChevronRight,
+  CircleDot,
   Eye,
   LockKeyhole,
   ShieldCheck,
@@ -15,6 +16,8 @@ import {
 const PRODUCT_NAME = 'OR\u00c1CULO TRADE AI';
 const HERO_SUBTITLE = 'A intelig\u00eancia que observa o mercado antes de todos.';
 
+type OracleVisualState = 'waiting' | 'analyzing' | 'buy' | 'sell';
+
 const pillars = [
   { title: 'IA Proprietaria', text: 'Leitura tecnica estruturada para decisoes auditaveis.', icon: BrainCircuit, accent: '#00D8FF' },
   { title: 'BTC Futures', text: 'Arquitetura visual preparada para operacao inteligente.', icon: BarChart3, accent: '#D4AF37' },
@@ -22,6 +25,13 @@ const pillars = [
   { title: 'Alertas Telegram', text: 'Sinais e eventos importantes no canal certo.', icon: Bell, accent: '#00D8FF' },
   { title: 'Observabilidade', text: 'Diagnostico claro do robo e da saude operacional.', icon: Eye, accent: '#F4F4F5' },
   { title: 'Execucao Inteligente', text: 'Base pronta para evoluir sem misturar modos ou riscos.', icon: Zap, accent: '#FF4D4D' },
+];
+
+const oracleStates: Array<{ key: OracleVisualState; label: string; tone: string }> = [
+  { key: 'waiting', label: 'Aguardando', tone: '#D4AF37' },
+  { key: 'analyzing', label: 'Analisando', tone: '#00D8FF' },
+  { key: 'buy', label: 'Compra', tone: '#00FF88' },
+  { key: 'sell', label: 'Venda', tone: '#FF4D4D' },
 ];
 
 function scrollToId(id: string) {
@@ -43,11 +53,14 @@ function PremiumLogo() {
   );
 }
 
-function OraclePlaceholder() {
+function OracleSoul({ state = 'waiting', framed = false }: { state?: OracleVisualState; framed?: boolean }) {
   return (
-    <div className="premium-oracle-stage" aria-hidden="true">
+    <div className={`premium-oracle-soul ${framed ? 'premium-oracle-soul-framed' : ''}`} data-oracle-state={state}>
+      <div className="premium-oracle-aura" />
+      <div className="premium-oracle-scan premium-oracle-scan-a" />
+      <div className="premium-oracle-scan premium-oracle-scan-b" />
       <div className="premium-oracle-grid" />
-      <div className="premium-oracle-core">
+      <div className="premium-oracle-core" aria-hidden="true">
         <div className="premium-oracle-ring premium-oracle-ring-a" />
         <div className="premium-oracle-ring premium-oracle-ring-b" />
         <div className="premium-oracle-ring premium-oracle-ring-c" />
@@ -62,6 +75,23 @@ function OraclePlaceholder() {
       </div>
       <div className="premium-market-line premium-market-line-a" />
       <div className="premium-market-line premium-market-line-b" />
+      {framed && (
+        <div className="premium-oracle-readout">
+          <div>
+            <p className="text-[9px] font-bold uppercase tracking-[0.22em] text-[#F4F4F5]/45">Estado visual</p>
+            <p className="mt-1 text-sm font-semibold uppercase tracking-[0.16em] text-[#D4AF37]">Aguardando</p>
+          </div>
+          <div className="grid grid-cols-4 gap-1.5">
+            {oracleStates.map((item) => (
+              <span
+                key={item.key}
+                className="h-1.5 border border-white/10"
+                style={{ background: item.key === state ? item.tone : 'rgba(244,244,245,0.12)' }}
+              />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -178,19 +208,23 @@ export function PremiumLanding({ loading, error, onLogin }: {
         <section className="relative flex min-h-screen items-center overflow-hidden px-4 pb-16 pt-24 sm:px-6 lg:px-8">
           <div className="premium-particles" aria-hidden="true" />
           <div className="premium-grid-bg" aria-hidden="true" />
-          <OraclePlaceholder />
+          <div className="premium-nebula" aria-hidden="true" />
+          <div className="premium-tech-lines" aria-hidden="true" />
 
-          <div className="relative z-10 mx-auto grid w-full max-w-7xl gap-12 lg:grid-cols-[minmax(0,1fr)_minmax(360px,0.68fr)] lg:items-center">
-            <div className="max-w-4xl">
+          <div className="relative z-10 mx-auto grid w-full max-w-7xl gap-10 lg:grid-cols-[minmax(0,0.92fr)_minmax(420px,0.78fr)] lg:items-center">
+            <div className="max-w-4xl lg:pt-8">
               <div className="inline-flex items-center gap-2 border border-[#D4AF37]/30 bg-[#D4AF37]/10 px-3 py-2 text-[10px] font-bold uppercase tracking-[0.24em] text-[#D4AF37]">
                 <Sparkles className="h-3.5 w-3.5" />
-                Projeto Fenix - Fase 1
+                Projeto Fenix - Fase 2
               </div>
-              <h1 className="mt-7 max-w-4xl text-5xl font-semibold leading-[0.95] tracking-normal text-[#F4F4F5] sm:text-7xl lg:text-8xl">
+              <h1 className="mt-7 max-w-4xl text-5xl font-semibold leading-[0.92] tracking-normal text-[#F4F4F5] sm:text-7xl lg:text-8xl">
                 {PRODUCT_NAME}
               </h1>
-              <p className="mt-7 max-w-2xl text-lg leading-8 text-[#F4F4F5]/68 sm:text-xl">
+              <p className="mt-7 max-w-2xl text-lg leading-8 text-[#F4F4F5]/72 sm:text-xl">
                 "{HERO_SUBTITLE}"
+              </p>
+              <p className="mt-4 max-w-xl text-sm leading-7 text-[#F4F4F5]/48">
+                Uma camada de inteligencia visual preparada para traduzir contexto, risco e decisao em uma experiencia precisa.
               </p>
               <div className="mt-9 flex flex-col gap-3 sm:flex-row">
                 <button
@@ -221,17 +255,26 @@ export function PremiumLanding({ loading, error, onLogin }: {
                   </div>
                 ))}
               </div>
+              <div className="mt-5 flex max-w-2xl flex-wrap gap-2">
+                {oracleStates.map((item) => (
+                  <span
+                    key={item.key}
+                    className="inline-flex min-h-8 items-center gap-2 border border-[#232329] bg-[#111114]/55 px-3 text-[9px] font-bold uppercase tracking-[0.16em] text-[#F4F4F5]/56"
+                  >
+                    <CircleDot className="h-3 w-3" style={{ color: item.tone }} />
+                    {item.label}
+                  </span>
+                ))}
+              </div>
             </div>
 
-            <div className="relative hidden min-h-[520px] lg:block">
-              <div className="absolute inset-0 border border-[#232329] bg-[#111114]/35 backdrop-blur-sm" />
-              <div className="absolute inset-5 border border-[#00D8FF]/18" />
-              <div className="absolute left-8 right-8 top-8 flex items-center justify-between text-[10px] uppercase tracking-[0.22em] text-[#F4F4F5]/45">
-                <span>Oracle Visual Slot</span>
-                <span className="text-[#00D8FF]">Ready</span>
+            <div className="premium-oracle-panel relative min-h-[420px] sm:min-h-[520px]">
+              <div className="absolute left-5 right-5 top-5 z-10 flex items-center justify-between text-[10px] uppercase tracking-[0.22em] text-[#F4F4F5]/45 sm:left-8 sm:right-8 sm:top-8">
+                <span>Oraculo Core</span>
+                <span className="text-[#D4AF37]">Soul Online</span>
               </div>
-              <div className="absolute inset-0 grid place-items-center">
-                <OraclePlaceholder />
+              <div className="absolute inset-0">
+                <OracleSoul framed />
               </div>
             </div>
           </div>
@@ -258,7 +301,7 @@ export function PremiumLanding({ loading, error, onLogin }: {
                   <article
                     key={pillar.title}
                     id={pillar.title === 'Alertas Telegram' ? 'telegram' : pillar.title === 'Observabilidade' ? 'dashboard' : pillar.title === 'IA Proprietaria' ? 'radar' : pillar.title === 'Execucao Inteligente' ? 'historico' : undefined}
-                    className="group min-h-[170px] border border-[#232329] bg-[#111114] p-5 transition-all hover:border-[#00D8FF]/40 hover:bg-[#151519]"
+                    className="group min-h-[170px] border border-[#232329] bg-[#111114] p-5 transition-all duration-300 hover:-translate-y-1 hover:border-[#00D8FF]/40 hover:bg-[#151519] hover:shadow-[0_22px_80px_rgba(0,216,255,0.07)]"
                   >
                     <div className="flex items-center justify-between">
                       <div className="grid h-11 w-11 place-items-center border border-[#232329] bg-[#09090B]" style={{ color: pillar.accent }}>

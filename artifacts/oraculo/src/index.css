@@ -182,13 +182,105 @@
     background-size: 180px 220px, 240px 200px, 260px 260px;
     opacity: 0.34;
     pointer-events: none;
+    animation: premium-particle-drift 38s linear infinite;
   }
 
-  .premium-oracle-stage {
+  .premium-nebula {
+    position: absolute;
+    inset: -18%;
+    background:
+      radial-gradient(circle at 72% 42%, rgba(0, 216, 255, 0.18), transparent 28%),
+      radial-gradient(circle at 58% 52%, rgba(212, 175, 55, 0.12), transparent 24%),
+      radial-gradient(circle at 28% 70%, rgba(0, 255, 136, 0.08), transparent 22%),
+      linear-gradient(125deg, transparent, rgba(244, 244, 245, 0.035), transparent);
+    filter: blur(28px);
+    opacity: 0.72;
+    pointer-events: none;
+    animation: premium-nebula-breathe 16s ease-in-out infinite;
+  }
+
+  .premium-tech-lines {
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(112deg, transparent 0 37%, rgba(0, 216, 255, 0.16) 37.08%, transparent 37.4% 100%),
+      linear-gradient(68deg, transparent 0 63%, rgba(212, 175, 55, 0.14) 63.08%, transparent 63.38% 100%),
+      linear-gradient(180deg, transparent 0 18%, rgba(244, 244, 245, 0.06) 18.08%, transparent 18.18% 100%);
+    opacity: 0.54;
+    pointer-events: none;
+  }
+
+  .premium-oracle-panel {
+    overflow: hidden;
+    border: 1px solid #232329;
+    background:
+      linear-gradient(180deg, rgba(17, 17, 20, 0.62), rgba(9, 9, 11, 0.78)),
+      radial-gradient(circle at 50% 44%, rgba(0, 216, 255, 0.08), transparent 42%);
+    box-shadow: 0 34px 110px rgba(0, 0, 0, 0.42);
+    backdrop-filter: blur(14px);
+  }
+
+  .premium-oracle-panel::before,
+  .premium-oracle-panel::after {
+    content: "";
+    position: absolute;
+    inset: 18px;
+    border: 1px solid rgba(0, 216, 255, 0.14);
+    pointer-events: none;
+  }
+
+  .premium-oracle-panel::after {
+    inset: 34px;
+    border-color: rgba(212, 175, 55, 0.12);
+    clip-path: polygon(0 0, 34% 0, 34% 1px, 1px 1px, 1px 34%, 0 34%, 0 0, 100% 66%, 100% 100%, 66% 100%, 66% calc(100% - 1px), calc(100% - 1px) calc(100% - 1px), calc(100% - 1px) 66%, 100% 66%);
+  }
+
+  .premium-oracle-soul {
     position: absolute;
     inset: 0;
     overflow: hidden;
     pointer-events: none;
+    --oracle-tone: #d4af37;
+    --oracle-tone-soft: rgba(212, 175, 55, 0.2);
+    --oracle-tone-glow: rgba(212, 175, 55, 0.32);
+  }
+
+  .premium-oracle-soul[data-oracle-state="analyzing"] {
+    --oracle-tone: #00d8ff;
+    --oracle-tone-soft: rgba(0, 216, 255, 0.2);
+    --oracle-tone-glow: rgba(0, 216, 255, 0.34);
+  }
+
+  .premium-oracle-soul[data-oracle-state="buy"] {
+    --oracle-tone: #00ff88;
+    --oracle-tone-soft: rgba(0, 255, 136, 0.2);
+    --oracle-tone-glow: rgba(0, 255, 136, 0.32);
+  }
+
+  .premium-oracle-soul[data-oracle-state="sell"] {
+    --oracle-tone: #ff4d4d;
+    --oracle-tone-soft: rgba(255, 77, 77, 0.2);
+    --oracle-tone-glow: rgba(255, 77, 77, 0.34);
+  }
+
+  .premium-oracle-soul-framed {
+    position: absolute;
+  }
+
+  .premium-oracle-aura {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: min(74vw, 620px);
+    aspect-ratio: 1;
+    transform: translate(-50%, -50%);
+    border-radius: 9999px;
+    background:
+      radial-gradient(circle, var(--oracle-tone-glow), transparent 56%),
+      radial-gradient(circle, rgba(244, 244, 245, 0.08), transparent 28%);
+    filter: blur(24px);
+    opacity: 0.7;
+    animation: premium-oracle-breathe 9s ease-in-out infinite;
   }
 
   .premium-oracle-grid {
@@ -200,10 +292,11 @@
     transform: translate(-50%, -50%) perspective(720px) rotateX(62deg);
     border: 1px solid rgba(0, 216, 255, 0.16);
     background:
-      linear-gradient(rgba(0, 216, 255, 0.12) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(0, 216, 255, 0.12) 1px, transparent 1px);
+      linear-gradient(var(--oracle-tone-soft) 1px, transparent 1px),
+      linear-gradient(90deg, var(--oracle-tone-soft) 1px, transparent 1px);
     background-size: 42px 42px;
     opacity: 0.38;
+    animation: premium-grid-float 18s ease-in-out infinite;
   }
 
   .premium-oracle-core {
@@ -213,6 +306,7 @@
     width: min(62vw, 540px);
     aspect-ratio: 1;
     transform: translate(-50%, -50%);
+    animation: premium-oracle-float 18s ease-in-out infinite;
   }
 
   .premium-oracle-ring,
@@ -225,34 +319,64 @@
 
   .premium-oracle-ring {
     inset: 0;
-    border: 1px solid rgba(0, 216, 255, 0.16);
-    box-shadow: inset 0 0 40px rgba(0, 216, 255, 0.04), 0 0 70px rgba(0, 216, 255, 0.08);
+    border: 1px solid color-mix(in srgb, var(--oracle-tone) 24%, transparent);
+    box-shadow: inset 0 0 40px var(--oracle-tone-soft), 0 0 70px color-mix(in srgb, var(--oracle-tone) 12%, transparent);
   }
 
   .premium-oracle-ring-a {
     transform: rotateX(66deg) rotateZ(-16deg);
+    animation: premium-ring-drift-a 34s linear infinite;
   }
 
   .premium-oracle-ring-b {
     inset: 13%;
     border-color: rgba(212, 175, 55, 0.18);
     transform: rotateX(72deg) rotateZ(22deg);
+    animation: premium-ring-drift-b 42s linear infinite;
   }
 
   .premium-oracle-ring-c {
     inset: 27%;
     border-color: rgba(0, 255, 136, 0.14);
     transform: rotateY(66deg) rotateZ(18deg);
+    animation: premium-ring-drift-c 38s linear infinite;
   }
 
   .premium-oracle-globe {
     inset: 31%;
-    border: 1px solid rgba(244, 244, 245, 0.18);
+    border: 1px solid color-mix(in srgb, var(--oracle-tone) 38%, rgba(244, 244, 245, 0.14));
     background:
-      radial-gradient(circle at 35% 28%, rgba(244, 244, 245, 0.16), transparent 28%),
-      radial-gradient(circle at 50% 55%, rgba(0, 216, 255, 0.18), transparent 56%),
-      rgba(17, 17, 20, 0.58);
-    box-shadow: 0 0 80px rgba(0, 216, 255, 0.18);
+      radial-gradient(circle at 31% 24%, rgba(255, 255, 255, 0.34), transparent 13%),
+      radial-gradient(circle at 62% 68%, var(--oracle-tone-glow), transparent 52%),
+      radial-gradient(circle at 50% 50%, rgba(244, 244, 245, 0.1), transparent 62%),
+      linear-gradient(145deg, rgba(244, 244, 245, 0.12), rgba(17, 17, 20, 0.7) 42%, rgba(9, 9, 11, 0.86));
+    box-shadow:
+      inset -28px -34px 80px rgba(0, 0, 0, 0.48),
+      inset 18px 18px 44px rgba(255, 255, 255, 0.06),
+      0 0 80px var(--oracle-tone-glow);
+    animation: premium-globe-life 11s ease-in-out infinite;
+  }
+
+  .premium-oracle-globe::before {
+    content: "";
+    position: absolute;
+    inset: 13%;
+    border-radius: inherit;
+    background:
+      linear-gradient(115deg, rgba(255, 255, 255, 0.22), transparent 34%),
+      radial-gradient(circle at 24% 18%, rgba(255, 255, 255, 0.3), transparent 12%);
+    opacity: 0.62;
+    mix-blend-mode: screen;
+  }
+
+  .premium-oracle-globe::after {
+    content: "";
+    position: absolute;
+    inset: -8%;
+    border-radius: inherit;
+    border: 1px solid color-mix(in srgb, var(--oracle-tone) 28%, transparent);
+    filter: blur(0.4px);
+    animation: premium-globe-halo 7s ease-in-out infinite reverse;
   }
 
   .premium-oracle-equator {
@@ -260,12 +384,12 @@
     right: 8%;
     top: 49%;
     height: 1px;
-    background: rgba(0, 216, 255, 0.45);
+    background: color-mix(in srgb, var(--oracle-tone) 64%, transparent);
   }
 
   .premium-oracle-meridian {
     inset: 8% 35%;
-    border: 1px solid rgba(0, 216, 255, 0.22);
+    border: 1px solid color-mix(in srgb, var(--oracle-tone) 28%, transparent);
   }
 
   .premium-oracle-meridian-b {
@@ -278,6 +402,7 @@
     height: 8%;
     border: 1px solid rgba(0, 255, 136, 0.55);
     background: rgba(0, 255, 136, 0.12);
+    animation: premium-signal-pulse 6s ease-in-out infinite;
   }
 
   .premium-oracle-signal-a {
@@ -304,8 +429,9 @@
     right: 9%;
     width: min(34vw, 440px);
     height: 1px;
-    background: linear-gradient(90deg, transparent, rgba(0, 216, 255, 0.54), transparent);
+    background: linear-gradient(90deg, transparent, var(--oracle-tone), transparent);
     opacity: 0.75;
+    animation: premium-line-scan 8s ease-in-out infinite;
   }
 
   .premium-market-line-a {
@@ -317,6 +443,42 @@
     top: 65%;
     transform: rotate(8deg);
     background: linear-gradient(90deg, transparent, rgba(212, 175, 55, 0.42), transparent);
+    animation-delay: -3s;
+  }
+
+  .premium-oracle-scan {
+    position: absolute;
+    left: 9%;
+    right: 9%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--oracle-tone) 70%, transparent), transparent);
+    opacity: 0.42;
+  }
+
+  .premium-oracle-scan-a {
+    top: 26%;
+    animation: premium-scan-a 10s ease-in-out infinite;
+  }
+
+  .premium-oracle-scan-b {
+    bottom: 22%;
+    animation: premium-scan-b 13s ease-in-out infinite;
+  }
+
+  .premium-oracle-readout {
+    position: absolute;
+    left: 24px;
+    right: 24px;
+    bottom: 24px;
+    z-index: 5;
+    display: grid;
+    grid-template-columns: 1fr 120px;
+    gap: 16px;
+    align-items: end;
+    border: 1px solid rgba(35, 35, 41, 0.9);
+    background: rgba(9, 9, 11, 0.58);
+    padding: 14px;
+    backdrop-filter: blur(12px);
   }
 
   @media (max-width: 1023px) {
@@ -338,6 +500,11 @@
       right: -8%;
       width: 70vw;
     }
+
+    .premium-oracle-panel {
+      max-width: 620px;
+      margin-inline: auto;
+    }
   }
 
   @media (max-width: 640px) {
@@ -357,5 +524,102 @@
       width: 140vw;
       height: 280px;
     }
+
+    .premium-oracle-readout {
+      left: 14px;
+      right: 14px;
+      bottom: 14px;
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .premium-particles,
+    .premium-nebula,
+    .premium-oracle-aura,
+    .premium-oracle-grid,
+    .premium-oracle-core,
+    .premium-oracle-ring-a,
+    .premium-oracle-ring-b,
+    .premium-oracle-ring-c,
+    .premium-oracle-globe,
+    .premium-oracle-globe::after,
+    .premium-oracle-signal,
+    .premium-market-line,
+    .premium-oracle-scan-a,
+    .premium-oracle-scan-b {
+      animation: none;
+    }
+  }
+
+  @keyframes premium-particle-drift {
+    0% { background-position: 6% 18%, 74% 22%, 48% 76%; }
+    50% { background-position: 9% 22%, 70% 18%, 52% 72%; }
+    100% { background-position: 6% 18%, 74% 22%, 48% 76%; }
+  }
+
+  @keyframes premium-nebula-breathe {
+    0%, 100% { opacity: 0.58; transform: scale(1); }
+    50% { opacity: 0.82; transform: scale(1.035); }
+  }
+
+  @keyframes premium-oracle-breathe {
+    0%, 100% { opacity: 0.5; transform: translate(-50%, -50%) scale(0.96); }
+    50% { opacity: 0.86; transform: translate(-50%, -50%) scale(1.04); }
+  }
+
+  @keyframes premium-grid-float {
+    0%, 100% { transform: translate(-50%, -50%) perspective(720px) rotateX(62deg) translateY(0); opacity: 0.3; }
+    50% { transform: translate(-50%, -50%) perspective(720px) rotateX(62deg) translateY(-14px); opacity: 0.46; }
+  }
+
+  @keyframes premium-oracle-float {
+    0%, 100% { transform: translate(-50%, -50%) translateY(0) scale(1); }
+    50% { transform: translate(-50%, -50%) translateY(-10px) scale(1.012); }
+  }
+
+  @keyframes premium-ring-drift-a {
+    from { transform: rotateX(66deg) rotateZ(-16deg); }
+    to { transform: rotateX(66deg) rotateZ(344deg); }
+  }
+
+  @keyframes premium-ring-drift-b {
+    from { transform: rotateX(72deg) rotateZ(22deg); }
+    to { transform: rotateX(72deg) rotateZ(-338deg); }
+  }
+
+  @keyframes premium-ring-drift-c {
+    from { transform: rotateY(66deg) rotateZ(18deg); }
+    to { transform: rotateY(66deg) rotateZ(378deg); }
+  }
+
+  @keyframes premium-globe-life {
+    0%, 100% { filter: saturate(1) brightness(1); transform: scale(1); }
+    50% { filter: saturate(1.18) brightness(1.08); transform: scale(1.018); }
+  }
+
+  @keyframes premium-globe-halo {
+    0%, 100% { opacity: 0.34; transform: scale(0.98); }
+    50% { opacity: 0.74; transform: scale(1.06); }
+  }
+
+  @keyframes premium-signal-pulse {
+    0%, 100% { opacity: 0.45; transform: scale(0.86); }
+    50% { opacity: 0.92; transform: scale(1.08); }
+  }
+
+  @keyframes premium-line-scan {
+    0%, 100% { opacity: 0.26; filter: blur(0); }
+    50% { opacity: 0.72; filter: blur(0.4px); }
+  }
+
+  @keyframes premium-scan-a {
+    0%, 100% { transform: translateY(0); opacity: 0.16; }
+    50% { transform: translateY(210px); opacity: 0.58; }
+  }
+
+  @keyframes premium-scan-b {
+    0%, 100% { transform: translateY(0); opacity: 0.16; }
+    50% { transform: translateY(-190px); opacity: 0.46; }
   }
 }
