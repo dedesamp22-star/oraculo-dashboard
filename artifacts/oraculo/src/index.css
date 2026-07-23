@@ -210,6 +210,76 @@
     pointer-events: none;
   }
 
+  .premium-candle-field {
+    position: absolute;
+    inset: auto -4% 4% auto;
+    width: min(54vw, 720px);
+    height: 220px;
+    opacity: 0.14;
+    pointer-events: none;
+    background:
+      linear-gradient(90deg, transparent 0 6%, rgba(0, 255, 136, 0.45) 6% 7%, transparent 7% 12%, rgba(255, 77, 77, 0.48) 12% 13.2%, transparent 13.2% 19%, rgba(0, 255, 136, 0.42) 19% 20%, transparent 20% 27%, rgba(255, 77, 77, 0.42) 27% 28%, transparent 28% 36%, rgba(0, 255, 136, 0.5) 36% 37%, transparent 37% 46%, rgba(0, 255, 136, 0.38) 46% 47%, transparent 47% 56%, rgba(255, 77, 77, 0.5) 56% 57%, transparent 57% 66%, rgba(0, 255, 136, 0.44) 66% 67%, transparent 67% 76%, rgba(255, 77, 77, 0.42) 76% 77%, transparent 77% 88%, rgba(0, 216, 255, 0.3) 88% 89%, transparent 89%),
+      linear-gradient(180deg, transparent 0 28%, rgba(0, 216, 255, 0.24) 28.3%, transparent 28.6% 100%);
+    mask-image: linear-gradient(90deg, transparent, black 16%, black 72%, transparent);
+    transform: skewX(-9deg);
+    animation: premium-candle-drift 28s ease-in-out infinite;
+  }
+
+  .premium-intro {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    display: grid;
+    place-items: center;
+    background:
+      radial-gradient(circle at 50% 46%, rgba(212, 175, 55, 0.14), transparent 28%),
+      rgba(9, 9, 11, 0.88);
+    backdrop-filter: blur(18px);
+    animation: premium-intro-out 2s ease forwards;
+  }
+
+  .premium-intro-core {
+    width: min(86vw, 360px);
+    border: 1px solid rgba(212, 175, 55, 0.32);
+    background: rgba(17, 17, 20, 0.72);
+    padding: 24px;
+    text-align: center;
+    box-shadow: 0 28px 110px rgba(0, 0, 0, 0.46), 0 0 70px rgba(212, 175, 55, 0.12);
+  }
+
+  .premium-intro-mark {
+    position: relative;
+    width: 56px;
+    height: 56px;
+    margin: 0 auto 18px;
+    border: 1px solid rgba(212, 175, 55, 0.72);
+    border-radius: 9999px;
+    box-shadow: 0 0 36px rgba(212, 175, 55, 0.28);
+  }
+
+  .premium-intro-mark::before,
+  .premium-intro-mark::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: -10px;
+    bottom: -10px;
+    width: 2px;
+    transform: translateX(-50%);
+    background: linear-gradient(transparent, #d4af37, transparent);
+  }
+
+  .premium-intro-mark::after {
+    left: -10px;
+    right: -10px;
+    top: 50%;
+    bottom: auto;
+    width: auto;
+    height: 2px;
+    transform: translateY(-50%);
+    opacity: 0.24;
+  }
+
   .premium-oracle-panel {
     overflow: hidden;
     border: 1px solid #232329;
@@ -283,6 +353,60 @@
     animation: premium-oracle-breathe 9s ease-in-out infinite;
   }
 
+  .premium-oracle-art-wrap {
+    position: absolute;
+    inset: 3% -6% -8%;
+    z-index: 2;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    opacity: 0.98;
+    mask-image:
+      linear-gradient(90deg, transparent 0%, black 10%, black 88%, transparent 100%),
+      linear-gradient(180deg, transparent 0%, black 6%, black 86%, transparent 100%);
+    mask-composite: intersect;
+  }
+
+  .premium-oracle-art-wrap::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    background:
+      radial-gradient(circle at 43% 43%, transparent 0 16%, var(--oracle-tone-soft) 17%, transparent 34%),
+      linear-gradient(90deg, rgba(9, 9, 11, 0.74), transparent 24%, transparent 72%, rgba(9, 9, 11, 0.62)),
+      linear-gradient(180deg, rgba(9, 9, 11, 0.18), transparent 36%, rgba(9, 9, 11, 0.82));
+    mix-blend-mode: screen;
+    opacity: 0.52;
+    pointer-events: none;
+  }
+
+  .premium-oracle-art-wrap::after {
+    content: "";
+    position: absolute;
+    left: 8%;
+    right: 8%;
+    top: 48%;
+    z-index: 4;
+    height: 24%;
+    border-radius: 9999px;
+    background: radial-gradient(circle, color-mix(in srgb, var(--oracle-tone) 28%, transparent), transparent 68%);
+    filter: blur(18px);
+    opacity: 0.44;
+    animation: premium-art-reflection 9s ease-in-out infinite;
+  }
+
+  .premium-oracle-art {
+    position: relative;
+    z-index: 2;
+    width: min(118%, 760px);
+    height: min(100%, 720px);
+    object-fit: contain;
+    object-position: center;
+    filter: saturate(1.08) contrast(1.04) drop-shadow(0 0 38px rgba(212, 175, 55, 0.1));
+    animation: premium-art-depth 18s ease-in-out infinite;
+  }
+
   .premium-oracle-grid {
     position: absolute;
     left: 50%;
@@ -307,6 +431,7 @@
     aspect-ratio: 1;
     transform: translate(-50%, -50%);
     animation: premium-oracle-float 18s ease-in-out infinite;
+    z-index: 4;
   }
 
   .premium-oracle-ring,
@@ -321,6 +446,46 @@
     inset: 0;
     border: 1px solid color-mix(in srgb, var(--oracle-tone) 24%, transparent);
     box-shadow: inset 0 0 40px var(--oracle-tone-soft), 0 0 70px color-mix(in srgb, var(--oracle-tone) 12%, transparent);
+  }
+
+  .premium-oracle-energy {
+    position: absolute;
+    top: 56%;
+    width: 26%;
+    height: 18%;
+    border-radius: 9999px;
+    filter: blur(18px);
+    opacity: 0;
+    transform: translateY(-50%);
+    pointer-events: none;
+  }
+
+  .premium-oracle-energy-bull {
+    left: 20%;
+    background: radial-gradient(circle, rgba(0, 255, 136, 0.5), transparent 68%);
+  }
+
+  .premium-oracle-energy-bear {
+    right: 18%;
+    background: radial-gradient(circle, rgba(255, 77, 77, 0.5), transparent 68%);
+  }
+
+  .premium-oracle-soul[data-oracle-state="buy"] .premium-oracle-energy-bull {
+    opacity: 0.82;
+    animation: premium-energy-rise 5.5s ease-in-out infinite;
+  }
+
+  .premium-oracle-soul[data-oracle-state="sell"] .premium-oracle-energy-bear {
+    opacity: 0.82;
+    animation: premium-energy-fall 5.5s ease-in-out infinite;
+  }
+
+  .premium-oracle-soul[data-oracle-state="analyzing"] .premium-oracle-scan {
+    opacity: 0.68;
+  }
+
+  .premium-oracle-soul[data-oracle-state="analyzing"] .premium-oracle-ring {
+    border-style: dashed;
   }
 
   .premium-oracle-ring-a {
@@ -505,6 +670,14 @@
       max-width: 620px;
       margin-inline: auto;
     }
+
+    .premium-oracle-art-wrap {
+      inset: 0 -8% -10%;
+    }
+
+    .premium-oracle-art {
+      width: min(126%, 720px);
+    }
   }
 
   @media (max-width: 640px) {
@@ -531,6 +704,25 @@
       bottom: 14px;
       grid-template-columns: 1fr;
     }
+
+    .premium-candle-field {
+      width: 100vw;
+      right: -20%;
+      bottom: 8%;
+    }
+
+    .premium-oracle-panel {
+      min-height: 430px;
+    }
+
+    .premium-oracle-art-wrap {
+      inset: 8% -18% -8%;
+    }
+
+    .premium-oracle-art {
+      width: min(142%, 620px);
+      height: 100%;
+    }
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -547,8 +739,17 @@
     .premium-oracle-signal,
     .premium-market-line,
     .premium-oracle-scan-a,
-    .premium-oracle-scan-b {
+    .premium-oracle-scan-b,
+    .premium-candle-field,
+    .premium-oracle-art,
+    .premium-oracle-art-wrap::after,
+    .premium-oracle-energy-bull,
+    .premium-oracle-energy-bear {
       animation: none;
+    }
+
+    .premium-intro {
+      display: none;
     }
   }
 
@@ -561,6 +762,16 @@
   @keyframes premium-nebula-breathe {
     0%, 100% { opacity: 0.58; transform: scale(1); }
     50% { opacity: 0.82; transform: scale(1.035); }
+  }
+
+  @keyframes premium-intro-out {
+    0%, 78% { opacity: 1; }
+    100% { opacity: 0; pointer-events: none; }
+  }
+
+  @keyframes premium-candle-drift {
+    0%, 100% { transform: skewX(-9deg) translateX(0); opacity: 0.1; }
+    50% { transform: skewX(-9deg) translateX(-28px); opacity: 0.18; }
   }
 
   @keyframes premium-oracle-breathe {
@@ -596,6 +807,26 @@
   @keyframes premium-globe-life {
     0%, 100% { filter: saturate(1) brightness(1); transform: scale(1); }
     50% { filter: saturate(1.18) brightness(1.08); transform: scale(1.018); }
+  }
+
+  @keyframes premium-art-depth {
+    0%, 100% { transform: translate3d(0, 0, 0) scale(1); filter: saturate(1.05) contrast(1.04) drop-shadow(0 0 38px rgba(212, 175, 55, 0.1)); }
+    50% { transform: translate3d(0, -5px, 0) scale(1.006); filter: saturate(1.12) contrast(1.06) drop-shadow(0 0 46px var(--oracle-tone-soft)); }
+  }
+
+  @keyframes premium-art-reflection {
+    0%, 100% { opacity: 0.28; transform: translateY(0) scaleX(0.92); }
+    50% { opacity: 0.56; transform: translateY(-10px) scaleX(1.05); }
+  }
+
+  @keyframes premium-energy-rise {
+    0%, 100% { transform: translateY(-44%) scale(0.92); opacity: 0.48; }
+    50% { transform: translateY(-64%) scale(1.08); opacity: 0.86; }
+  }
+
+  @keyframes premium-energy-fall {
+    0%, 100% { transform: translateY(-50%) scale(0.92); opacity: 0.48; }
+    50% { transform: translateY(-32%) scale(1.08); opacity: 0.86; }
   }
 
   @keyframes premium-globe-halo {

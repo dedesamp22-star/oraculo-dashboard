@@ -15,6 +15,9 @@ import {
 
 const PRODUCT_NAME = 'OR\u00c1CULO TRADE AI';
 const HERO_SUBTITLE = 'A intelig\u00eancia que observa o mercado antes de todos.';
+const SUPPORT_PHRASE = 'O mercado deixa sinais. O Oraculo interpreta.';
+const GUARDIAN_IMAGE_SRC = '/brand/oraculo-guardian.png';
+const INTRO_SESSION_KEY = 'oraculoGuardianIntroSeen';
 
 type OracleVisualState = 'waiting' | 'analyzing' | 'buy' | 'sell';
 
@@ -34,14 +37,20 @@ const oracleStates: Array<{ key: OracleVisualState; label: string; tone: string 
   { key: 'sell', label: 'Venda', tone: '#FF4D4D' },
 ];
 
-const DEV_ORACLE_PREVIEW = import.meta.env.DEV;
+const introSteps = [
+  'Inicializando nucleo...',
+  'Conectando mercados...',
+  'Sincronizando IA...',
+  'Radar online.',
+  'Oraculo ativo.',
+];
 
 function isOracleVisualState(value: string | null): value is OracleVisualState {
   return oracleStates.some((item) => item.key === value);
 }
 
 function readPreviewState(): OracleVisualState {
-  if (!DEV_ORACLE_PREVIEW || typeof window === 'undefined') return 'waiting';
+  if (!import.meta.env.DEV || typeof window === 'undefined') return 'waiting';
   const value = new URLSearchParams(window.location.search).get('oracleState');
   return isOracleVisualState(value) ? value : 'waiting';
 }
@@ -65,6 +74,52 @@ function PremiumLogo() {
   );
 }
 
+function shouldShowIntro(): boolean {
+  if (typeof window === 'undefined') return false;
+  const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  if (reducedMotion) return false;
+  try {
+    return window.sessionStorage.getItem(INTRO_SESSION_KEY) !== 'true';
+  } catch {
+    return false;
+  }
+}
+
+function OracleIntro({ onDone }: { onDone: () => void }) {
+  const [stepIndex, setStepIndex] = useState(0);
+
+  useEffect(() => {
+    const stepTimer = window.setInterval(() => {
+      setStepIndex((current) => Math.min(current + 1, introSteps.length - 1));
+    }, 300);
+    const doneTimer = window.setTimeout(onDone, 1850);
+    return () => {
+      window.clearInterval(stepTimer);
+      window.clearTimeout(doneTimer);
+    };
+  }, [onDone]);
+
+  return (
+    <div className="premium-intro" role="status" aria-live="polite">
+      <div className="premium-intro-core">
+        <div className="premium-intro-mark" />
+        <p className="text-[10px] font-bold uppercase tracking-[0.28em] text-[#D4AF37]">Oraculo Trade AI</p>
+        <p className="mt-3 min-h-6 text-sm text-[#F4F4F5]/72">{introSteps[stepIndex]}</p>
+        <div className="mt-5 h-1 overflow-hidden bg-[#232329]">
+          <div className="h-full bg-[#D4AF37] transition-all duration-300" style={{ width: `${((stepIndex + 1) / introSteps.length) * 100}%` }} />
+        </div>
+        <button
+          type="button"
+          onClick={onDone}
+          className="mt-5 min-h-10 border border-[#232329] px-4 text-[10px] font-bold uppercase tracking-[0.16em] text-[#F4F4F5]/58 transition-colors hover:border-[#D4AF37]/70 hover:text-[#D4AF37]"
+        >
+          Pular
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function OracleSoul({ state = 'waiting', framed = false }: { state?: OracleVisualState; framed?: boolean }) {
   return (
     <div className={`premium-oracle-soul ${framed ? 'premium-oracle-soul-framed' : ''}`} data-oracle-state={state}>
@@ -72,18 +127,23 @@ function OracleSoul({ state = 'waiting', framed = false }: { state?: OracleVisua
       <div className="premium-oracle-scan premium-oracle-scan-a" />
       <div className="premium-oracle-scan premium-oracle-scan-b" />
       <div className="premium-oracle-grid" />
+      <div className="premium-oracle-art-wrap">
+        <img
+          src={GUARDIAN_IMAGE_SRC}
+          alt="Oraculo Trade AI com guardiao, globo de mercado, touro, urso e candles"
+          className="premium-oracle-art"
+          loading="eager"
+          decoding="async"
+          width="1536"
+          height="1241"
+        />
+      </div>
       <div className="premium-oracle-core" aria-hidden="true">
         <div className="premium-oracle-ring premium-oracle-ring-a" />
         <div className="premium-oracle-ring premium-oracle-ring-b" />
         <div className="premium-oracle-ring premium-oracle-ring-c" />
-        <div className="premium-oracle-globe">
-          <div className="premium-oracle-equator" />
-          <div className="premium-oracle-meridian premium-oracle-meridian-a" />
-          <div className="premium-oracle-meridian premium-oracle-meridian-b" />
-          <div className="premium-oracle-signal premium-oracle-signal-a" />
-          <div className="premium-oracle-signal premium-oracle-signal-b" />
-          <div className="premium-oracle-signal premium-oracle-signal-c" />
-        </div>
+        <div className="premium-oracle-energy premium-oracle-energy-bull" />
+        <div className="premium-oracle-energy premium-oracle-energy-bear" />
       </div>
       <div className="premium-market-line premium-market-line-a" />
       <div className="premium-market-line premium-market-line-b" />
@@ -91,7 +151,9 @@ function OracleSoul({ state = 'waiting', framed = false }: { state?: OracleVisua
         <div className="premium-oracle-readout">
           <div>
             <p className="text-[9px] font-bold uppercase tracking-[0.22em] text-[#F4F4F5]/45">Estado visual</p>
-            <p className="mt-1 text-sm font-semibold uppercase tracking-[0.16em] text-[#D4AF37]">Aguardando</p>
+            <p className="mt-1 text-sm font-semibold uppercase tracking-[0.16em]" style={{ color: oracleStates.find((item) => item.key === state)?.tone ?? '#D4AF37' }}>
+              {oracleStates.find((item) => item.key === state)?.label ?? 'Aguardando'}
+            </p>
           </div>
           <div className="grid grid-cols-4 gap-1.5">
             {oracleStates.map((item) => (
@@ -186,7 +248,7 @@ function OracleStatePreview({ state, onChange }: {
   state: OracleVisualState;
   onChange: (state: OracleVisualState) => void;
 }) {
-  if (!DEV_ORACLE_PREVIEW) return null;
+  if (!import.meta.env.DEV) return null;
 
   return (
     <div className="fixed bottom-3 left-3 right-3 z-[60] mx-auto max-w-xl border border-[#232329] bg-[#09090B]/88 p-2 shadow-[0_18px_70px_rgba(0,0,0,0.38)] backdrop-blur-xl sm:bottom-5 sm:left-auto sm:right-5 sm:mx-0">
@@ -219,6 +281,7 @@ export function PremiumLanding({ loading, error, onLogin }: {
   onLogin: (username: string, password: string) => void;
 }) {
   const [oraclePreviewState, setOraclePreviewState] = useState<OracleVisualState>(() => readPreviewState());
+  const [introVisible, setIntroVisible] = useState(() => shouldShowIntro());
 
   useEffect(() => {
     const previousTitle = document.title;
@@ -228,16 +291,27 @@ export function PremiumLanding({ loading, error, onLogin }: {
     };
   }, []);
 
+  const finishIntro = () => {
+    try {
+      window.sessionStorage.setItem(INTRO_SESSION_KEY, 'true');
+    } catch {
+      // Visual-only session flag; blocked storage should not affect login.
+    }
+    setIntroVisible(false);
+  };
+
   const handlePreviewStateChange = (nextState: OracleVisualState) => {
     setOraclePreviewState(nextState);
-    if (!DEV_ORACLE_PREVIEW) return;
-    const url = new URL(window.location.href);
-    url.searchParams.set('oracleState', nextState);
-    window.history.replaceState(null, '', url);
+    if (import.meta.env.DEV) {
+      const url = new URL(window.location.href);
+      url.searchParams.set('oracleState', nextState);
+      window.history.replaceState(null, '', url);
+    }
   };
 
   return (
     <div className="premium-shell min-h-screen overflow-x-hidden bg-[#09090B] text-[#F4F4F5]">
+      {introVisible && <OracleIntro onDone={finishIntro} />}
       <OracleStatePreview state={oraclePreviewState} onChange={handlePreviewStateChange} />
       <header className="fixed left-0 right-0 top-0 z-50 border-b border-[#232329]/70 bg-[#09090B]/72 backdrop-blur-xl">
         <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
@@ -264,12 +338,13 @@ export function PremiumLanding({ loading, error, onLogin }: {
           <div className="premium-grid-bg" aria-hidden="true" />
           <div className="premium-nebula" aria-hidden="true" />
           <div className="premium-tech-lines" aria-hidden="true" />
+          <div className="premium-candle-field" aria-hidden="true" />
 
           <div className="relative z-10 mx-auto grid w-full max-w-7xl gap-10 lg:grid-cols-[minmax(0,0.92fr)_minmax(420px,0.78fr)] lg:items-center">
             <div className="max-w-4xl lg:pt-8">
               <div className="inline-flex items-center gap-2 border border-[#D4AF37]/30 bg-[#D4AF37]/10 px-3 py-2 text-[10px] font-bold uppercase tracking-[0.24em] text-[#D4AF37]">
                 <Sparkles className="h-3.5 w-3.5" />
-                Projeto Fenix - Fase 2
+                Seu Analista de Mercado 24h
               </div>
               <h1 className="mt-7 max-w-4xl text-5xl font-semibold leading-[0.92] tracking-normal text-[#F4F4F5] sm:text-7xl lg:text-8xl">
                 {PRODUCT_NAME}
@@ -278,7 +353,7 @@ export function PremiumLanding({ loading, error, onLogin }: {
                 "{HERO_SUBTITLE}"
               </p>
               <p className="mt-4 max-w-xl text-sm leading-7 text-[#F4F4F5]/48">
-                Uma camada de inteligencia visual preparada para traduzir contexto, risco e decisao em uma experiencia precisa.
+                {SUPPORT_PHRASE}
               </p>
               <div className="mt-9 flex flex-col gap-3 sm:flex-row">
                 <button
@@ -324,8 +399,8 @@ export function PremiumLanding({ loading, error, onLogin }: {
 
             <div className="premium-oracle-panel relative min-h-[420px] sm:min-h-[520px]">
               <div className="absolute left-5 right-5 top-5 z-10 flex items-center justify-between text-[10px] uppercase tracking-[0.22em] text-[#F4F4F5]/45 sm:left-8 sm:right-8 sm:top-8">
-                <span>Oraculo Core</span>
-                <span className="text-[#D4AF37]">Soul Online</span>
+                <span>Nucleo do Oraculo</span>
+                <span className="text-[#D4AF37]">Ativo</span>
               </div>
               <div className="absolute inset-0">
                 <OracleSoul state={oraclePreviewState} framed />
