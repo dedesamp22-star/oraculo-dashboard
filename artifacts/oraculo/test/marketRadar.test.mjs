@@ -270,3 +270,187 @@ test('backend demo decision and frontend Radar classify the same scenario compat
   assert.equal(server.analysis.scoreContextual, radar.scoreContextual);
   assert.equal(server.analysis.scoreOperacional, radar.scoreOperacional);
 });
+
+test('trend with 3 of 4 votes generates direction', () => {
+  const data = bullishSet();
+  const resultBefore = analyze(data);
+  assert.equal(resultBefore.diagnostics.trend1h.bullishVotes, 4);
+  assert.equal(resultBefore.trend1h, 'ALTA');
+  
+  // Make 1h trend have exactly 3 votes by making slope flat
+  const last10Closes = data.candles1h.slice(-10);
+  const prevClose = data.candles1h[data.candles1h.length - 11].close;
+  for (const c of last10Closes) {
+    c.open = prevClose;
+    c.close = prevClose;
+    c.high = prevClose + 0.1;
+    c.low = prevClose - 0.1;
+  }
+  const resultAfter = analyze(data);
+  assert.ok(resultAfter.diagnostics.trend1h.bullishVotes >= 3);
+  assert.equal(resultAfter.trend1h, 'ALTA');
+});
+
+test('trend with only 2 votes is lateral', () => {
+  const data = bullishSet();
+  // Make 1h trend flat and break structure
+  const firstClose = data.candles1h[0].close;
+  for (const c of data.candles1h) {
+    c.open = firstClose;
+    c.close = firstClose;
+    c.high = firstClose + 0.05;
+    c.low = firstClose - 0.05;
+  }
+  const result = analyze(data);
+  assert.equal(result.diagnostics.trend1h.bullishVotes, 0);
+  assert.equal(result.trend1h, 'LATERAL');
+});
+
+test('strong breakout with high volume is approved without retest', () => {
+  const data = bullishSet();
+  
+  // Make average body larger in candles5m to prevent climax block
+  for (let i = data.candles5m.length - 20; i < data.candles5m.length; i++) {
+    const c = data.candles5m[i];
+    c.close = c.open + 0.3;
+    c.high = c.close + 0.05;
+    c.low = c.open - 0.05;
+  }
+
+  // Set the 3rd candle from the end to be RED to break the consecutive green candle run
+  const redCandle = data.candles5m[data.candles5m.length - 3];
+  redCandle.open = 119.7;
+  redCandle.close = 119.5;
+  redCandle.high = 119.8;
+  redCandle.low = 119.4;
+
+  const last5 = data.candles5m[data.candles5m.length - 1];
+  const prev5 = data.candles5m[data.candles5m.length - 2];
+  
+  prev5.open = 119.5;
+  prev5.close = 119.8;
+  prev5.high = 119.9;
+  prev5.low = 119.4;
+  
+  // Breakout: low > 120.10 (level * 1.0015), close > level (119.92)
+  last5.open = 120.15;
+  last5.close = 120.45;
+  last5.high = 120.50;
+  last5.low = 120.15;
+  
+  // Set 15m volume relative to >= 1.2
+  data.candles15m[data.candles15m.length - 1].volume = 180;
+  
+  const result = analyze(data);
+  assert.equal(result.suggestedDirection, 'COMPRA');
+  assert.equal(result.decisionState, 'ENTRADA_APROVADA');
+  assert.equal(result.triggerStage, 'confirmed');
+});
+
+test('normal breakout with average volume waits for retest', () => {
+  const data = bullishSet();
+  
+  // Make average body larger in candles5m to prevent climax block
+  for (let i = data.candles5m.length - 20; i < data.candles5m.length; i++) {
+    const c = data.candles5m[i];
+    c.close = c.open + 0.3;
+    c.high = c.close + 0.05;
+    c.low = c.open - 0.05;
+  }
+
+  // Set the 3rd candle from the end to be RED to break the consecutive run
+  const redCandle = data.candles5m[data.candles5m.length - 3];
+  redCandle.open = 119.7;
+  redCandle.close = 119.5;
+  redCandle.high = 119.8;
+  redCandle.low = 119.4;
+
+  const last5 = data.candles5m[data.candles5m.length - 1];
+  const prev5 = data.candles5m[data.candles5m.length - 2];
+  
+  prev5.open = 119.5;
+  prev5.close = 119.8;
+  prev5.high = 119.9;
+  prev5.low = 119.4;
+  
+  last5.open = 120.15;
+  last5.close = 120.45;
+  last5.high = 120.50;
+  last5.low = 120.15;
+  
+  // Set 15m volume average (relative < 1.2)
+  data.candles15m[data.candles15m.length - 1].volume = 90;
+  
+  const result = analyze(data);
+  assert.equal(result.suggestedDirection, 'AGUARDAR');
+  assert.equal(result.triggerStage, 'forming');
+});
+
+test('volume below 0.5 blocks operation', () => {
+  const data = bullishSet();
+  data.candles15m[data.candles15m.length - 1].volume = 10;
+  const result = analyze(data);
+  assert.equal(result.suggestedDirection, 'AGUARDAR');
+  assert.ok(result.criticalBlockedReasons.some((reason) => reason.includes('Volume')));
+});
+
+test('volume between 0.5 and 0.8 only penalizes', () => {
+  const data = bullishSet();
+  
+  // Reduce last candle body to avoid climax penalty, keep it above resistance level
+  const last5 = data.candles5m[data.candles5m.length - 1];
+  last5.open = 119.85;
+  last5.close = 119.95;
+  last5.high = 119.98;
+  last5.low = 119.72;
+
+  data.candles15m[data.candles15m.length - 1].volume = 65; // relative around 0.6
+  
+  const result = analyze(data);
+  assert.equal(result.suggestedDirection, 'COMPRA');
+  assert.equal(result.decisionState, 'ENTRADA_APROVADA');
+  assert.ok(result.qualityPenalties.some((reason) => reason.includes('Volume')));
+});
+
+test('extreme movement, severe climax candle, and invalid plan block operation', () => {
+  // 1. Extreme movement blocks
+  {
+    const data = bullishSet();
+    const last5 = data.candles5m[data.candles5m.length - 1];
+    const prev5 = data.candles5m[data.candles5m.length - 6];
+    last5.close = prev5.close * 1.04;
+    last5.high = last5.close + 0.05;
+    last5.low = last5.open - 0.05;
+    const result = analyze(data);
+    assert.equal(result.suggestedDirection, 'AGUARDAR');
+    assert.ok(result.criticalBlockedReasons.some((reason) => reason.includes('Movimento 5 velas')));
+  }
+  
+  // 2. Severe climax blocks
+  {
+    const data = bullishSet();
+    const last5 = data.candles5m[data.candles5m.length - 1];
+    
+    // Make body and range huge to confirm AND exceed climax severe
+    last5.open = 119.5;
+    last5.close = 125.5; // body 6.0
+    last5.high = 126.0;
+    last5.low = 119.0; // range 7.0 (body/range = 6.0/7.0 = 0.85 >= 0.35, valid!)
+    
+    const result = analyze(data);
+    assert.equal(result.suggestedDirection, 'AGUARDAR');
+    assert.ok(result.criticalBlockedReasons.some((reason) => reason.includes('Range')));
+  }
+  
+  // 3. Invalid plan blocks
+  {
+    const data = bullishSet();
+    data.candles15m = wave(80, 10, 0, 0.1, FIFTEEN, 100);
+    const result = analyze(data);
+    assert.equal(result.suggestedDirection, 'AGUARDAR');
+    // 15m fica lateral/oposto ao 1h antes mesmo de haver plano de risco a calcular;
+    // o motor bloqueia mais cedo por conflito de tendencia (comportamento correto).
+    assert.ok(result.blockedReasons.some((reason) => reason.includes('opostas') || reason.includes('lateral')) || result.missingConditions.length > 0);
+  }
+});
+

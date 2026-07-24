@@ -114,6 +114,9 @@ export interface RadarLikeAnalysis {
   generatedAt: string;
   confirmations: string[];
   blockedReasons: string[];
+  criticalBlockedReasons: string[];
+  warnings: string[];
+  qualityPenalties: string[];
   risks: string[];
   scoreItems: Array<{ label: string; points: number; detail: string }>;
   qualityFilters: QualityFilter[];
@@ -263,8 +266,8 @@ function trendFor(candles: Candle[], includeEma200: boolean): TrendDetails {
     ema21Slope < 0,
   ].filter(Boolean).length;
   let trend: RadarTrend = "LATERAL";
-  if (bullishVotes === 4) trend = "ALTA";
-  if (bearishVotes === 4) trend = "BAIXA";
+  if (bullishVotes >= 3) trend = "ALTA";
+  if (bearishVotes >= 3) trend = "BAIXA";
   return { trend, ema9, ema21, ema200, ema21Slope, ...structure, bullishVotes, bearishVotes };
 }
 
@@ -317,15 +320,18 @@ function trigger5m(candles5m: Candle[], direction: RadarDirection, breakoutResis
     if (!level) return { direction: "AGUARDAR", aggressive: null, conservative: null, confirmation: null, risk: "Sem resistencia confirmada para validar rompimento.", kind: null, stage: "none", level: null, retestValid: false, missing: "resistencia confirmada" };
     const breakout = previous.close <= level && lastClosed.close > level && candleConfirms(lastClosed, "COMPRA") && volumeOk;
     const forming = lastClosed.close > previous.close && lastClosed.close > lastClosed.open && lastClosed.close >= level * (1 - zoneTolerance);
-    const touchedRetestZone = lastClosed.low <= level * (1 + zoneTolerance);
+    // Reteste real exige que o nivel ja tenha sido rompido ANTES desta vela (previous.close > level).
+    // A propria vela de rompimento inicial nao pode se autoclassificar como reteste.
+    const levelAlreadyBroken = previous.close > level;
+    const touchedRetestZone = levelAlreadyBroken && lastClosed.low <= level * (1 + zoneTolerance);
     const reactedFromRetest = lastClosed.close > level && lastClosed.close > lastClosed.open && candleConfirms(lastClosed, "COMPRA");
     const previousAlreadyConfirmed = previous.low <= level * (1 + zoneTolerance)
       && previous.close > level
       && previous.close > previous.open
       && candleConfirms(previous, "COMPRA");
-    const controlledPullback = previous.low <= level * (1 + zoneTolerance * 1.5) && lastClosed.close > previous.close && candleConfirms(lastClosed, "COMPRA");
+    const controlledPullback = levelAlreadyBroken && previous.low <= level * (1 + zoneTolerance * 1.5) && lastClosed.close > previous.close && candleConfirms(lastClosed, "COMPRA");
     const retest = !previousAlreadyConfirmed && touchedRetestZone && reactedFromRetest && volumeOk;
-    const pullback = !previousAlreadyConfirmed && !retest && controlledPullback && volumeOk;
+    const pullback = !previousAlreadyConfirmed && !retest && controlledPullback && volumeOk && !breakout;
     return {
       direction: breakout || retest || pullback ? "COMPRA" : "AGUARDAR",
       aggressive: breakout ? lastClosed.close : level * 1.001,
@@ -343,15 +349,18 @@ function trigger5m(candles5m: Candle[], direction: RadarDirection, breakoutResis
   if (!level) return { direction: "AGUARDAR", aggressive: null, conservative: null, confirmation: null, risk: "Sem suporte confirmado para validar rompimento.", kind: null, stage: "none", level: null, retestValid: false, missing: "suporte confirmado" };
   const breakout = previous.close >= level && lastClosed.close < level && candleConfirms(lastClosed, "VENDA") && volumeOk;
   const forming = lastClosed.close < previous.close && lastClosed.close < lastClosed.open && lastClosed.close <= level * (1 + zoneTolerance);
-  const touchedRetestZone = lastClosed.high >= level * (1 - zoneTolerance);
+  // Reteste real exige que o nivel ja tenha sido rompido ANTES desta vela (previous.close < level).
+  // A propria vela de rompimento inicial nao pode se autoclassificar como reteste.
+  const levelAlreadyBrokenDown = previous.close < level;
+  const touchedRetestZone = levelAlreadyBrokenDown && lastClosed.high >= level * (1 - zoneTolerance);
   const reactedFromRetest = lastClosed.close < level && lastClosed.close < lastClosed.open && candleConfirms(lastClosed, "VENDA");
   const previousAlreadyConfirmed = previous.high >= level * (1 - zoneTolerance)
     && previous.close < level
     && previous.close < previous.open
     && candleConfirms(previous, "VENDA");
-  const controlledPullback = previous.high >= level * (1 - zoneTolerance * 1.5) && lastClosed.close < previous.close && candleConfirms(lastClosed, "VENDA");
+  const controlledPullback = levelAlreadyBrokenDown && previous.high >= level * (1 - zoneTolerance * 1.5) && lastClosed.close < previous.close && candleConfirms(lastClosed, "VENDA");
   const retest = !previousAlreadyConfirmed && touchedRetestZone && reactedFromRetest && volumeOk;
-  const pullback = !previousAlreadyConfirmed && !retest && controlledPullback && volumeOk;
+  const pullback = !previousAlreadyConfirmed && !retest && controlledPullback && volumeOk && !breakout;
   return {
     direction: breakout || retest || pullback ? "VENDA" : "AGUARDAR",
     aggressive: breakout ? lastClosed.close : level * 0.999,
@@ -443,16 +452,25 @@ export function qualityFilters(
   const wickExcess = lastBody > 0 ? rejectionWick > lastBody * wickLimit : true;
   const wickSevere = lastBody > 0 ? rejectionWick > lastBody * (wickLimit + 0.7) : true;
   const exhaustionCompanion = climactic || run > cfg.maxSameDirectionCandles || wickExcess || volumeExhaustion;
-  const movementBlocks = extensionExtreme || (extensionRelevant && exhaustionCompanion);
-  const ema21Severe = ema21Distance > symbolCfg.maxEma21DistancePct * 1.5;
-  const ema9Severe = ema9Distance > symbolCfg.maxEma9DistancePct * 1.5;
-  const sequenceBlocks = run > cfg.allowedFourthCandle || (run > cfg.maxSameDirectionCandles && extensionRelevant);
+  
+  // Reclassified filter limits
+  const movementBlocks = extensionExtreme;
+  const ema21Severe = ema21Distance > symbolCfg.maxEma21DistancePct * 2.5;
+  const ema9Severe = ema9Distance > symbolCfg.maxEma9DistancePct * 2.5;
+  const sequenceBlocks = run > 5;
+  
   const volumePasses = !!volume && (
     volume.relative >= cfg.preferredVolumeRelative
     || (volume.relative >= cfg.minVolumeRelative && (volume.delta5 > 0 || trigger.retestValid))
   );
-  const volumeSeverity: QualitySeverity = volumeRelative < cfg.minVolumeRelative ? "block" : "penalty";
-  const conservativeRetestAccepted = (trigger.kind === "retest" || trigger.kind === "pullback") && trigger.retestValid;
+  const volumeSeverity: QualitySeverity = volumeRelative < 0.5 ? "block" : "penalty";
+  const conservativeRetestAccepted = (trigger.kind === "retest" || trigger.kind === "pullback" || trigger.kind === "breakout") && trigger.retestValid;
+
+  // Avoid double penalization
+  const ema21Penalty = extensionRelevant ? 0 : -20;
+  const ema9Penalty = extensionRelevant ? 0 : -10;
+  const sequencePenalty = extensionRelevant ? 0 : -15;
+
   return [
     {
       name: "Reteste conservador",
@@ -467,7 +485,7 @@ export function qualityFilters(
       name: "Distancia da EMA21",
       passed: ema21Distance <= symbolCfg.maxEma21DistancePct,
       reason: `Distancia da EMA21 em ${(ema21Distance * 100).toFixed(2)}% (max ${(symbolCfg.maxEma21DistancePct * 100).toFixed(2)}% para ${symbol}).`,
-      penalty: -20,
+      penalty: ema21Penalty,
       severity: ema21Severe ? "block" : "penalty",
       details: { ema21: trend15m.ema21, distancePct: ema21Distance, maxDistancePct: symbolCfg.maxEma21DistancePct },
     },
@@ -475,7 +493,7 @@ export function qualityFilters(
       name: "Distancia da EMA9",
       passed: ema9Distance <= symbolCfg.maxEma9DistancePct,
       reason: `Distancia da EMA9 em ${(ema9Distance * 100).toFixed(2)}% (max ${(symbolCfg.maxEma9DistancePct * 100).toFixed(2)}% para ${symbol}).`,
-      penalty: -10,
+      penalty: ema9Penalty,
       severity: ema9Severe ? "block" : "penalty",
       details: { ema9: trend15m.ema9, distancePct: ema9Distance, maxDistancePct: symbolCfg.maxEma9DistancePct },
     },
@@ -491,7 +509,7 @@ export function qualityFilters(
       name: "Sequencia de candles",
       passed: run <= cfg.maxSameDirectionCandles || fourthAllowed,
       reason: `${run} velas consecutivas na direcao da entrada. Quarta vela ${fourthAllowed ? "permitida por reteste, EMAs, volume e candle nao climatico" : "exige reteste valido sem exaustao"}.`,
-      penalty: -15,
+      penalty: sequencePenalty,
       severity: sequenceBlocks ? "block" : "penalty",
       details: { sameDirectionCandles: run, fourthAllowed },
     },
@@ -607,15 +625,17 @@ export function analyzeMarketDecision(input: {
   const candles5m = closedCandles(input.candles5m, now);
   const decisionPrice = last(candles5m)?.close ?? last(candles15m)?.close ?? last(candles1h)?.close ?? null;
   const displayPrice = input.displayPrice !== null && finite(input.displayPrice) && input.displayPrice > 0 ? input.displayPrice : decisionPrice;
-  const blockedReasons: string[] = [];
+  const criticalBlockedReasons: string[] = [];
+  const warnings: string[] = [];
+  const qualityPenalties: string[] = [];
   const confirmations: string[] = [];
   const risks: string[] = [];
   const scoreItems: RadarLikeAnalysis["scoreItems"] = [];
 
   if (decisionPrice === null || candles1h.length < MIN_1H_CANDLES || candles15m.length < MIN_15M_CANDLES || candles5m.length < MIN_5M_CANDLES) {
-    blockedReasons.push("Dados insuficientes para calcular o Radar sem usar vela aberta.");
+    criticalBlockedReasons.push("Dados insuficientes para calcular o Radar sem usar vela aberta.");
   }
-  if (candles1h.length < MIN_EMA200_WARMUP) blockedReasons.push("Dados insuficientes para warm-up minimo da EMA 200.");
+  if (candles1h.length < MIN_EMA200_WARMUP) criticalBlockedReasons.push("Dados insuficientes para warm-up minimo da EMA 200.");
 
   const trend1hDetails = candles1h.length >= MIN_EMA200_WARMUP ? trendFor(candles1h, true) : null;
   const trend15mDetails = candles15m.length >= 25 ? trendFor(candles15m, false) : null;
@@ -626,58 +646,150 @@ export function analyzeMarketDecision(input: {
     : { support: null, resistance: null, breakoutResistance: null, breakdownSupport: null, recentHigh: null, recentLow: null };
   const volume = volumeDetails(candles15m);
   const context = contextualDirection(trend1h, trend15m, trend15mDetails);
-  if (context.blocked && context.reason) blockedReasons.push(context.reason);
-  if (volume?.veryWeak) blockedReasons.push("Volume extremamente baixo em relacao a media.");
-  const trigger = trigger5m(candles5m, context.direction, levels.breakoutResistance, levels.breakdownSupport, !!volume && volume.relative >= 0.7);
+  
+  if (context.blocked && context.reason) criticalBlockedReasons.push(context.reason);
+  if (volume?.veryWeak) criticalBlockedReasons.push("Volume extremamente baixo em relacao a media.");
+  
+  // Base trigger check
+  const trigger = trigger5m(candles5m, context.direction, levels.breakoutResistance, levels.breakdownSupport, !!volume && volume.relative >= 0.5);
+
+  // Strong Breakout Candidate Check
+  let isStrongBreakout = false;
+  if (
+    trigger.kind === "breakout" &&
+    context.direction !== "AGUARDAR" &&
+    volume !== null &&
+    volume.relative >= 1.2
+  ) {
+    const candidateEntry = trigger.aggressive;
+    if (candidateEntry !== null) {
+      const candidatePlan = rrPlan(trigger.direction, candidateEntry, levels.support, levels.resistance, levels.breakoutResistance, levels.breakdownSupport);
+      const candidateRrStatus: "pending" | "valid" | "invalid" = candidatePlan.rr === null ? "pending" : riskRewardMeetsMinimum(candidatePlan.rr) ? "valid" : "invalid";
+      
+      if (candidatePlan.valid && candidateRrStatus === "valid") {
+        const candidateSide: TradeSide | null = trigger.direction === "COMPRA" ? "BUY" : trigger.direction === "VENDA" ? "SELL" : null;
+        if (candidateSide !== null && trend15mDetails !== null) {
+          const candidateFilters = qualityFilters(input.symbol, candidateSide, candidateEntry, candles5m, trend15mDetails, volume, {
+            kind: "breakout",
+            level: trigger.level,
+            retestValid: false,
+          });
+          const hasSevereExhaustion = candidateFilters
+            .filter((f) => f.name !== "Reteste conservador")
+            .some((f) => !f.passed && f.severity === "block");
+            
+          if (!hasSevereExhaustion) {
+            isStrongBreakout = true;
+            trigger.conservative = trigger.aggressive;
+            trigger.retestValid = true;
+            trigger.stage = "confirmed";
+            trigger.confirmation = "Rompimento de alto volume confirmado no 5m.";
+            trigger.missing = null;
+          }
+        }
+      }
+    }
+  }
+
   const entry = trigger.conservative;
   const plan = rrPlan(trigger.direction, entry, levels.support, levels.resistance, levels.breakoutResistance, levels.breakdownSupport);
   const rrStatus: "pending" | "valid" | "invalid" = plan.rr === null ? "pending" : riskRewardMeetsMinimum(plan.rr) ? "valid" : "invalid";
-  if (trigger.stage === "forming") blockedReasons.push("Gatilho em formacao; falta reteste ou confirmacao conservadora.");
-  if (trigger.direction !== "AGUARDAR" && trigger.conservative === null) blockedReasons.push("Robo demo exige reteste real; rompimento imediato nao abre operacao.");
-  if (rrStatus === "invalid") blockedReasons.push("Relacao risco/retorno menor que 1:2.");
-  if (plan.stopTooFar) blockedReasons.push("Stop excessivamente distante para o setup intraday.");
-  if (trigger.direction !== "AGUARDAR" && !plan.valid) blockedReasons.push("Plano matematicamente invalido.");
+  
+  if (trigger.stage === "forming") warnings.push("Gatilho em formacao; falta reteste ou confirmacao conservadora.");
+  if (trigger.direction !== "AGUARDAR" && trigger.conservative === null) warnings.push("Robo demo exige reteste real; rompimento imediato nao abre operacao.");
+  if (rrStatus === "invalid") criticalBlockedReasons.push("Relacao risco/retorno menor que 1:2.");
+  if (plan.stopTooFar) criticalBlockedReasons.push("Stop excessivamente distante para o setup intraday.");
+  if (trigger.direction !== "AGUARDAR" && !plan.valid) criticalBlockedReasons.push("Plano matematicamente invalido.");
+  
   const candidateSide: TradeSide | null = trigger.direction === "COMPRA" ? "BUY" : trigger.direction === "VENDA" ? "SELL" : null;
-  const qualityFilterResults = candidateSide !== null && trigger.conservative !== null && trend15mDetails !== null
-    ? qualityFilters(input.symbol, candidateSide, trigger.conservative, candles5m, trend15mDetails, volume, {
+  const qualityFilterEntry = trigger.conservative ?? trigger.aggressive;
+  const qualityFilterResults = candidateSide !== null && qualityFilterEntry !== null && trend15mDetails !== null
+    ? qualityFilters(input.symbol, candidateSide, qualityFilterEntry, candles5m, trend15mDetails, volume, {
         kind: trigger.kind,
         level: trigger.level,
         retestValid: trigger.retestValid,
       })
     : [];
+
+    
   const qualityBlocks = blockingQualityFailures(qualityFilterResults);
   for (const filter of qualityBlocks) {
-    if (!blockedReasons.includes(filter.reason)) blockedReasons.push(filter.reason);
+    if (!criticalBlockedReasons.includes(filter.reason)) criticalBlockedReasons.push(filter.reason);
   }
+  
+  const failedPenalties = qualityFilterResults.filter((f) => !f.passed && f.severity === "penalty");
+  for (const filter of failedPenalties) {
+    qualityPenalties.push(filter.reason);
+  }
+
   const checklist: RadarChecklistItem[] = [
     { key: "trend1h", label: "Tendencia 1h", passed: trend1h !== "LATERAL", detail: trend1h },
     { key: "trend15m", label: "Tendencia 15m", passed: context.direction !== "AGUARDAR", detail: context.correction ? "CORRECAO CONTROLADA" : trend15m },
     { key: "trigger5m", label: "Gatilho 5m", passed: trigger.stage === "confirmed", detail: trigger.confirmation ?? trigger.risk ?? "Sem gatilho." },
-    { key: "volume", label: "Volume", passed: !!volume && volume.relative >= 0.7 && !volume.veryWeak, detail: volume ? `${(volume.relative * 100).toFixed(0)}% da media` : "Indisponivel" },
+    { key: "volume", label: "Volume", passed: !!volume && volume.relative >= 0.5 && !volume.veryWeak, detail: volume ? `${(volume.relative * 100).toFixed(0)}% da media` : "Indisponivel" },
     { key: "rr", label: "R/R >= 2", passed: rrStatus === "valid", detail: rrStatus === "pending" ? "Pendente" : plan.rr !== null ? `1:${plan.rr.toFixed(2)}` : "Indisponivel" },
     { key: "notLateral", label: "Fora da zona lateral", passed: context.direction !== "AGUARDAR", detail: context.direction !== "AGUARDAR" ? "OK" : "Sem contexto direcional" },
   ];
 
-  if (trend1h !== "LATERAL") { scoreItems.push({ label: "+25 tendencia 1h", points: 25, detail: trend1h }); confirmations.push(`Tendencia 1h em ${trend1h}.`); }
-  else scoreItems.push({ label: "+0 1h sem tendencia", points: 0, detail: "Conflito nos criterios da tendencia maior." });
-  if (trend15m !== "LATERAL" && trend15m === trend1h) { scoreItems.push({ label: "+20 confirmacao 15m", points: 20, detail: trend15m }); confirmations.push(`15m alinhado em ${trend15m}.`); }
-  else if (context.correction) { scoreItems.push({ label: "+12 correcao 15m controlada", points: 12, detail: context.reason ?? "15m em correcao controlada." }); confirmations.push("15m em correcao controlada."); }
-  else scoreItems.push({ label: "+0 15m sem confirmacao", points: 0, detail: context.reason ?? "15m nao confirma o 1h." });
-  if (trigger.stage === "confirmed") { scoreItems.push({ label: "+20 gatilho confirmado", points: 20, detail: trigger.confirmation ?? "Gatilho aprovado." }); confirmations.push(trigger.confirmation ?? "Gatilho 5m aprovado."); }
-  else if (trigger.stage === "forming") scoreItems.push({ label: "+8 gatilho em formacao", points: 8, detail: trigger.missing ?? "Aguardando reteste." });
-  else scoreItems.push({ label: "+0 sem gatilho 5m", points: 0, detail: trigger.risk ?? "Sem gatilho confirmado." });
-  if (volume && volume.relative >= DEMO_EXHAUSTION_CONFIG.minVolumeRelative) { scoreItems.push({ label: "+15 volume", points: 15, detail: volume.expanding ? "Volume relativo com expansao." : "Volume suficiente." }); confirmations.push(volume.expanding ? "Volume em expansao." : "Volume suficiente."); }
-  else if (volume && volume.relative >= 0.7) scoreItems.push({ label: "+7 volume moderado", points: 7, detail: `Volume relativo ${volume.relative.toFixed(2)}x com penalidade leve.` });
-  else scoreItems.push({ label: "+0 volume fraco", points: 0, detail: "Volume abaixo do minimo operacional." });
-  if (levels.support !== null && levels.resistance !== null) { scoreItems.push({ label: "+10 suporte/resistencia", points: 10, detail: "Niveis estruturais encontrados." }); confirmations.push("Suporte e resistencia mapeados."); }
-  else scoreItems.push({ label: "+0 sem nivel claro", points: 0, detail: "Suporte ou resistencia principal ausente." });
-  if (rrStatus === "valid") { scoreItems.push({ label: "+10 R/R >= 2", points: 10, detail: `1:${plan.rr?.toFixed(2)}` }); confirmations.push("R/R minimo aprovado."); }
-  else if (rrStatus === "pending") scoreItems.push({ label: "+0 R/R pendente", points: 0, detail: "R/R sera avaliado quando entrada/stop/alvos existirem." });
-  else scoreItems.push({ label: "-20 risco alto", points: -20, detail: `1:${plan.rr?.toFixed(2)}` });
+  if (trend1h !== "LATERAL") {
+    const isStrong1h = trend1hDetails && (trend1hDetails.bullishVotes === 4 || trend1hDetails.bearishVotes === 4);
+    const trendPts = isStrong1h ? 30 : 25;
+    scoreItems.push({ label: `+${trendPts} tendencia 1h${isStrong1h ? " forte (4/4)" : ""}`, points: trendPts, detail: trend1h });
+    confirmations.push(`Tendencia 1h em ${trend1h}${isStrong1h ? " (Forte)" : ""}.`);
+  } else {
+    scoreItems.push({ label: "+0 1h sem tendencia", points: 0, detail: "Conflito nos criterios da tendencia maior." });
+  }
+
+  if (trend15m !== "LATERAL" && trend15m === trend1h) {
+    const isStrong15m = trend15mDetails && (trend15mDetails.bullishVotes === 4 || trend15mDetails.bearishVotes === 4);
+    const confirmPts = isStrong15m ? 25 : 20;
+    scoreItems.push({ label: `+${confirmPts} confirmacao 15m${isStrong15m ? " forte (4/4)" : ""}`, points: confirmPts, detail: trend15m });
+    confirmations.push(`15m alinhado em ${trend15m}${isStrong15m ? " (Forte)" : ""}.`);
+  } else if (context.correction) {
+    scoreItems.push({ label: "+12 correcao 15m controlada", points: 12, detail: context.reason ?? "15m em correcao controlada." });
+    confirmations.push("15m em correcao controlada.");
+  } else {
+    scoreItems.push({ label: "+0 15m sem confirmacao", points: 0, detail: context.reason ?? "15m nao confirma o 1h." });
+  }
+
+  if (trigger.stage === "confirmed") {
+    scoreItems.push({ label: "+20 gatilho confirmado", points: 20, detail: trigger.confirmation ?? "Gatilho aprovado." });
+    confirmations.push(trigger.confirmation ?? "Gatilho 5m aprovado.");
+  } else if (trigger.stage === "forming") {
+    scoreItems.push({ label: "+8 gatilho em formacao", points: 8, detail: trigger.missing ?? "Aguardando reteste." });
+  } else {
+    scoreItems.push({ label: "+0 sem gatilho 5m", points: 0, detail: trigger.risk ?? "Sem gatilho confirmado." });
+  }
+
+  if (volume && volume.relative >= DEMO_EXHAUSTION_CONFIG.minVolumeRelative) {
+    scoreItems.push({ label: "+15 volume", points: 15, detail: volume.expanding ? "Volume relativo com expansao." : "Volume suficiente." });
+    confirmations.push(volume.expanding ? "Volume em expansao." : "Volume suficiente.");
+  } else if (volume && volume.relative >= 0.7) {
+    scoreItems.push({ label: "+7 volume moderado", points: 7, detail: `Volume relativo ${volume.relative.toFixed(2)}x com penalidade leve.` });
+  } else {
+    scoreItems.push({ label: "+0 volume fraco", points: 0, detail: "Volume abaixo do minimo operacional." });
+  }
+
+  if (levels.support !== null && levels.resistance !== null) {
+    scoreItems.push({ label: "+10 suporte/resistencia", points: 10, detail: "Niveis estruturais encontrados." });
+    confirmations.push("Suporte e resistencia mapeados.");
+  } else {
+    scoreItems.push({ label: "+0 sem nivel claro", points: 0, detail: "Suporte ou resistencia principal ausente." });
+  }
+
+  if (rrStatus === "valid") {
+    scoreItems.push({ label: "+10 R/R >= 2", points: 10, detail: `1:${plan.rr?.toFixed(2)}` });
+    confirmations.push("R/R minimo aprovado.");
+  } else if (rrStatus === "pending") {
+    scoreItems.push({ label: "+0 R/R pendente", points: 0, detail: "R/R sera avaliado quando entrada/stop/alvos existirem." });
+  } else {
+    scoreItems.push({ label: "-20 risco alto", points: -20, detail: `1:${plan.rr?.toFixed(2)}` });
+  }
+
   const rawScore = scoreItems.reduce((sum, item) => sum + item.points, 0);
   const scoreContextual = Math.max(0, Math.min(100, rawScore));
   if (trigger.kind === "pullback" && (scoreContextual < 95 || !volume || volume.relative < DEMO_EXHAUSTION_CONFIG.preferredVolumeRelative)) {
-    blockedReasons.push("Pullback conservador sem toque perfeito exige contexto >=95 e volume relativo >=1.0.");
+    criticalBlockedReasons.push("Pullback conservador sem toque perfeito exige contexto >=95 e volume relativo >=1.0.");
   }
   const operationalBase = (trigger.stage === "confirmed" ? 35 : trigger.stage === "forming" ? 15 : 0)
     + (trigger.retestValid ? 20 : 0)
@@ -689,7 +801,7 @@ export function analyzeMarketDecision(input: {
     .reduce((sum, filter) => sum + (filter.penalty ?? (filter.severity === "block" ? -25 : -10)), 0);
   const scoreOperacional = Math.max(0, Math.min(100, operationalBase + qualityPenalty));
   const state = decisionState({
-    hasCriticalBlock: blockedReasons.length > 0,
+    hasCriticalBlock: criticalBlockedReasons.length > 0,
     hasDirection: context.direction !== "AGUARDAR",
     trigger,
     planValid: plan.valid,
@@ -704,6 +816,8 @@ export function analyzeMarketDecision(input: {
     rrStatus === "pending" ? "R/R pendente" : rrStatus === "invalid" ? "R/R minimo 2:1" : null,
     volume && volume.relative < DEMO_EXHAUSTION_CONFIG.minVolumeRelative ? "volume ideal" : null,
   ].filter((item): item is string => item !== null);
+  
+  const blockedReasons = [...criticalBlockedReasons, ...warnings];
   const decisiveReason = blockedReasons[0] ?? missingConditions[0] ?? (state === "ENTRADA_APROVADA" ? "Entrada aprovada pelo funil operacional." : "Contexto em formacao.");
   const signalKey = [
     suggestedDirection,
@@ -746,6 +860,9 @@ export function analyzeMarketDecision(input: {
     checklist,
     confirmations: confirmations.slice(0, 8),
     blockedReasons,
+    criticalBlockedReasons,
+    warnings,
+    qualityPenalties,
     risks,
     scoreItems,
     qualityFilters: qualityFilterResults,
