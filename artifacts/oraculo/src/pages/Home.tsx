@@ -8,24 +8,137 @@ import {
   ChevronDown, ChevronUp, Bot, Pause,
 } from 'lucide-react';
 import { useBinanceData }       from '../hooks/useBinanceData';
+import { useApiHealth }         from '../hooks/useApiHealth';
+import { useMarketRadar }       from '../hooks/useMarketRadar';
+import { useDemoAgents }        from '../hooks/useDemoAgents';
 import { useAutoAnalysis }      from '../hooks/useAutoAnalysis';
 import { useDemoAutoAnalysis }  from '../hooks/useDemoAutoAnalysis';
 import { useDemoTrading }       from '../hooks/useDemoTrading';
+import { useOracleGlobalState } from '../hooks/useOracleGlobalState';
+import { useOnlineStatus }      from '../hooks/useOnlineStatus';
 import { runEngine, type EngineResult, type RuleStep, type StepStatus, type Decision } from '../lib/analysis';
 import { fmtTimeSP, fmtSPNow, isOperational as checkOperational } from '../lib/schedule';
-import { isSafetyLimited, safetyLimitReason } from '../lib/demo';
+import { isSafetyLimited, safetyLimitReason, type DemoSession } from '../lib/demo';
 import { TradingViewChart, type TVInterval } from '../components/TradingViewChart';
 import { DemoActivePanel }   from '../components/DemoActivePanel';
 import { DemoHistoryPanel }  from '../components/DemoHistoryPanel';
 import { DemoStatsPanel }    from '../components/DemoStatsPanel';
+import { MarketRadarPanel }  from '../components/MarketRadarPanel';
+import { DemoAgentsPanel }   from '../components/DemoAgentsPanel';
+import { RobotDiagnosticsPanel } from '../components/RobotDiagnosticsPanel';
+import { ControlledSimulationPanel } from '../components/ControlledSimulationPanel';
+import { NotificationsPanel } from '../components/NotificationsPanel';
+import { ObservabilityPanel } from '../components/ObservabilityPanel';
+import { PremiumLanding } from '../components/PremiumLanding';
+import { getAuth, loginUser, logoutUser, type AuthUser } from '../lib/demoApi';
+import { resolveOracleVisualState, type OracleVisualState } from '@shared/oracleVisualState';
+import { APP_DISPLAY_NAME, APP_NAME, APP_VERSION } from '@shared/appVersion';
 
-// ── Formatters ────────────────────────────────────────────────────────────────
+// â”€â”€ Formatters â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-function fmtPrice(n: number): string {
+function isFiniteNumber(n: number | null | undefined): n is number {
+  return typeof n === 'number' && Number.isFinite(n);
+}
+
+function fmtPrice(n: number | null | undefined): string {
+  if (!isFiniteNumber(n)) return 'â€”';
   return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-// ── Alert toast ───────────────────────────────────────────────────────────────
+function fmtCurrency(n: number | null | undefined): string {
+  return isFiniteNumber(n) ? `$${fmtPrice(n)}` : 'â€”';
+}
+
+function fmtSignedCurrency(n: number | null | undefined): string {
+  if (!isFiniteNumber(n)) return 'â€”';
+  return `${n >= 0 ? '+' : '-'}$${fmtPrice(Math.abs(n))}`;
+}
+
+function signedColor(n: number | null | undefined): string {
+  if (!isFiniteNumber(n)) return '#aaaaaa';
+  return n >= 0 ? '#00ff66' : '#ff4444';
+}
+
+function LoginScreen({ loading, error, onLogin }: {
+  loading: boolean;
+  error: string | null;
+  onLogin: (username: string, password: string) => void;
+}) {
+  const [username, setUsername] = useState('admin');
+  const [password, setPassword] = useState('');
+  return (
+    <div className="min-h-screen w-full bg-background text-foreground font-sans flex items-center justify-center p-4">
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          onLogin(username, password);
+        }}
+        className="w-full max-w-sm border border-border bg-card/60 p-5 flex flex-col gap-4"
+      >
+        <div className="flex items-center gap-3">
+          <ShieldAlert className="w-5 h-5 text-primary" />
+          <div>
+            <h1 className="text-lg font-mono font-bold uppercase tracking-[0.18em]">{APP_DISPLAY_NAME}</h1>
+            <p className="text-[11px] font-mono text-muted-foreground">Acesso seguro ao modo demo</p>
+          </div>
+        </div>
+        <label className="flex flex-col gap-1.5">
+          <span className="text-[10px] font-mono uppercase tracking-[0.18em] text-muted-foreground">Usuario</span>
+          <input
+            value={username}
+            onChange={(event) => setUsername(event.target.value)}
+            autoComplete="username"
+            className="bg-background border border-border px-3 py-3 font-mono text-sm outline-none focus:border-primary"
+          />
+        </label>
+        <label className="flex flex-col gap-1.5">
+          <span className="text-[10px] font-mono uppercase tracking-[0.18em] text-muted-foreground">Senha</span>
+          <input
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            type="password"
+            autoComplete="current-password"
+            className="bg-background border border-border px-3 py-3 font-mono text-sm outline-none focus:border-primary"
+          />
+        </label>
+        {error && <p className="text-[11px] font-mono text-[#ff4444]">{error}</p>}
+        <button
+          disabled={loading || password.length === 0 || username.trim().length === 0}
+          className="min-h-11 bg-primary text-primary-foreground font-mono font-bold uppercase tracking-[0.14em] disabled:opacity-40"
+        >
+          {loading ? 'Entrando...' : 'Entrar'}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+function OfflineScreen() {
+  return (
+    <div className="min-h-screen w-full bg-background text-foreground font-sans flex items-center justify-center p-4">
+      <section className="w-full max-w-sm border border-[#ffaa00]/35 bg-[#ffaa00]/[0.04] p-5 flex flex-col gap-4">
+        <div className="flex items-center gap-3">
+          <AlertTriangle className="w-5 h-5 text-[#ffaa00] flex-shrink-0" />
+          <div className="min-w-0">
+            <h1 className="text-sm font-mono font-bold uppercase tracking-[0.18em] text-[#ffaa00]">Sem conexao</h1>
+            <p className="mt-1 text-xs font-mono text-muted-foreground leading-relaxed">
+              Dados demo, sessao, posicoes e historico nao sao exibidos offline. Reconecte para carregar o estado oficial do servidor.
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="min-h-11 border border-[#ffaa00]/45 px-4 py-3 text-[10px] font-mono font-bold uppercase tracking-[0.14em] text-[#ffaa00] hover:bg-[#ffaa00]/10"
+        >
+          Tentar novamente
+        </button>
+      </section>
+    </div>
+  );
+}
+
+// â”€â”€ Alert toast â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface AlertMsg {
   id: number;
@@ -63,18 +176,42 @@ function AlertToast({ msg, onDismiss }: { msg: AlertMsg; onDismiss: () => void }
         <p className="text-xs uppercase tracking-[0.15em] font-bold" style={{ color: cfg.color }}>{msg.title}</p>
         <p className="text-[11px] text-foreground/60 mt-0.5 leading-relaxed">{msg.body}</p>
       </div>
-      <button className="text-muted-foreground/40 hover:text-muted-foreground text-xs flex-shrink-0 mt-0.5">✕</button>
+      <button className="text-muted-foreground/40 hover:text-muted-foreground text-xs flex-shrink-0 mt-0.5">âœ•</button>
     </motion.div>
   );
 }
 
-// ── Step row ─────────────────────────────────────────────────────────────────
+// â”€â”€ Step row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const STATUS_COLORS: Record<StepStatus, string> = {
   PASS: '#00ff66',
   FAIL: '#ff4444',
   INFO: '#ffaa00',
 };
+
+const ORACLE_VISUAL_STATE_META: Record<OracleVisualState, { label: string; color: string }> = {
+  waiting: { label: 'Aguardando', color: '#D4AF37' },
+  analyzing: { label: 'Analisando', color: '#00D8FF' },
+  buy: { label: 'Compra', color: '#00FF88' },
+  sell: { label: 'Venda', color: '#FF4D4D' },
+};
+
+function OracleLiveStateBadge({ state }: { state: OracleVisualState }) {
+  const meta = ORACLE_VISUAL_STATE_META[state];
+  return (
+    <div
+      data-oracle-state={state}
+      className="flex min-h-9 items-center gap-2 border border-border/70 bg-card/50 px-3 text-[10px] font-mono uppercase tracking-[0.16em]"
+      style={{ color: meta.color, borderColor: `${meta.color}44`, boxShadow: `0 0 18px ${meta.color}12` }}
+    >
+      <span className="relative flex h-2.5 w-2.5">
+        <span className="absolute inline-flex h-full w-full animate-ping opacity-35" style={{ background: meta.color }} />
+        <span className="relative inline-flex h-2.5 w-2.5" style={{ background: meta.color }} />
+      </span>
+      <span>Nucleo {meta.label}</span>
+    </div>
+  );
+}
 
 function StepRow({ step, index }: { step: RuleStep; index: number }) {
   const [open, setOpen] = useState(false);
@@ -94,7 +231,7 @@ function StepRow({ step, index }: { step: RuleStep; index: number }) {
         className="w-full flex items-center gap-4 px-5 py-3 text-left hover:bg-white/[0.02] transition-colors"
       >
         <span className="text-[10px] font-mono text-muted-foreground w-4 flex-shrink-0 select-none">
-          {step.number < 7 ? `0${step.number}` : '→'}
+          {step.number < 7 ? `0${step.number}` : 'â†’'}
         </span>
         {step.status === 'PASS'
           ? <CheckCircle2 className="w-4 h-4 flex-shrink-0" style={{ color }} />
@@ -109,7 +246,7 @@ function StepRow({ step, index }: { step: RuleStep; index: number }) {
         >
           {step.value}
         </span>
-        <span className="text-muted-foreground/40 text-xs ml-2 flex-shrink-0 select-none">{open ? '▲' : '▼'}</span>
+        <span className="text-muted-foreground/40 text-xs ml-2 flex-shrink-0 select-none">{open ? 'â–²' : 'â–¼'}</span>
       </button>
       <AnimatePresence>
         {open && (
@@ -131,7 +268,7 @@ function StepRow({ step, index }: { step: RuleStep; index: number }) {
   );
 }
 
-// ── PriceBlock ────────────────────────────────────────────────────────────────
+// â”€â”€ PriceBlock â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function PriceBlock({ label, value, accent, icon }: {
   label: string; value: string; accent: string; icon: React.ReactNode;
@@ -148,7 +285,7 @@ function PriceBlock({ label, value, accent, icon }: {
   );
 }
 
-// ── Decision banner ───────────────────────────────────────────────────────────
+// â”€â”€ Decision banner â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function DecisionBanner({ decision }: { decision: Decision }) {
   const cfg = {
@@ -165,7 +302,7 @@ function DecisionBanner({ decision }: { decision: Decision }) {
       <div className="flex items-center gap-4 pl-2">
         <span style={{ color: cfg.color }}>{cfg.icon}</span>
         <div>
-          <p className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.2em]">Decisão do Motor</p>
+          <p className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.2em]">DecisÃ£o do Motor</p>
           <p className="text-3xl font-mono font-bold"
             style={{ color: cfg.color, textShadow: `0 0 20px ${cfg.color}66` }}>
             {cfg.label}
@@ -174,17 +311,17 @@ function DecisionBanner({ decision }: { decision: Decision }) {
       </div>
       <div className="text-right hidden sm:block">
         <p className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em]">
-          {decision === 'SEM ENTRADA' ? 'Regras não satisfeitas' : 'Todas as regras aprovadas'}
+          {decision === 'SEM ENTRADA' ? 'Regras nÃ£o satisfeitas' : 'Todas as regras aprovadas'}
         </p>
         <p className="text-xs font-mono" style={{ color: cfg.color }}>
-          {decision === 'SEM ENTRADA' ? 'Aguardar setup completo' : 'Operar com gestão de risco'}
+          {decision === 'SEM ENTRADA' ? 'Aguardar setup completo' : 'Operar com gestÃ£o de risco'}
         </p>
       </div>
     </div>
   );
 }
 
-// ── Toggle ────────────────────────────────────────────────────────────────────
+// â”€â”€ Toggle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function Toggle({ checked, onChange, disabled, accentColor }: {
   checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; accentColor?: string;
@@ -212,11 +349,11 @@ function Toggle({ checked, onChange, disabled, accentColor }: {
   );
 }
 
-// ── Market status badge ───────────────────────────────────────────────────────
+// â”€â”€ Market status badge â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function MarketStatusBadge({ decision }: { decision: Decision | null }) {
   if (!decision) return (
-    <span className="text-xs font-mono text-muted-foreground/50 uppercase tracking-[0.15em]">—</span>
+    <span className="text-xs font-mono text-muted-foreground/50 uppercase tracking-[0.15em]">â€”</span>
   );
   const cfg = {
     BUY:           { color: '#00ff66', label: 'COMPRA'      },
@@ -231,7 +368,7 @@ function MarketStatusBadge({ decision }: { decision: Decision | null }) {
   );
 }
 
-// ── Price levels bar ──────────────────────────────────────────────────────────
+// â”€â”€ Price levels bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function PriceLevelsBar({ entry, stopLoss, target1, target2 }: {
   entry: string; stopLoss: string; target1: string; target2: string;
@@ -259,7 +396,7 @@ function PriceLevelsBar({ entry, stopLoss, target1, target2 }: {
   );
 }
 
-// ── Motivos section ───────────────────────────────────────────────────────────
+// â”€â”€ Motivos section â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function MotivosSection({ steps }: { steps: RuleStep[] }) {
   const failed = steps.filter(s => s.status === 'FAIL' && s.number < 7);
@@ -271,7 +408,7 @@ function MotivosSection({ steps }: { steps: RuleStep[] }) {
         <div className="flex items-center gap-2">
           <AlertCircle className="w-3.5 h-3.5 text-[#ff4444]" />
           <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-[#ff4444]/80">
-            Motivos — {failed.length} regra{failed.length > 1 ? 's' : ''} reprovada{failed.length > 1 ? 's' : ''}
+            Motivos â€” {failed.length} regra{failed.length > 1 ? 's' : ''} reprovada{failed.length > 1 ? 's' : ''}
           </span>
         </div>
         <div className="flex flex-col gap-3">
@@ -292,7 +429,7 @@ function MotivosSection({ steps }: { steps: RuleStep[] }) {
   );
 }
 
-// ── O que falta ───────────────────────────────────────────────────────────────
+// â”€â”€ O que falta â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function OQueFaltaSection({ steps }: { steps: RuleStep[] }) {
   const needItems = steps.filter(s => s.status === 'FAIL' && s.number < 7 && s.missing);
@@ -304,13 +441,13 @@ function OQueFaltaSection({ steps }: { steps: RuleStep[] }) {
         <div className="flex items-center gap-2">
           <Lightbulb className="w-3.5 h-3.5 text-[#ffaa00]" />
           <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-[#ffaa00]/80">
-            O que falta — {needItems.length} confirmação{needItems.length > 1 ? 'ões' : ''} pendente{needItems.length > 1 ? 's' : ''}
+            O que falta â€” {needItems.length} confirmaÃ§Ã£o{needItems.length > 1 ? 'Ãµes' : ''} pendente{needItems.length > 1 ? 's' : ''}
           </span>
         </div>
         <div className="flex flex-col gap-2">
           {needItems.map(step => (
             <div key={step.number} className="flex items-start gap-2">
-              <span className="text-[#ffaa00]/60 text-[11px] font-mono mt-0.5 flex-shrink-0">→</span>
+              <span className="text-[#ffaa00]/60 text-[11px] font-mono mt-0.5 flex-shrink-0">â†’</span>
               <span className="text-[11px] font-mono text-foreground/60 leading-relaxed">{step.missing}</span>
             </div>
           ))}
@@ -320,7 +457,7 @@ function OQueFaltaSection({ steps }: { steps: RuleStep[] }) {
   );
 }
 
-// ── Position parameters panel ─────────────────────────────────────────────────
+// â”€â”€ Position parameters panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function PositionParamsPanel({ entry, stopLoss, target1, target2, riskReward, direction }: {
   entry: string; stopLoss: string; target1: string; target2: string;
@@ -332,7 +469,7 @@ function PositionParamsPanel({ entry, stopLoss, target1, target2, riskReward, di
       <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-primary/40 to-transparent" />
       <div className="flex items-center justify-between">
         <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.2em]">
-          Parâmetros da Operação
+          ParÃ¢metros da OperaÃ§Ã£o
         </span>
         <span className="text-[10px] font-mono font-bold px-2 py-0.5 border"
           style={{ color: accent, borderColor: `${accent}44`, background: `${accent}12` }}>
@@ -349,19 +486,19 @@ function PositionParamsPanel({ entry, stopLoss, target1, target2, riskReward, di
   );
 }
 
-// ── S/R levels panel ──────────────────────────────────────────────────────────
+// â”€â”€ S/R levels panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function SRLevelsPanel({ support, resistance }: { support: string | null; resistance: string | null }) {
   if (!support && !resistance) return null;
   return (
     <div className="border border-border/50 bg-card/30 p-4 flex flex-col gap-3">
       <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.2em]">
-        Níveis Identificados (15M)
+        NÃ­veis Identificados (15M)
       </span>
       {resistance && (
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-xs font-mono text-[#ff4444]/80 uppercase tracking-wider">
-            <ArrowUpRight className="w-3 h-3" /> Resistência
+            <ArrowUpRight className="w-3 h-3" /> ResistÃªncia
           </div>
           <span className="font-mono font-bold text-[#ff4444]">{resistance}</span>
         </div>
@@ -378,7 +515,7 @@ function SRLevelsPanel({ support, resistance }: { support: string | null; resist
   );
 }
 
-// ── Demo status badge ─────────────────────────────────────────────────────────
+// â”€â”€ Demo status badge â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function DemoStatusBadge({ enabled, limited, reason }: {
   enabled: boolean; limited: boolean; reason?: string;
@@ -409,13 +546,141 @@ function DemoStatusBadge({ enabled, limited, reason }: {
   );
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
+// â”€â”€ Main â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+function MobileSystemStatus({
+  apiOnline,
+  binanceOnline,
+  demoEnabled,
+  safeLimited,
+  symbol,
+  lastUpdate,
+}: {
+  apiOnline: boolean;
+  binanceOnline: boolean;
+  demoEnabled: boolean;
+  safeLimited: boolean;
+  symbol: string;
+  lastUpdate: Date | null;
+}) {
+  const systemOnline = apiOnline && binanceOnline;
+  return (
+    <section className="lg:hidden border border-border/60 bg-card/40 p-3">
+      <div className="grid grid-cols-2 gap-2">
+        <MobileMiniCell label="Sistema" value={systemOnline ? 'Online' : 'Offline'} color={systemOnline ? '#00ff66' : '#ff4444'} />
+        <MobileMiniCell label="Demo" value={demoEnabled ? safeLimited ? 'Pausado' : 'Ativo' : 'Inativo'} color={demoEnabled && !safeLimited ? '#00f0ff' : '#ffaa00'} />
+        <MobileMiniCell label="Par" value={symbol.replace('USDT', '')} color="#ffffff" />
+        <MobileMiniCell
+          label="Atualizacao"
+          value={lastUpdate ? lastUpdate.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--'}
+          color="#aaaaaa"
+        />
+      </div>
+    </section>
+  );
+}
+
+function MobileMiniCell({ label, value, color }: { label: string; value: string; color: string }) {
+  return (
+    <div className="min-w-0 border border-border/40 bg-background/25 px-3 py-2">
+      <p className="text-[8px] font-mono uppercase tracking-[0.14em] text-muted-foreground truncate">{label}</p>
+      <p className="mt-0.5 text-xs font-mono font-bold uppercase tabular-nums truncate" style={{ color }}>{value}</p>
+    </div>
+  );
+}
+
+function MobileEmptyOperation({ safeLimited, safeReason, countdown }: { safeLimited: boolean; safeReason?: string; countdown: string }) {
+  return (
+    <section className="lg:hidden border border-[#00f0ff]/20 bg-[#00f0ff]/[0.04] p-3">
+      <div className="flex items-center gap-3">
+        <Bot className="w-5 h-5 text-[#00f0ff]/60 flex-shrink-0" />
+        <div className="min-w-0 flex-1">
+          <p className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-[#00f0ff]">Sem operacao aberta</p>
+          <p className="mt-1 text-[10px] font-mono text-muted-foreground/70 leading-snug break-words">
+            {safeLimited ? safeReason ?? 'Novas operacoes pausadas por limite de risco.' : `Proxima leitura demo em ${countdown}.`}
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function MobileActions({
+  canAnalyze,
+  analyzing,
+  loading,
+  demoEnabled,
+  marketError,
+  onAnalyze,
+  onRefresh,
+  onAutomationChange,
+}: {
+  canAnalyze: boolean;
+  analyzing: boolean;
+  loading: boolean;
+  demoEnabled: boolean;
+  marketError: string | null;
+  onAnalyze: () => void;
+  onRefresh: () => void;
+  onAutomationChange: (enabled: boolean) => void;
+}) {
+  return (
+    <section className="lg:hidden grid grid-cols-2 gap-2">
+      <button
+        onClick={onAnalyze}
+        disabled={!canAnalyze}
+        className={`min-h-11 border px-3 py-3 text-[10px] font-mono font-bold uppercase tracking-[0.14em] flex items-center justify-center gap-2 ${
+          canAnalyze ? 'bg-primary text-primary-foreground border-primary' : 'bg-primary/10 text-primary/40 border-primary/20'
+        }`}
+      >
+        <Zap className="w-3.5 h-3.5" />
+        {analyzing ? 'Analisando' : 'Analisar'}
+      </button>
+      <button
+        onClick={onRefresh}
+        disabled={loading}
+        className="min-h-11 border border-border/60 bg-card/40 px-3 py-3 text-[10px] font-mono font-bold uppercase tracking-[0.14em] flex items-center justify-center gap-2 text-foreground"
+      >
+        <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+        Atualizar
+      </button>
+      <div className="col-span-2 min-h-11 flex items-center justify-between border border-[#00f0ff]/25 bg-[#00f0ff]/[0.04] px-3 py-2">
+        <div className="min-w-0">
+          <p className="text-[9px] font-mono uppercase tracking-[0.16em] text-muted-foreground">Automacao demo</p>
+          <p className="text-[10px] font-mono uppercase truncate" style={{ color: demoEnabled ? '#00f0ff' : '#ffaa00' }}>
+            {demoEnabled ? 'Ativa no servidor' : 'Inativa'}
+          </p>
+        </div>
+        <Toggle checked={demoEnabled} onChange={onAutomationChange} disabled={loading || !!marketError} accentColor="#00f0ff" />
+      </div>
+    </section>
+  );
+}
+
+function MobilePanelOverview({ session }: { session: DemoSession }) {
+  const balanceColor = isFiniteNumber(session.balance) && isFiniteNumber(session.configuredBalance)
+    ? (session.balance >= session.configuredBalance ? '#00ff66' : '#ff4444')
+    : '#aaaaaa';
+  return (
+    <section className="lg:hidden border border-border/60 bg-card/40 p-3">
+      <div className="grid grid-cols-2 gap-2">
+        <MobileMiniCell label="Saldo demo" value={fmtCurrency(session.balance)} color={balanceColor} />
+        <MobileMiniCell label="P&L dia" value={fmtSignedCurrency(session.dailyStats?.dailyPnL)} color={signedColor(session.dailyStats?.dailyPnL)} />
+        <MobileMiniCell label="Flutuante" value={fmtSignedCurrency(session.unrealizedPnlUSDC)} color={signedColor(session.unrealizedPnlUSDC)} />
+        <MobileMiniCell label="Abertas" value={session.activeTrade ? '1' : '0'} color={session.activeTrade ? '#00f0ff' : '#aaaaaa'} />
+        <MobileMiniCell label="Trades" value={isFiniteNumber(session.dailyStats?.totalTrades) ? String(session.dailyStats.totalTrades) : 'â€”'} color="#ffffff" />
+        <MobileMiniCell label="W/L/BE" value={`${isFiniteNumber(session.dailyStats?.wins) ? session.dailyStats.wins : 'â€”'}/${isFiniteNumber(session.dailyStats?.losses) ? session.dailyStats.losses : 'â€”'}/${isFiniteNumber(session.dailyStats?.breakevens) ? session.dailyStats.breakevens : 'â€”'}`} color="#ffffff" />
+        <MobileMiniCell label="Drawdown" value={fmtCurrency(session.dailyStats?.maxDrawdown)} color="#ffaa00" />
+        <MobileMiniCell label="Risco aberto" value={fmtCurrency(session.openRiskUSDC)} color="#ffaa00" />
+      </div>
+    </section>
+  );
+}
 
 let alertIdCounter = 0;
 
 export default function Home() {
-  const market = useBinanceData();
-
+  const online = useOnlineStatus();
   // Chart controls
   const [selectedPair, setSelectedPair] = useState<string>('BTCUSDT');
   const [tvInterval,   setTvInterval]   = useState<TVInterval>('5');
@@ -426,14 +691,14 @@ export default function Home() {
   const [result,       setResult]       = useState<EngineResult | null>(null);
   const [resultTime,   setResultTime]   = useState<Date | null>(null);
 
-  // Auto mode (schedule-gated, Mon–Fri 08:30–17:00 SP)
+  // Auto mode (schedule-gated, Monâ€“Fri 08:30â€“17:00 SP)
   const [autoEnabled,  setAutoEnabled]  = useState(false);
-
-  // Demo mode
-  const [demoEnabled, setDemoEnabled] = useState(false);
 
   // Steps expand/collapse
   const [stepsExpanded, setStepsExpanded] = useState(false);
+  const [mobileTab, setMobileTab] = useState<'operation' | 'panel'>('operation');
+  const [mobileChartOpen, setMobileChartOpen] = useState(false);
+  const manualAnalyzeTimeoutRef = useRef<number | null>(null);
 
   // Alerts
   const [alerts, setAlerts] = useState<AlertMsg[]>([]);
@@ -442,6 +707,10 @@ export default function Home() {
   // SP clock
   const [spClock, setSpClock] = useState(fmtSPNow);
   const [isOp,    setIsOp]    = useState(checkOperational);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const isAuthenticated = !!authUser;
   useEffect(() => {
     const id = setInterval(() => {
       setSpClock(fmtSPNow());
@@ -450,7 +719,70 @@ export default function Home() {
     return () => clearInterval(id);
   }, []);
 
-  // ── Demo trading ──────────────────────────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false;
+    void getAuth()
+      .then((auth) => {
+        if (cancelled) return;
+        setAuthUser(auth.authenticated ? auth.user ?? null : null);
+        setAuthError(null);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setAuthUser(null);
+        setAuthError(err instanceof Error ? err.message : 'Falha ao verificar sessao.');
+      })
+      .finally(() => {
+        if (!cancelled) setAuthLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleLogin = useCallback((username: string, password: string) => {
+    setAuthLoading(true);
+    setAuthError(null);
+    void loginUser(username, password)
+      .then((auth) => {
+        setAuthUser(auth.authenticated ? auth.user ?? null : null);
+        if (!auth.authenticated) setAuthError('Credenciais invalidas.');
+      })
+      .catch((err) => {
+        setAuthUser(null);
+        setAuthError(err instanceof Error ? err.message : 'Credenciais invalidas.');
+      })
+      .finally(() => setAuthLoading(false));
+  }, []);
+
+  const handleLogout = useCallback(() => {
+    setAuthLoading(true);
+    if (manualAnalyzeTimeoutRef.current !== null) {
+      window.clearTimeout(manualAnalyzeTimeoutRef.current);
+      manualAnalyzeTimeoutRef.current = null;
+    }
+    setAutoEnabled(false);
+    setAnalyzing(false);
+    setResult(null);
+    setResultTime(null);
+    setStepsExpanded(false);
+    setMobileChartOpen(false);
+    setAlerts([]);
+    prevDecisionRef.current = null;
+    prevDemoDecisionRef.current = null;
+    setAuthUser(null);
+    void logoutUser()
+      .catch(() => undefined)
+      .finally(() => {
+        setAuthLoading(false);
+      });
+  }, []);
+
+  const market = useBinanceData(isAuthenticated);
+  const apiHealth = useApiHealth(isAuthenticated);
+  const publicOracle = useOracleGlobalState(!isAuthenticated);
+  const radar = useMarketRadar(isAuthenticated);
+  const demoAgents = useDemoAgents(radar.analysis);
+
+  // â”€â”€ Demo trading â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const {
     session: demoSession,
@@ -458,17 +790,26 @@ export default function Home() {
     updatePrice,
     resetSession,
     setConfiguredBalance,
-  } = useDemoTrading();
+    automationEnabled: demoEnabled,
+    serverError: demoServerError,
+    setAutomationEnabled,
+  } = useDemoTrading(isAuthenticated);
+  const oracleVisualState = resolveOracleVisualState({
+    authenticated: isAuthenticated,
+    apiError: apiHealth.error || demoServerError,
+    activeTrade: demoSession.activeTrade,
+    worker: apiHealth.health?.worker,
+  });
 
   // Feed live price into demo state machine every time price updates
   useEffect(() => {
-    if (market.price !== null) updatePrice(market.price);
-  }, [market.price, updatePrice]);
+    if (isAuthenticated && market.price !== null) updatePrice(market.price, selectedPair);
+  }, [isAuthenticated, market.price, selectedPair, updatePrice]);
 
   const safeLimited = isSafetyLimited(demoSession.dailyStats);
   const safeReason  = safeLimited ? safetyLimitReason(demoSession.dailyStats) : undefined;
 
-  // ── Alert emission ────────────────────────────────────────────────────────
+  // â”€â”€ Alert emission â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const pushAlert = useCallback((msg: Omit<AlertMsg, 'id'>) => {
     const id = ++alertIdCounter;
@@ -479,7 +820,7 @@ export default function Home() {
     setAlerts(prev => prev.filter(a => a.id !== id));
   }, []);
 
-  // ── Manual+Auto result handler ────────────────────────────────────────────
+  // â”€â”€ Manual+Auto result handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const handleResult = useCallback((res: EngineResult, triggeredAt?: Date) => {
     setResult(res);
@@ -491,20 +832,20 @@ export default function Home() {
     if (prev !== null && prev !== curr) {
       if (prev === 'SEM ENTRADA' && curr === 'BUY') {
         pushAlert({ kind: 'buy',  title: 'Sinal de Compra Detectado',
-          body: 'O motor identificou um setup de COMPRA. Verifique os níveis e aplique gestão de risco.' });
+          body: 'O motor identificou um setup de COMPRA. Verifique os nÃ­veis e aplique gestÃ£o de risco.' });
       } else if (prev === 'SEM ENTRADA' && curr === 'SELL') {
         pushAlert({ kind: 'sell', title: 'Sinal de Venda Detectado',
-          body: 'O motor identificou um setup de VENDA. Verifique os níveis e aplique gestão de risco.' });
+          body: 'O motor identificou um setup de VENDA. Verifique os nÃ­veis e aplique gestÃ£o de risco.' });
       } else if ((prev === 'BUY' || prev === 'SELL') && curr === 'SEM ENTRADA') {
         const prevLabel = prev === 'BUY' ? 'COMPRA' : 'VENDA';
         pushAlert({ kind: 'invalidated', title: `Setup de ${prevLabel} Invalidado`,
-          body: 'As condições do setup anterior deixaram de ser satisfeitas. Sinal cancelado.' });
+          body: 'As condiÃ§Ãµes do setup anterior deixaram de ser satisfeitas. Sinal cancelado.' });
       }
     }
     prevDecisionRef.current = curr;
   }, [pushAlert]);
 
-  // ── Demo signal handler (24/7, separate callback) ─────────────────────────
+  // â”€â”€ Demo signal handler (24/7, separate callback) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const prevDemoDecisionRef = useRef<Decision | null>(null);
 
@@ -518,8 +859,8 @@ export default function Home() {
           const label = res.decision === 'BUY' ? 'COMPRA' : 'VENDA';
           pushAlert({
             kind: 'demo',
-            title: `Demo — Operação de ${label} Aberta`,
-            body: `Operação simulada de ${label} registrada em ${selectedPair}. Acompanhe no painel demo.`,
+            title: `Demo â€” OperaÃ§Ã£o de ${label} Aberta`,
+            body: `OperaÃ§Ã£o simulada de ${label} registrada em ${selectedPair}. Acompanhe no painel demo.`,
           });
         }
       }
@@ -527,10 +868,10 @@ export default function Home() {
     prevDemoDecisionRef.current = res.decision;
   }, [feedSignal, selectedPair, safeLimited, pushAlert]);
 
-  // ── Auto-analysis hook (schedule-gated, Mon–Fri 08:30–17:00 SP) ──────────
+  // â”€â”€ Auto-analysis hook (schedule-gated, Monâ€“Fri 08:30â€“17:00 SP) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const autoState = useAutoAnalysis({
-    enabled:    autoEnabled,
+    enabled:    isAuthenticated && autoEnabled,
     candles1h:  market.candles1h,
     candles15m: market.candles15m,
     candles5m:  market.candles5m,
@@ -538,10 +879,10 @@ export default function Home() {
     onResult:   handleResult,
   });
 
-  // ── Demo auto-analysis hook (24/7, no schedule gate) ─────────────────────
+  // â”€â”€ Demo auto-analysis hook (24/7, no schedule gate) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const demoAutoState = useDemoAutoAnalysis({
-    enabled:    demoEnabled && !market.loading && !market.error,
+    enabled:    isAuthenticated && demoEnabled && !market.loading && !market.error,
     candles1h:  market.candles1h,
     candles15m: market.candles15m,
     candles5m:  market.candles5m,
@@ -549,35 +890,58 @@ export default function Home() {
     onResult:   handleDemoSignal,
   });
 
-  // ── Manual analysis ───────────────────────────────────────────────────────
+  // â”€â”€ Manual analysis â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const canAnalyze =
-    !analyzing && !market.loading && !market.error &&
+    isAuthenticated && !analyzing && !market.loading && !market.error &&
     market.price !== null && market.candles1h.length > 20;
 
   const handleManualAnalyze = () => {
     if (!canAnalyze) return;
+    if (manualAnalyzeTimeoutRef.current !== null) window.clearTimeout(manualAnalyzeTimeoutRef.current);
     setAnalyzing(true);
     setResult(null);
-    setTimeout(() => {
+    manualAnalyzeTimeoutRef.current = window.setTimeout(() => {
       const res = runEngine(market.candles1h, market.candles15m, market.candles5m, market.price!);
       handleResult(res);
       setAnalyzing(false);
+      manualAnalyzeTimeoutRef.current = null;
     }, 900);
   };
 
-  // ─────────────────────────────────────────────────────────────────────────
+  const handleRefreshMobile = () => {
+    if (!isAuthenticated) return;
+    void market.refresh();
+    void radar.refresh();
+  };
+
+  useEffect(() => () => {
+    if (manualAnalyzeTimeoutRef.current !== null) {
+      window.clearTimeout(manualAnalyzeTimeoutRef.current);
+      manualAnalyzeTimeoutRef.current = null;
+    }
+  }, []);
+
+  if (!online) {
+    return <OfflineScreen />;
+  }
+
+  if (!authUser) {
+    return <PremiumLanding loading={authLoading} error={authError} onLogin={handleLogin} state={publicOracle.state} />;
+  }
+
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // RENDER
-  // ─────────────────────────────────────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   return (
-    <div className="min-h-screen w-full bg-background text-foreground font-sans selection:bg-primary/30 flex flex-col items-center p-4 sm:p-8 relative overflow-hidden">
+    <div className="premium-dashboard-shell min-h-screen w-full bg-background text-foreground font-sans selection:bg-primary/30 flex flex-col items-center p-4 sm:p-8 relative overflow-hidden">
 
       {/* Ambient glows */}
       <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-primary/5 rounded-full blur-[120px] pointer-events-none" />
       <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-primary/5 rounded-full blur-[120px] pointer-events-none" />
 
-      {/* ── Alert toasts ─────────────────────────────────────────────────── */}
+      {/* â”€â”€ Alert toasts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <div className="fixed top-6 right-6 z-[100] flex flex-col gap-2 items-end pointer-events-none">
         <AnimatePresence mode="popLayout">
           {alerts.map(msg => (
@@ -588,7 +952,7 @@ export default function Home() {
         </AnimatePresence>
       </div>
 
-      {/* ── Header ──────────────────────────────────────────────────────── */}
+      {/* â”€â”€ Header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <header className="w-full max-w-5xl flex items-center justify-between mb-8 border-b border-border pb-6 pt-4 relative z-10">
         <div className="flex items-center gap-4">
           <div className="relative flex items-center justify-center w-10 h-10">
@@ -596,45 +960,55 @@ export default function Home() {
             <div className="relative w-4 h-4 bg-primary shadow-[0_0_15px_var(--color-primary)] rotate-45" />
           </div>
           <h1 className="text-3xl sm:text-4xl font-mono font-bold tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-white to-white/70">
-            ORÁCULO<span className="text-primary ml-2">0.3</span>
+            {APP_NAME.toUpperCase()}<span className="text-primary ml-2">{APP_VERSION}</span>
           </h1>
         </div>
-        <div className="hidden sm:flex items-center gap-2 text-xs font-mono text-primary bg-primary/10 px-4 py-2 border-l-2 border-primary">
+        <div className="hidden sm:flex items-center gap-3 text-xs font-mono text-primary bg-primary/10 px-4 py-2 border-l-2 border-primary">
+          <OracleLiveStateBadge state={oracleVisualState} />
           <Activity className="w-4 h-4" />
-          <span className="tracking-widest">SYSTEM ONLINE</span>
+          <span className="tracking-widest">{authUser.username}</span>
+          <button
+            onClick={handleLogout}
+            className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground hover:text-foreground"
+          >
+            Sair
+          </button>
         </div>
       </header>
 
       <main className="w-full max-w-5xl flex flex-col gap-5 relative z-10">
+        <div className="sm:hidden">
+          <OracleLiveStateBadge state={oracleVisualState} />
+        </div>
 
-        {/* ── Live price ──────────────────────────────────────────────────── */}
-        <section className="bg-card/50 backdrop-blur-md border border-border p-5 relative overflow-hidden">
+        {/* â”€â”€ Live price â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        <section className="hidden lg:block bg-card/50 backdrop-blur-md border border-border p-5 relative overflow-hidden">
           <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-primary/30 to-transparent" />
           {market.error ? (
-            <div className="flex items-center gap-3 text-destructive font-mono text-sm">
+            <div className="flex items-center gap-3 text-destructive font-mono text-sm min-w-0">
               <AlertTriangle className="w-5 h-5 flex-shrink-0" />
-              <span>Falha ao conectar com Binance: {market.error}</span>
+              <span className="min-w-0 whitespace-normal break-all">Falha Binance: {market.error}</span>
             </div>
           ) : market.loading ? (
             <div className="flex items-center gap-3 text-muted-foreground font-mono text-sm">
               <RefreshCw className="w-4 h-4 animate-spin" />
-              <span className="tracking-widest text-xs uppercase">Conectando à Binance...</span>
+              <span className="tracking-widest text-xs uppercase">Conectando Ã  Binance...</span>
             </div>
           ) : (
             <div className="flex flex-col sm:flex-row sm:items-end gap-4 justify-between">
               <div className="flex flex-col gap-1">
                 <span className="text-[10px] font-mono uppercase tracking-[0.25em] text-muted-foreground">
-                  BTC / USDT · Preço Atual
+                  BTC / USDT Â· PreÃ§o Atual
                 </span>
                 <AnimatePresence mode="wait">
                   <motion.span
-                    key={market.price?.toFixed(2)}
+                    key={isFiniteNumber(market.price) ? market.price.toFixed(2) : 'price-loading'}
                     initial={{ opacity: 0.4, y: -4 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.25 }}
                     className="text-4xl sm:text-5xl font-mono font-bold text-white drop-shadow-[0_0_12px_rgba(255,255,255,0.15)]"
                   >
-                    ${fmtPrice(market.price!)}
+                    {fmtCurrency(market.price)}
                   </motion.span>
                 </AnimatePresence>
               </div>
@@ -644,15 +1018,205 @@ export default function Home() {
                   <span className="tracking-widest">
                     {market.lastUpdate.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', second: '2-digit' })} (SP)
                   </span>
-                  <span className="text-primary/50 ml-1">· 30s</span>
+                  <span className="text-primary/50 ml-1">Â· 30s</span>
                 </div>
               )}
             </div>
           )}
         </section>
 
-        {/* ── Controls ────────────────────────────────────────────────────── */}
-        <section className="bg-card/50 backdrop-blur-md border border-border p-6 relative overflow-hidden">
+        {/* â”€â”€ Controls â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        <section className="hidden lg:grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <div className="border border-border/50 bg-card/30 px-4 py-3">
+            <span className="text-[9px] font-mono uppercase tracking-[0.18em] text-muted-foreground">API</span>
+            <div className="mt-1 flex items-center gap-2">
+              {apiHealth.error
+                ? <AlertTriangle className="w-3.5 h-3.5 text-[#ff4444]" />
+                : <Activity className="w-3.5 h-3.5 text-[#00ff66]" />
+              }
+              <span className={`text-[11px] font-mono font-bold uppercase ${apiHealth.error ? 'text-[#ff4444]' : 'text-[#00ff66]'}`}>
+                {apiHealth.error ? 'Indisponivel' : apiHealth.loading ? 'Verificando' : 'Online'}
+              </span>
+            </div>
+          </div>
+          <div className="border border-border/50 bg-card/30 px-4 py-3">
+            <span className="text-[9px] font-mono uppercase tracking-[0.18em] text-muted-foreground">Binance</span>
+            <div className="mt-1 flex items-center gap-2 min-w-0">
+              {apiHealth.health?.binance.ok
+                ? <Activity className="w-3.5 h-3.5 text-[#00ff66]" />
+                : <AlertTriangle className="w-3.5 h-3.5 text-[#ffaa00]" />
+              }
+              <span className={`text-[11px] font-mono font-bold uppercase min-w-0 truncate ${apiHealth.health?.binance.ok ? 'text-[#00ff66]' : 'text-[#ffaa00]'}`}>
+                {apiHealth.health?.binance.ok ? `${apiHealth.health.binance.latencyMs ?? 0}ms` : 'Degradada'}
+              </span>
+            </div>
+          </div>
+          <div className="border border-border/50 bg-card/30 px-4 py-3">
+            <span className="text-[9px] font-mono uppercase tracking-[0.18em] text-muted-foreground">Falhas</span>
+            <p className="mt-1 text-[10px] font-mono text-muted-foreground/80 min-w-0 break-words">
+              {apiHealth.error ?? (apiHealth.health?.binance.error ? 'Binance instavel; dados podem atrasar.' : 'Sem falhas criticas.')}
+            </p>
+          </div>
+        </section>
+
+        <div className="lg:hidden grid grid-cols-2 gap-2 border border-border/60 bg-card/40 p-1">
+          {([
+            ['operation', 'Operacao'],
+            ['panel', 'Painel'],
+          ] as const).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setMobileTab(key)}
+              className={`py-2.5 text-[11px] font-mono uppercase tracking-[0.18em] transition-all ${
+                mobileTab === key
+                  ? 'bg-primary text-primary-foreground shadow-[0_0_10px_var(--color-primary)]'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div className={`${mobileTab === 'operation' ? 'flex' : 'hidden'} lg:hidden flex-col gap-3`}>
+          <MobileSystemStatus
+            apiOnline={!apiHealth.error && !apiHealth.loading}
+            binanceOnline={!!apiHealth.health?.binance.ok && !market.error}
+            demoEnabled={demoEnabled}
+            safeLimited={safeLimited}
+            symbol={radar.symbol}
+            lastUpdate={market.lastUpdate ?? radar.lastUpdate}
+          />
+
+          {demoSession.activeTrade ? (
+            <DemoActivePanel trade={demoSession.activeTrade} currentPrice={market.price} />
+          ) : (
+            <MobileEmptyOperation safeLimited={safeLimited} safeReason={safeReason} countdown={demoAutoState.countdown} />
+          )}
+
+          <MobileActions
+            canAnalyze={canAnalyze}
+            analyzing={analyzing}
+            loading={market.loading || radar.loading}
+            demoEnabled={demoEnabled}
+            marketError={market.error}
+            onAnalyze={handleManualAnalyze}
+            onRefresh={handleRefreshMobile}
+            onAutomationChange={(enabled) => setAutomationEnabled(enabled, radar.symbol)}
+          />
+
+          <MarketRadarPanel
+            analysis={radar.analysis}
+            loading={radar.loading}
+            error={radar.error}
+            lastUpdate={radar.lastUpdate}
+            symbol={radar.symbol}
+            onSymbolChange={radar.setSymbol}
+          />
+          <RobotDiagnosticsPanel user={authUser} />
+
+          <button
+            onClick={() => setMobileChartOpen(open => !open)}
+            className="flex min-h-11 items-center justify-between border border-border/60 bg-card/40 px-4 py-3"
+          >
+            <span className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-[0.18em] text-muted-foreground">
+              <BarChart2 className="w-3.5 h-3.5 text-primary" />
+              Grafico
+            </span>
+            {mobileChartOpen
+              ? <ChevronUp className="w-4 h-4 text-muted-foreground/60" />
+              : <ChevronDown className="w-4 h-4 text-muted-foreground/60" />
+            }
+          </button>
+          <section className={`${mobileChartOpen ? 'block' : 'hidden'} bg-card/50 border border-border overflow-hidden`}>
+            <TradingViewChart key={`mobile-${radar.symbol}-${tvInterval}`} symbol={`BINANCE:${radar.symbol}`} interval={tvInterval} height={360} />
+          </section>
+        </div>
+
+        <div className={`${mobileTab === 'panel' ? 'flex' : 'hidden'} lg:hidden flex-col gap-3`}>
+          <NotificationsPanel />
+          <MobilePanelOverview session={demoSession} />
+          <DemoAgentsPanel
+            agents={demoAgents.agents}
+            configs={demoAgents.configs}
+            portfolio={demoAgents.portfolio}
+            globalRisk={demoAgents.globalRisk}
+            selectedSymbol={radar.symbol}
+            onSelectSymbol={radar.setSymbol}
+          />
+          {authUser.role === 'admin' && <ControlledSimulationPanel />}
+          {authUser.role === 'admin' && (
+            <ObservabilityPanel publicHealth={apiHealth.health} publicError={apiHealth.error} />
+          )}
+          <RobotDiagnosticsPanel user={authUser} />
+          <MarketRadarPanel
+            analysis={radar.analysis}
+            loading={radar.loading}
+            error={radar.error}
+            lastUpdate={radar.lastUpdate}
+            symbol={radar.symbol}
+            onSymbolChange={radar.setSymbol}
+          />
+          <DemoStatsPanel
+            stats={demoSession.dailyStats}
+            currentBalance={demoSession.balance}
+            configuredBalance={demoSession.configuredBalance}
+            realizedPnl={demoSession.realizedPnlUSDC ?? 0}
+            unrealizedPnl={demoSession.unrealizedPnlUSDC ?? 0}
+            partialPnl={demoSession.partialPnlUSDC ?? 0}
+            openRisk={demoSession.openRiskUSDC ?? 0}
+            onReset={() => resetSession(demoSession.configuredBalance)}
+            onBalanceChange={b => {
+              setConfiguredBalance(b);
+              resetSession(b);
+            }}
+          />
+          <DemoHistoryPanel history={demoSession.history} />
+        </div>
+
+        <div className="hidden lg:block">
+          <NotificationsPanel />
+        </div>
+
+        <div className="hidden lg:block">
+          <MarketRadarPanel
+          analysis={radar.analysis}
+          loading={radar.loading}
+          error={radar.error}
+          lastUpdate={radar.lastUpdate}
+          symbol={radar.symbol}
+          onSymbolChange={radar.setSymbol}
+        />
+        </div>
+
+        <div className="hidden lg:block">
+        <DemoAgentsPanel
+          agents={demoAgents.agents}
+          configs={demoAgents.configs}
+          portfolio={demoAgents.portfolio}
+          globalRisk={demoAgents.globalRisk}
+          selectedSymbol={radar.symbol}
+          onSelectSymbol={radar.setSymbol}
+        />
+        </div>
+
+        <div className="hidden lg:block">
+          <RobotDiagnosticsPanel user={authUser} />
+        </div>
+
+        {authUser.role === 'admin' && (
+          <div className="hidden lg:block">
+            <ControlledSimulationPanel />
+          </div>
+        )}
+
+        {authUser.role === 'admin' && (
+          <div className="hidden lg:block">
+            <ObservabilityPanel publicHealth={apiHealth.health} publicError={apiHealth.error} />
+          </div>
+        )}
+
+        <section className="hidden lg:block bg-card/50 backdrop-blur-md border border-border p-4 sm:p-6 relative overflow-hidden">
           <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-primary/50 to-transparent" />
 
           <div className="flex flex-col gap-5">
@@ -671,7 +1235,7 @@ export default function Home() {
                   >
                     <option value="BTCUSDT">BTC / USDT</option>
                   </select>
-                  <div className="absolute right-5 top-1/2 -translate-y-1/2 pointer-events-none text-primary text-sm">▼</div>
+                  <div className="absolute right-5 top-1/2 -translate-y-1/2 pointer-events-none text-primary text-sm">â–¼</div>
                 </div>
               </div>
 
@@ -697,28 +1261,6 @@ export default function Home() {
               </button>
             </div>
 
-            {/* Auto toggle (schedule-gated) */}
-            <div className="flex items-center justify-between border border-border/50 bg-background/30 px-5 py-4 relative">
-              <div className="absolute left-0 top-0 bottom-0 w-[2px]"
-                style={{ background: autoEnabled ? 'var(--color-primary)' : '#ffffff22' }} />
-              <div className="flex flex-col gap-0.5 pl-2">
-                <span className="text-[11px] font-mono uppercase tracking-[0.2em] text-foreground/80">
-                  Análise Automática
-                </span>
-                <span className={`text-[10px] font-mono uppercase tracking-[0.15em] ${autoEnabled ? 'text-primary' : 'text-muted-foreground/50'}`}>
-                  {autoEnabled ? '● AUTOMÁTICO ATIVO' : '○ AUTOMÁTICO DESATIVADO'}
-                </span>
-                <span className="text-[9px] font-mono text-muted-foreground/30 mt-0.5">
-                  Seg–Sex 08:30–17:00 (Brasília)
-                </span>
-              </div>
-              <Toggle
-                checked={autoEnabled}
-                onChange={setAutoEnabled}
-                disabled={market.loading || !!market.error}
-              />
-            </div>
-
             {/* Demo toggle (24/7) */}
             <div className="flex items-center justify-between border px-5 py-4 relative transition-all"
               style={{
@@ -740,10 +1282,15 @@ export default function Home() {
                 <span className="text-[9px] font-mono text-muted-foreground/30 mt-0.5">
                   Simulação 24/7 · Sem ordens reais · Saldo fictício
                 </span>
+                {demoServerError && (
+                  <span className="text-[9px] font-mono text-[#ff4444]/70 mt-0.5 min-w-0 whitespace-normal break-all">
+                    API demo: {demoServerError}
+                  </span>
+                )}
               </div>
               <Toggle
                 checked={demoEnabled}
-                onChange={setDemoEnabled}
+                onChange={(enabled) => setAutomationEnabled(enabled, selectedPair)}
                 disabled={market.loading || !!market.error}
                 accentColor="#00f0ff"
               />
@@ -751,74 +1298,7 @@ export default function Home() {
           </div>
         </section>
 
-        {/* ── Auto-mode status panel (schedule-gated) ──────────────────────── */}
-        <AnimatePresence>
-          {autoEnabled && (
-            <motion.section
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{    opacity: 0, height: 0    }}
-              transition={{ duration: 0.3, ease: 'easeInOut' }}
-              className="overflow-hidden"
-            >
-              {!autoState.isOperational ? (
-                <div className="bg-card/40 border border-border/50 p-5 relative overflow-hidden">
-                  <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-[#ffaa00]" />
-                  <div className="flex flex-col sm:flex-row sm:items-center gap-4 pl-2">
-                    <div className="flex items-center gap-3 flex-1">
-                      <CalendarOff className="w-5 h-5 text-[#ffaa00] flex-shrink-0" />
-                      <div>
-                        <p className="text-xs font-mono font-bold text-[#ffaa00] uppercase tracking-[0.15em]">
-                          Fora do Horário Operacional
-                        </p>
-                        <p className="text-[11px] font-mono text-foreground/50 mt-0.5">
-                          Sinais automáticos disponíveis seg–sex, 08:30–17:00 (Brasília).
-                          Análise manual continua disponível.
-                        </p>
-                      </div>
-                    </div>
-                    <div className="text-right font-mono flex-shrink-0">
-                      <p className="text-[10px] text-muted-foreground uppercase tracking-[0.15em]">Hora atual (SP)</p>
-                      <p className="text-base text-foreground/70">{spClock}</p>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <div className="bg-card/40 border border-primary/20 p-4 flex flex-col gap-2 relative overflow-hidden col-span-2 sm:col-span-1">
-                    <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-primary" />
-                    <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] pl-2 flex items-center gap-1">
-                      <Bell className="w-3 h-3" /> Status
-                    </span>
-                    <span className="text-xs font-mono font-bold text-primary uppercase tracking-[0.1em] pl-2">● ATIVO</span>
-                  </div>
-                  <div className="bg-card/40 border border-border/50 p-4 flex flex-col gap-2">
-                    <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] flex items-center gap-1">
-                      <Activity className="w-3 h-3" /> Mercado
-                    </span>
-                    <MarketStatusBadge decision={result?.decision ?? null} />
-                  </div>
-                  <div className="bg-card/40 border border-border/50 p-4 flex flex-col gap-2">
-                    <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] flex items-center gap-1">
-                      <Clock className="w-3 h-3" /> Última análise
-                    </span>
-                    <span className="text-sm font-mono text-foreground/80">
-                      {autoState.lastAnalysisTime ? fmtTimeSP(autoState.lastAnalysisTime) : '—'}
-                    </span>
-                  </div>
-                  <div className="bg-card/40 border border-border/50 p-4 flex flex-col gap-2">
-                    <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] flex items-center gap-1">
-                      <Timer className="w-3 h-3" /> Próximo candle
-                    </span>
-                    <span className="text-xl font-mono font-bold text-primary tabular-nums">{autoState.countdown}</span>
-                  </div>
-                </div>
-              )}
-            </motion.section>
-          )}
-        </AnimatePresence>
-
-        {/* ── Demo auto status bar ─────────────────────────────────────────── */}
+        {/* â”€â”€ Demo auto status bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         <AnimatePresence>
           {demoEnabled && (
             <motion.div
@@ -826,7 +1306,7 @@ export default function Home() {
               animate={{ opacity: 1, height: 'auto' }}
               exit={{    opacity: 0, height: 0    }}
               transition={{ duration: 0.3 }}
-              className="overflow-hidden"
+              className="hidden lg:block overflow-hidden"
             >
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div className="bg-card/40 border p-4 flex flex-col gap-2 relative overflow-hidden col-span-2 sm:col-span-1"
@@ -840,16 +1320,16 @@ export default function Home() {
 
                 <div className="bg-card/40 border border-border/50 p-4 flex flex-col gap-2">
                   <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] flex items-center gap-1">
-                    <Clock className="w-3 h-3" /> Última análise
+                    <Clock className="w-3 h-3" /> Ãšltima anÃ¡lise
                   </span>
                   <span className="text-sm font-mono text-foreground/80">
-                    {demoAutoState.lastAnalysisTime ? fmtTimeSP(demoAutoState.lastAnalysisTime) : '—'}
+                    {demoAutoState.lastAnalysisTime ? fmtTimeSP(demoAutoState.lastAnalysisTime) : 'â€”'}
                   </span>
                 </div>
 
                 <div className="bg-card/40 border border-border/50 p-4 flex flex-col gap-2">
                   <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] flex items-center gap-1">
-                    <Timer className="w-3 h-3" /> Próximo candle 5M
+                    <Timer className="w-3 h-3" /> PrÃ³ximo candle 5M
                   </span>
                   <span className="text-xl font-mono font-bold tabular-nums" style={{ color: '#00f0ff' }}>
                     {demoAutoState.countdown}
@@ -861,8 +1341,12 @@ export default function Home() {
                     <Activity className="w-3 h-3" /> Saldo Demo
                   </span>
                   <span className="text-base font-mono font-bold tabular-nums"
-                    style={{ color: demoSession.balance >= demoSession.configuredBalance ? '#00ff66' : '#ff4444' }}>
-                    ${demoSession.balance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    style={{
+                      color: isFiniteNumber(demoSession.balance) && isFiniteNumber(demoSession.configuredBalance)
+                        ? (demoSession.balance >= demoSession.configuredBalance ? '#00ff66' : '#ff4444')
+                        : '#aaaaaa',
+                    }}>
+                    {fmtCurrency(demoSession.balance)}
                   </span>
                 </div>
               </div>
@@ -870,20 +1354,20 @@ export default function Home() {
           )}
         </AnimatePresence>
 
-        {/* ── Two-column grid: analysis (left) + chart (right) ────────────── */}
-        <div className="grid grid-cols-1 lg:grid-cols-[5fr_7fr] gap-5 items-start">
+        {/* â”€â”€ Two-column grid: analysis (left) + chart (right) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        <div className="hidden lg:grid grid-cols-1 lg:grid-cols-[5fr_7fr] gap-5 items-start">
 
-          {/* Left — Analysis panel */}
+          {/* Left â€” Analysis panel */}
           <div className="order-2 lg:order-1 flex flex-col gap-4">
             {!result && !analyzing && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
                 className="flex flex-col items-center gap-3 py-14 border border-border/30 bg-card/20 text-center">
                 <Crosshair className="w-10 h-10 text-muted-foreground/20" />
                 <span className="text-xs font-mono uppercase tracking-[0.2em] text-muted-foreground/50">
-                  Aguardando análise
+                  Aguardando anÃ¡lise
                 </span>
                 <span className="text-[11px] font-mono text-muted-foreground/30 max-w-[220px] leading-relaxed">
-                  Clique em "Analisar Agora" ou ative o modo automático
+                  Clique em "Analisar Agora" ou ative o modo automÃ¡tico
                 </span>
               </motion.div>
             )}
@@ -908,9 +1392,9 @@ export default function Home() {
                   {resultTime && (
                     <div className="flex items-center gap-2 text-[11px] font-mono text-muted-foreground/50">
                       <Clock className="w-3 h-3" />
-                      <span>Análise em {fmtTimeSP(resultTime)} (SP)</span>
+                      <span>AnÃ¡lise em {fmtTimeSP(resultTime)} (SP)</span>
                       {autoEnabled && autoState.isOperational && (
-                        <span className="text-primary/50 ml-1">· automática</span>
+                        <span className="text-primary/50 ml-1">Â· automÃ¡tica</span>
                       )}
                     </div>
                   )}
@@ -934,7 +1418,7 @@ export default function Home() {
                     <button onClick={() => setStepsExpanded(e => !e)}
                       className="px-5 py-3 flex items-center gap-2 hover:bg-white/[0.02] transition-colors">
                       <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.2em] flex-1">
-                        Motor de Regras · 7 Etapas
+                        Motor de Regras Â· 7 Etapas
                       </span>
                       <span className="text-[10px] font-mono text-muted-foreground">
                         {result.steps.filter(s => s.status === 'PASS').length}/7 aprovadas
@@ -963,9 +1447,22 @@ export default function Home() {
             </AnimatePresence>
           </div>
 
-          {/* Right — TradingView Chart */}
+          {/* Right â€” TradingView Chart */}
           <div className="order-1 lg:order-2 flex flex-col">
-            <section className="bg-card/50 backdrop-blur-md border border-border relative overflow-hidden">
+            <button
+              onClick={() => setMobileChartOpen(open => !open)}
+              className="lg:hidden mb-3 flex items-center justify-between border border-border/60 bg-card/40 px-4 py-3"
+            >
+              <span className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-[0.18em] text-muted-foreground">
+                <BarChart2 className="w-3.5 h-3.5 text-primary" />
+                Grafico
+              </span>
+              {mobileChartOpen
+                ? <ChevronUp className="w-4 h-4 text-muted-foreground/60" />
+                : <ChevronDown className="w-4 h-4 text-muted-foreground/60" />
+              }
+            </button>
+            <section className={`${mobileChartOpen ? 'block' : 'hidden'} lg:block bg-card/50 backdrop-blur-md border border-border relative overflow-hidden`}>
               <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-primary/30 to-transparent" />
 
               {/* Chart header */}
@@ -973,9 +1470,9 @@ export default function Home() {
                 <div className="flex items-center gap-2 flex-1">
                   <BarChart2 className="w-4 h-4 text-primary flex-shrink-0" />
                   <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">
-                    Gráfico Avançado
+                    GrÃ¡fico AvanÃ§ado
                   </span>
-                  <span className="text-[10px] font-mono text-primary/50 ml-1">· TradingView</span>
+                  <span className="text-[10px] font-mono text-primary/50 ml-1">Â· TradingView</span>
                 </div>
                 {/* EMA legend */}
                 <div className="hidden sm:flex items-center gap-4">
@@ -1023,7 +1520,7 @@ export default function Home() {
 
         </div>{/* end two-column grid */}
 
-        {/* ── Demo panels (visible when demo mode is enabled) ──────────────── */}
+        {/* â”€â”€ Demo panels (visible when demo mode is enabled) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         <AnimatePresence>
           {demoEnabled && (
             <motion.div
@@ -1031,7 +1528,7 @@ export default function Home() {
               animate={{ opacity: 1, y: 0 }}
               exit={{    opacity: 0, y: 12 }}
               transition={{ duration: 0.4, ease: 'easeOut' }}
-              className="flex flex-col gap-5"
+              className="hidden lg:flex flex-col gap-5"
             >
               {/* Divider */}
               <div className="flex items-center gap-4">
@@ -1043,6 +1540,7 @@ export default function Home() {
                 <div className="flex-1 h-[1px] bg-gradient-to-l from-transparent to-[#00f0ff44]" />
               </div>
 
+              <div className={`${mobileTab === 'operation' ? 'block' : 'hidden'} lg:block`}>
               {/* Active trade panel */}
               {demoSession.activeTrade && (
                 <DemoActivePanel
@@ -1057,23 +1555,28 @@ export default function Home() {
                   <Bot className="w-8 h-8 text-[#00f0ff]/20" />
                   <span className="text-xs font-mono text-[#00f0ff]/40 uppercase tracking-[0.2em]">
                     {safeLimited
-                      ? 'Novas operações suspensas — limite de risco atingido'
+                      ? 'Novas operaÃ§Ãµes suspensas â€” limite de risco atingido'
                       : 'Aguardando sinal 24/7 do motor de regras...'}
                   </span>
                   {!safeLimited && (
                     <span className="text-[10px] font-mono text-muted-foreground/30">
-                      Próxima análise em {demoAutoState.countdown}
+                      PrÃ³xima anÃ¡lise em {demoAutoState.countdown}
                     </span>
                   )}
                 </div>
               )}
+              </div>
 
               {/* Stats + History in two columns on large screens */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+              <div className={`${mobileTab === 'panel' ? 'grid' : 'hidden'} lg:grid grid-cols-1 lg:grid-cols-2 gap-5`}>
                 <DemoStatsPanel
                   stats={demoSession.dailyStats}
                   currentBalance={demoSession.balance}
                   configuredBalance={demoSession.configuredBalance}
+                  realizedPnl={demoSession.realizedPnlUSDC ?? 0}
+                  unrealizedPnl={demoSession.unrealizedPnlUSDC ?? 0}
+                  partialPnl={demoSession.partialPnlUSDC ?? 0}
+                  openRisk={demoSession.openRiskUSDC ?? 0}
                   onReset={() => resetSession(demoSession.configuredBalance)}
                   onBalanceChange={b => {
                     setConfiguredBalance(b);

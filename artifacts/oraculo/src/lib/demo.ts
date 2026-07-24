@@ -13,7 +13,11 @@ export type TradeExitReason =
   | 'STOP_LOSS'
   | 'BREAKEVEN'
   | 'TARGET_1'
-  | 'TARGET_2';
+  | 'TARGET_2'
+  | 'TIME_EXIT'
+  | 'TRAILING_STOP'
+  | 'LOSS_OF_STRENGTH'
+  | 'SESSION_END';
 
 export interface DemoTrade {
   id: string;
@@ -33,6 +37,7 @@ export interface DemoTrade {
   balanceAtOpen: number;     // snapshot of balance when trade opened
   riskAmount: number;        // USDC at risk (1% of balance)
   positionSize: number;      // base-asset units (e.g. BTC)
+  remainingPositionSize?: number;
   riskReward: string;        // e.g. "1:2.14"
 
   // State flags
@@ -45,6 +50,10 @@ export interface DemoTrade {
   exitReason?: TradeExitReason;
   pnlUSDC?: number;
   pnlPct?: number;           // % of balance at open
+  realizedPnlUSDC?: number;
+  partialPnlUSDC?: number;
+  target1ClosePrice?: number;
+  maxDurationMs?: number;
 
   // Signal context
   signalReasons: string[];   // rule-engine step reasons
@@ -72,6 +81,10 @@ export interface DemoSession {
   activeTrade: DemoTrade | null;
   history: DemoTrade[];      // closed trades, newest first
   dailyStats: DailyStats;
+  realizedPnlUSDC?: number;
+  unrealizedPnlUSDC?: number;
+  partialPnlUSDC?: number;
+  openRiskUSDC?: number;
 }
 
 // ── Defaults ──────────────────────────────────────────────────────────────────
@@ -103,6 +116,10 @@ export function makeSession(configuredBalance = DEFAULT_BALANCE): DemoSession {
     activeTrade: null,
     history: [],
     dailyStats: makeDailyStats(today, configuredBalance),
+    realizedPnlUSDC: 0,
+    unrealizedPnlUSDC: 0,
+    partialPnlUSDC: 0,
+    openRiskUSDC: 0,
   };
 }
 

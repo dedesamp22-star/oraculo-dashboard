@@ -1,0 +1,2955 @@
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { existsSync, mkdirSync, chmodSync, statSync } from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { resolveOracleVisualState, type OracleVisualState } from "@shared/oracleVisualState";
+
+export type TradeDirection = "BUY" | "SELL";
+export type TradeStatus = "OPEN" | "WIN" | "LOSS" | "BREAKEVEN";
+export type TradeExitReason = "STOP_LOSS" | "BREAKEVEN" | "TARGET_1" | "TARGET_2";
+export type ManagedTradeExitReason = TradeExitReason | "TIMEOUT" | "TIME_EXIT" | "TRAILING_STOP" | "LOSS_OF_STRENGTH" | "SESSION_END";
+export type DemoDecision = "BUY" | "SELL" | "SEM ENTRADA";
+
+export interface DailyStats {
+  date: string;
+  startOfDayBalance: number;
+  totalTrades: number;
+  wins: number;
+  losses: number;
+  breakevens: number;
+  consecutiveLosses: number;
+  maxConsecutiveLosses: number;
+  dailyPnL: number;
+  peakBalance: number;
+  maxDrawdown: number;
+  safetyLimited: boolean;
+}
+
+export interface DemoTrade {
+  id: string;
+  pair: string;
+  direction: TradeDirection;
+  openTime: number;
+  closeTime?: number;
+  entry: number;
+  stopLoss: number;
+  stopLossOriginal: number;
+  target1: number;
+  target2: number;
+  balanceAtOpen: number;
+  riskAmount: number;
+  positionSize: number;
+  remainingPositionSize: number;
+  riskReward: string;
+  status: TradeStatus;
+  target1Hit: boolean;
+  isBreakevenStop: boolean;
+  closePrice?: number;
+  exitReason?: ManagedTradeExitReason;
+  pnlUSDC?: number;
+  pnlPct?: number;
+  realizedPnlUSDC?: number;
+  partialPnlUSDC?: number;
+  target1ClosePrice?: number;
+  maxDurationMs?: number;
+  signalReasons: string[];
+  marketConditions: string;
+}
+
+export interface DemoSession {
+  balance: number;
+  configuredBalance: number;
+  activeTrade: DemoTrade | null;
+  history: DemoTrade[];
+  dailyStats: DailyStats;
+  realizedPnlUSDC: number;
+  unrealizedPnlUSDC: number;
+  partialPnlUSDC: number;
+  openRiskUSDC: number;
+}
+
+export type UserRole = "admin" | "user";
+
+export interface AuthUser {
+  id: string;
+  name: string;
+  username: string;
+  role: UserRole;
+  active: boolean;
+  createdAt: string;
+  lastLoginAt: string | null;
+}
+
+interface PasswordRecord {
+  password_hash: string;
+  password_salt: string;
+  scrypt_n: number;
+  scrypt_r: number;
+  scrypt_p: number;
+  scrypt_key_len: number;
+}
+
+export interface DemoSignalInput {
+  pair: string;
+  decision: DemoDecision;
+  entryNum: number | null;
+  stopLossNum: number | null;
+  target1Num: number | null;
+  target2Num: number | null;
+  riskReward: string | null;
+  signalKey?: string;
+  steps?: Array<{ number?: number; name?: string; value?: string; reason?: string }>;
+}
+
+export type WorkerDiagnosticStatus = "APPROVED" | "BLOCKED" | "WAIT" | "ERROR";
+
+export interface WorkerDiagnosticInput {
+  userId: string;
+  workerActive: boolean;
+  automationActive: boolean;
+  symbol: string;
+  cycleStartedAt: string;
+  cycleFinishedAt: string;
+  cycleDurationMs: number;
+  latencyMs: number | null;
+  decision: DemoDecision | "ERROR";
+  score: number | null;
+  direction: string;
+  nextCycleAt: string;
+  lastError: string | null;
+  engineVersion: string;
+  status: WorkerDiagnosticStatus;
+  fingerprint: string;
+  adminPayload: Record<string, unknown>;
+  userPayload: Record<string, unknown>;
+}
+
+export interface WorkerDiagnosticUserDto {
+  id: string;
+  symbol: string;
+  status: WorkerDiagnosticStatus;
+  direction: string;
+  quality: string;
+  summary: string;
+  decision: string;
+  score: number | null;
+  scoreContextual?: number | null;
+  scoreOperacional?: number | null;
+  decisionState?: string | null;
+  generatedAt: string;
+  nextCycleAt: string | null;
+}
+
+export interface WorkerDiagnosticAdminDto extends WorkerDiagnosticUserDto {
+  workerActive: boolean;
+  automationActive: boolean;
+  cycleDurationMs: number;
+  latencyMs: number | null;
+  lastError: string | null;
+  engineVersion: string;
+  full: Record<string, unknown>;
+}
+
+export interface StoreObservabilitySnapshot {
+  sqlite: {
+    databasePath: string;
+    databaseBytes: number;
+    walBytes: number;
+    shmBytes: number;
+    journalMode: string;
+    pageCount: number;
+    pageSize: number;
+    freelistCount: number;
+    integrity: "ok" | "error";
+    integrityError: string | null;
+  };
+  sessions: {
+    active: number;
+    expired: number;
+    revoked: number;
+  };
+  worker: {
+    automationUsers: number;
+    diagnosticsStored: number;
+    latest: WorkerDiagnosticAdminDto | null;
+  };
+  notifications: {
+    stored: number;
+    unread: number;
+    pushSubscriptions: number;
+    deliveries: number;
+  };
+}
+
+export interface PublicOracleState {
+  state: OracleVisualState;
+  updatedAt: string;
+}
+
+export type ControlledSimulationStatus = "INACTIVE" | "ACTIVE" | "COMPLETED" | "CANCELLED" | "ERROR";
+export type ControlledSimulationStep =
+  | "OPEN"
+  | "MOVE"
+  | "TARGET1"
+  | "PARTIAL"
+  | "BREAKEVEN"
+  | "TRAILING"
+  | "TARGET2"
+  | "STOP"
+  | "LOSS_OF_STRENGTH"
+  | "TIMEOUT"
+  | "CANCEL";
+
+export interface ControlledSimulationScenario {
+  symbol: string;
+  direction: TradeDirection;
+  entry: number;
+  stopLoss: number;
+  target1: number;
+  target2: number;
+  quantity: number;
+  riskAmount: number;
+  maxDurationMs: number;
+  initialPrice: number;
+}
+
+export interface ControlledSimulationDto {
+  id: string;
+  userId: string;
+  simulationUserId: string;
+  status: ControlledSimulationStatus;
+  scenario: ControlledSimulationScenario;
+  currentStep: string;
+  startedAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+  cancelledAt: string | null;
+  lastEvent: string | null;
+  error: string | null;
+  session: DemoSession;
+  allowedSteps: ControlledSimulationStep[];
+}
+
+export interface ControlledSimulationEventDto {
+  id: string;
+  simulationId: string;
+  userId: string;
+  step: ControlledSimulationStep;
+  idempotencyKey: string;
+  status: "APPLIED" | "IGNORED" | "ERROR";
+  message: string;
+  snapshot: Record<string, unknown>;
+  createdAt: string;
+}
+
+export type NotificationSeverity = "info" | "success" | "warning" | "critical";
+export type NotificationSource = "DEMO" | "HOMOLOGATION" | "SYSTEM";
+
+export interface NotificationPreferences {
+  internal: boolean;
+  push: boolean;
+  telegram: boolean;
+  importantOnly: boolean;
+  includeBlockedEntries: boolean;
+  includeSimulation: boolean;
+  mutedUntil: string | null;
+  quietHours: { enabled: boolean; start: string; end: string };
+  enabledTypes: string[];
+}
+
+export interface NotificationDto {
+  id: string;
+  type: string;
+  title: string;
+  message: string;
+  severity: NotificationSeverity;
+  symbol: string | null;
+  source: NotificationSource;
+  relatedEventId: string | null;
+  readAt: string | null;
+  createdAt: string;
+  deliveryStatus: string;
+  failureReason: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PushSubscriptionDto {
+  id: string;
+  endpointHash: string;
+  userAgent: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TelegramStatusDto {
+  configured: boolean;
+  connected: boolean;
+  botUsername: string | null;
+  telegramUsername: string | null;
+  linkedAt: string | null;
+  lastDeliveryAt: string | null;
+}
+
+export interface TelegramLinkCodeDto {
+  code: string;
+  expiresAt: string;
+  botUsername: string | null;
+  deepLink: string | null;
+}
+
+export class HttpError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+  }
+}
+
+const DEFAULT_BALANCE = 1000;
+const MAX_PRICE = 1_000_000_000;
+const MAX_BALANCE = 1_000_000_000;
+const MAX_POSITION_SIZE = 1_000_000_000;
+const DEFAULT_MAX_DURATION_MS = 90 * 60 * 1000;
+const DEFAULT_BREAKEVEN_BUFFER_PCT = 0.0002;
+const DEFAULT_TRAILING_STOP_PCT = 0.002;
+const DEFAULT_LOSS_OF_STRENGTH_PCT = 0.004;
+const PRICE_HISTORY_LIMIT = 20;
+const AUTH_COOKIE_NAME = "oraculo_session";
+const DEFAULT_SESSION_TTL_SECONDS = 12 * 60 * 60;
+const DEFAULT_SCRYPT_N = 16384;
+const DEFAULT_SCRYPT_R = 8;
+const DEFAULT_SCRYPT_P = 1;
+const DEFAULT_SCRYPT_KEY_LEN = 64;
+const DEFAULT_BRUTE_FORCE_MAX_ATTEMPTS = 5;
+const DEFAULT_BRUTE_FORCE_LOCK_MS = 15 * 60 * 1000;
+const TRAILING_BY_SYMBOL: Record<string, { minPct: number; maxPct: number }> = {
+  BTCUSDT: { minPct: 0.0018, maxPct: 0.0035 },
+  ETHUSDT: { minPct: 0.0018, maxPct: 0.0035 },
+  SOLUSDT: { minPct: 0.0025, maxPct: 0.005 },
+};
+
+function todaySP(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function makeDailyStats(balance: number): DailyStats {
+  return {
+    date: todaySP(),
+    startOfDayBalance: balance,
+    totalTrades: 0,
+    wins: 0,
+    losses: 0,
+    breakevens: 0,
+    consecutiveLosses: 0,
+    maxConsecutiveLosses: 0,
+    dailyPnL: 0,
+    peakBalance: balance,
+    maxDrawdown: 0,
+    safetyLimited: false,
+  };
+}
+
+function finiteNumber(value: unknown, name: string, min = 0, max = Number.MAX_SAFE_INTEGER): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < min || value > max) {
+    throw new HttpError(400, `${name} must be a finite number between ${min} and ${max}`);
+  }
+  return value;
+}
+
+function nonEmptyString(value: unknown, name: string, max = 5000): string {
+  if (typeof value !== "string" || value.trim().length === 0 || value.length > max) {
+    throw new HttpError(400, `${name} must be a non-empty string`);
+  }
+  return value;
+}
+
+function stringArray(value: unknown, name: string): string[] {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw new HttpError(400, `${name} must be an array of strings`);
+  }
+  return value.slice(0, 100);
+}
+
+function bool(value: unknown): boolean {
+  return value === true || value === 1;
+}
+
+function jsonParse<T>(value: unknown, fallback: T): T {
+  if (typeof value !== "string") return fallback;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value as Record<string, unknown>).sort().map((key) => `${JSON.stringify(key)}:${canonical((value as Record<string, unknown>)[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function newTradeId(): string {
+  return `demo_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function newId(prefix: string): string {
+  return `${prefix}_${Date.now()}_${randomBytes(8).toString("hex")}`;
+}
+
+function envInt(name: string, fallback: number, min: number, max: number): number {
+  const value = Number(process.env[name]);
+  return Number.isInteger(value) && value >= min && value <= max ? value : fallback;
+}
+
+function sessionTtlSeconds(): number {
+  return envInt("ORACULO_SESSION_TTL_SECONDS", DEFAULT_SESSION_TTL_SECONDS, 300, 30 * 24 * 60 * 60);
+}
+
+function passwordParams() {
+  return {
+    n: envInt("ORACULO_SCRYPT_N", DEFAULT_SCRYPT_N, 1024, 1048576),
+    r: envInt("ORACULO_SCRYPT_R", DEFAULT_SCRYPT_R, 1, 64),
+    p: envInt("ORACULO_SCRYPT_P", DEFAULT_SCRYPT_P, 1, 16),
+    keyLen: envInt("ORACULO_SCRYPT_KEY_LEN", DEFAULT_SCRYPT_KEY_LEN, 32, 128),
+  };
+}
+
+function normalizeUsername(value: unknown): string {
+  return nonEmptyString(value, "username", 120).trim().toLowerCase();
+}
+
+function safeUserFromRow(row: Record<string, unknown>): AuthUser {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    username: String(row.username),
+    role: String(row.role) === "admin" ? "admin" : "user",
+    active: Boolean(row.active),
+    createdAt: String(row.created_at),
+    lastLoginAt: row.last_login_at == null ? null : String(row.last_login_at),
+  };
+}
+
+function hashPassword(password: string, params = passwordParams()): PasswordRecord {
+  const salt = randomBytes(16).toString("base64url");
+  const hash = scryptSync(password, salt, params.keyLen, {
+    N: params.n,
+    r: params.r,
+    p: params.p,
+    maxmem: 128 * 1024 * 1024,
+  }).toString("base64url");
+  return {
+    password_hash: hash,
+    password_salt: salt,
+    scrypt_n: params.n,
+    scrypt_r: params.r,
+    scrypt_p: params.p,
+    scrypt_key_len: params.keyLen,
+  };
+}
+
+function verifyPassword(password: string, record: PasswordRecord): boolean {
+  const actual = Buffer.from(record.password_hash, "base64url");
+  const expected = scryptSync(password, record.password_salt, record.scrypt_key_len, {
+    N: record.scrypt_n,
+    r: record.scrypt_r,
+    p: record.scrypt_p,
+    maxmem: 128 * 1024 * 1024,
+  });
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+function hashSessionToken(token: string): string {
+  return createHash("sha256").update(token).digest("base64url");
+}
+
+function isSafetyLimited(stats: DailyStats): boolean {
+  return stats.safetyLimited ||
+    stats.totalTrades >= 8 ||
+    stats.consecutiveLosses >= 3 ||
+    stats.dailyPnL <= -(stats.startOfDayBalance * 0.03);
+}
+
+function calcPositionSize(balance: number, entry: number, stop: number): { riskAmount: number; positionSize: number } {
+  const riskAmount = balance * 0.01;
+  const dist = Math.abs(entry - stop);
+  return { riskAmount, positionSize: dist > 0 ? riskAmount / dist : 0 };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function tradeAgeMs(trade: DemoTrade, now = Date.now()): number {
+  return Math.max(0, now - trade.openTime);
+}
+
+function closedStatus(pnlUSDC: number): TradeStatus {
+  return pnlUSDC > 0.00000001 ? "WIN" : pnlUSDC < -0.00000001 ? "LOSS" : "BREAKEVEN";
+}
+
+function signalKey(input: DemoSignalInput): string {
+  return createHash("sha256").update(canonical({
+    pair: input.pair.toUpperCase(),
+    decision: input.decision,
+    entry: input.entryNum,
+    stop: input.stopLossNum,
+    target1: input.target1Num,
+    target2: input.target2Num,
+    provided: input.signalKey ?? null,
+  })).digest("hex");
+}
+
+export function migrationHash(session: unknown): string {
+  return createHash("sha256").update(canonical(session)).digest("hex");
+}
+
+function accountFromRow(row: Record<string, unknown>): { balance: number; configuredBalance: number; dailyStats: DailyStats } {
+  return {
+    balance: Number(row.balance),
+    configuredBalance: Number(row.configured_balance),
+    dailyStats: jsonParse(String(row.daily_stats_json), makeDailyStats(Number(row.balance))),
+  };
+}
+
+function tradeFromRow(row: Record<string, unknown>): DemoTrade {
+  return {
+    id: String(row.id),
+    pair: String(row.pair),
+    direction: String(row.direction) as TradeDirection,
+    status: String(row.status) as TradeStatus,
+    openTime: Number(row.open_time),
+    closeTime: row.close_time == null ? undefined : Number(row.close_time),
+    entry: Number(row.entry),
+    closePrice: row.close_price == null ? undefined : Number(row.close_price),
+    stopLoss: Number(row.stop_loss),
+    stopLossOriginal: Number(row.stop_loss_original),
+    target1: Number(row.target1),
+    target2: Number(row.target2),
+    balanceAtOpen: Number(row.balance_at_open),
+    riskAmount: Number(row.risk_amount),
+    positionSize: Number(row.position_size),
+    remainingPositionSize: row.remaining_position_size == null ? Number(row.position_size) : Number(row.remaining_position_size),
+    riskReward: String(row.risk_reward),
+    pnlUSDC: row.pnl_usdc == null ? undefined : Number(row.pnl_usdc),
+    pnlPct: row.pnl_pct == null ? undefined : Number(row.pnl_pct),
+    exitReason: row.exit_reason == null ? undefined : String(row.exit_reason) as ManagedTradeExitReason,
+    target1Hit: Boolean(row.target1_hit),
+    isBreakevenStop: Boolean(row.is_breakeven_stop),
+    realizedPnlUSDC: row.realized_pnl_usdc == null ? undefined : Number(row.realized_pnl_usdc),
+    partialPnlUSDC: row.partial_pnl_usdc == null ? undefined : Number(row.partial_pnl_usdc),
+    target1ClosePrice: row.target1_close_price == null ? undefined : Number(row.target1_close_price),
+    maxDurationMs: row.max_duration_ms == null ? undefined : Number(row.max_duration_ms),
+    signalReasons: jsonParse(String(row.signal_reasons_json), []),
+    marketConditions: String(row.market_conditions),
+  };
+}
+
+function diagnosticUserFromRow(row: Record<string, unknown>): WorkerDiagnosticUserDto {
+  const userPayload = jsonParse<Record<string, unknown>>(row.user_json, {});
+  const optionalNumber = (value: unknown): number | null | undefined => {
+    if (value === undefined) return undefined;
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
+  };
+  return {
+    id: String(row.id),
+    symbol: String(row.symbol),
+    status: String(row.status) as WorkerDiagnosticStatus,
+    direction: String(row.direction),
+    quality: String(row.quality),
+    summary: String(row.summary),
+    decision: String(row.decision),
+    score: row.score == null ? null : Number(row.score),
+    scoreContextual: optionalNumber(userPayload.scoreContextual),
+    scoreOperacional: optionalNumber(userPayload.scoreOperacional),
+    decisionState: typeof userPayload.decisionState === "string" ? userPayload.decisionState : undefined,
+    generatedAt: String(row.cycle_finished_at),
+    nextCycleAt: row.next_cycle_at == null ? null : String(row.next_cycle_at),
+  };
+}
+
+function diagnosticAdminFromRow(row: Record<string, unknown>): WorkerDiagnosticAdminDto {
+  return {
+    ...diagnosticUserFromRow(row),
+    workerActive: Boolean(row.worker_active),
+    automationActive: Boolean(row.automation_active),
+    cycleDurationMs: Number(row.cycle_duration_ms),
+    latencyMs: row.latency_ms == null ? null : Number(row.latency_ms),
+    lastError: row.last_error == null ? null : String(row.last_error),
+    engineVersion: String(row.engine_version),
+    full: jsonParse<Record<string, unknown>>(row.admin_json, {}),
+  };
+}
+
+function simulationEventFromRow(row: Record<string, unknown>): ControlledSimulationEventDto {
+  return {
+    id: String(row.id),
+    simulationId: String(row.simulation_id),
+    userId: String(row.user_id),
+    step: String(row.step) as ControlledSimulationStep,
+    idempotencyKey: String(row.idempotency_key),
+    status: String(row.status) as "APPLIED" | "IGNORED" | "ERROR",
+    message: String(row.message),
+    snapshot: jsonParse<Record<string, unknown>>(String(row.snapshot_json), {}),
+    createdAt: String(row.created_at),
+  };
+}
+
+function allowedSimulationSteps(status: ControlledSimulationStatus, session: DemoSession): ControlledSimulationStep[] {
+  if (status === "CANCELLED" || status === "COMPLETED" || status === "ERROR") return [];
+  const trade = session.activeTrade;
+  if (!trade) return status === "ACTIVE" ? ["OPEN", "CANCEL"] : [];
+  if (!trade.target1Hit) return ["MOVE", "TARGET1", "STOP", "TIMEOUT", "LOSS_OF_STRENGTH", "CANCEL"];
+  return ["MOVE", "PARTIAL", "BREAKEVEN", "TRAILING", "TARGET2", "STOP", "TIMEOUT", "LOSS_OF_STRENGTH", "CANCEL"];
+}
+
+function simulationStatusFromRow(row: Record<string, unknown>): ControlledSimulationStatus {
+  return String(row.status) as ControlledSimulationStatus;
+}
+
+function simulationTradeId(id: string): string {
+  return `sim_trade_${id}`;
+}
+
+const DEFAULT_NOTIFICATION_TYPES = [
+  "automation_enabled",
+  "automation_disabled",
+  "opportunity_approved",
+  "demo_entry_opened",
+  "target1_hit",
+  "partial_executed",
+  "breakeven_moved",
+  "trailing_updated",
+  "target2_hit",
+  "stop_loss",
+  "loss_of_strength",
+  "timeout",
+  "worker_error",
+  "binance_error",
+  "sqlite_error",
+  "session_expired",
+  "simulation_started",
+  "simulation_event",
+  "simulation_completed",
+  "simulation_cancelled",
+  "test",
+];
+
+function defaultNotificationPreferences(): NotificationPreferences {
+  return {
+    internal: true,
+    push: false,
+    telegram: false,
+    importantOnly: false,
+    includeBlockedEntries: false,
+    includeSimulation: true,
+    mutedUntil: null,
+    quietHours: { enabled: false, start: "22:00", end: "07:00" },
+    enabledTypes: [...DEFAULT_NOTIFICATION_TYPES],
+  };
+}
+
+function notificationFromRow(row: Record<string, unknown>, role: UserRole): NotificationDto {
+  const dto: NotificationDto = {
+    id: String(row.id),
+    type: String(row.type),
+    title: String(row.title),
+    message: String(row.message),
+    severity: String(row.severity) as NotificationSeverity,
+    symbol: row.symbol == null ? null : String(row.symbol),
+    source: String(row.source) as NotificationSource,
+    relatedEventId: row.related_event_id == null ? null : String(row.related_event_id),
+    readAt: row.read_at == null ? null : String(row.read_at),
+    createdAt: String(row.created_at),
+    deliveryStatus: String(row.delivery_status),
+    failureReason: row.failure_reason == null ? null : String(row.failure_reason),
+  };
+  if (role === "admin") dto.metadata = jsonParse<Record<string, unknown>>(String(row.admin_metadata_json ?? "{}"), {});
+  return dto;
+}
+
+function pushSubscriptionFromRow(row: Record<string, unknown>): PushSubscriptionDto {
+  return {
+    id: String(row.id),
+    endpointHash: String(row.endpoint_hash),
+    userAgent: row.user_agent == null ? null : String(row.user_agent),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function sanitizeFailure(value: unknown): string | null {
+  if (value == null) return null;
+  return String(value).replace(/[A-Za-z0-9_-]{24,}/g, "[redacted]").slice(0, 300);
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function telegramConfigured(): boolean {
+  return !!process.env["ORACULO_TELEGRAM_BOT_TOKEN"];
+}
+
+function telegramBotUsername(): string | null {
+  const username = process.env["ORACULO_TELEGRAM_BOT_USERNAME"]?.trim().replace(/^@/, "") ?? "";
+  return username || null;
+}
+
+function telegramApiUrl(pathname: string): string {
+  const token = process.env["ORACULO_TELEGRAM_BOT_TOKEN"];
+  if (!token) throw new HttpError(503, "Telegram is not configured");
+  return `https://api.telegram.org/bot${token}/${pathname}`;
+}
+
+function sanitizeTelegramText(value: unknown): string {
+  return String(value ?? "")
+    .replace(/[A-Za-z0-9_-]{24,}/g, "[redacted]")
+    .replace(/[<>]/g, "")
+    .slice(0, 3500);
+}
+
+function notificationTelegramMessage(notification: NotificationDto, role: UserRole): string {
+  const prefix = notification.source === "HOMOLOGATION" ? "[HOMOLOGACAO]\n" : "";
+  const lines = [
+    `${prefix}ORACULO — ${notification.title.toUpperCase()}`,
+    "",
+    notification.symbol ? `Ativo: ${notification.symbol}` : null,
+    `Status: ${notification.message}`,
+    `Ambiente: ${notification.source}`,
+  ].filter(Boolean) as string[];
+  const metadata = notification.metadata ?? {};
+  if (role === "admin") {
+    for (const key of ["scoreContextual", "scoreOperacional", "decisionState", "decisiveReason", "exitReason", "status"]) {
+      const value = metadata[key];
+      if (value !== undefined && value !== null) lines.push(`${key}: ${String(value).slice(0, 180)}`);
+    }
+  }
+  return sanitizeTelegramText(lines.join("\n"));
+}
+
+export class DemoStore {
+  db: DatabaseSync;
+  private dbPath: string;
+
+  constructor(dbPath = process.env["ORACULO_DB_PATH"] ?? path.resolve(process.cwd(), "data", "oraculo.sqlite")) {
+    this.dbPath = dbPath;
+    const dataDir = path.dirname(dbPath);
+    mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+    try { chmodSync(dataDir, 0o700); } catch { /* best effort on Windows */ }
+    this.db = new DatabaseSync(dbPath);
+    this.db.exec("PRAGMA journal_mode = WAL");
+    this.db.exec("PRAGMA busy_timeout = 5000");
+    this.db.exec("PRAGMA foreign_keys = ON");
+    this.migrate();
+    this.applyInitialAdminEnv();
+  }
+
+  close(): void {
+    this.db.close();
+  }
+
+  private migrate(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        version INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        applied_at TEXT NOT NULL
+      );
+    `);
+    const applied = this.db.prepare("SELECT version FROM schema_migrations WHERE version = 1").get();
+    if (!applied) {
+      this.transaction(() => {
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS demo_account (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            balance REAL NOT NULL,
+            configured_balance REAL NOT NULL,
+            daily_stats_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          CREATE TABLE IF NOT EXISTS demo_positions (
+            id TEXT PRIMARY KEY,
+            pair TEXT NOT NULL,
+            direction TEXT NOT NULL CHECK (direction IN ('BUY','SELL')),
+            status TEXT NOT NULL DEFAULT 'OPEN',
+            open_time INTEGER NOT NULL,
+            entry REAL NOT NULL,
+            stop_loss REAL NOT NULL,
+            stop_loss_original REAL NOT NULL,
+            target1 REAL NOT NULL,
+            target2 REAL NOT NULL,
+            balance_at_open REAL NOT NULL,
+            risk_amount REAL NOT NULL,
+            position_size REAL NOT NULL,
+            remaining_position_size REAL NOT NULL,
+            risk_reward TEXT NOT NULL,
+            target1_hit INTEGER NOT NULL DEFAULT 0,
+            is_breakeven_stop INTEGER NOT NULL DEFAULT 0,
+            realized_pnl_usdc REAL NOT NULL DEFAULT 0,
+            partial_pnl_usdc REAL NOT NULL DEFAULT 0,
+            target1_close_price REAL,
+            max_duration_ms INTEGER NOT NULL DEFAULT 5400000,
+            signal_reasons_json TEXT NOT NULL,
+            market_conditions TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          CREATE UNIQUE INDEX IF NOT EXISTS demo_positions_open_pair_idx
+            ON demo_positions(pair) WHERE status = 'OPEN';
+          CREATE TABLE IF NOT EXISTS demo_trades (
+            id TEXT PRIMARY KEY,
+            pair TEXT NOT NULL,
+            direction TEXT NOT NULL CHECK (direction IN ('BUY','SELL')),
+            status TEXT NOT NULL CHECK (status IN ('OPEN','WIN','LOSS','BREAKEVEN')),
+            open_time INTEGER NOT NULL,
+            close_time INTEGER,
+            entry REAL NOT NULL,
+            close_price REAL,
+            stop_loss REAL NOT NULL,
+            stop_loss_original REAL NOT NULL,
+            target1 REAL NOT NULL,
+            target2 REAL NOT NULL,
+            balance_at_open REAL NOT NULL,
+            risk_amount REAL NOT NULL,
+            position_size REAL NOT NULL,
+            remaining_position_size REAL NOT NULL,
+            risk_reward TEXT NOT NULL,
+            pnl_usdc REAL,
+            pnl_pct REAL,
+            realized_pnl_usdc REAL,
+            partial_pnl_usdc REAL,
+            target1_close_price REAL,
+            max_duration_ms INTEGER,
+            exit_reason TEXT,
+            target1_hit INTEGER NOT NULL DEFAULT 0,
+            is_breakeven_stop INTEGER NOT NULL DEFAULT 0,
+            signal_reasons_json TEXT NOT NULL,
+            market_conditions TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+        `);
+        const now = nowIso();
+        const stats = makeDailyStats(DEFAULT_BALANCE);
+        this.db.prepare(`
+          INSERT OR IGNORE INTO demo_account
+            (id, balance, configured_balance, daily_stats_json, created_at, updated_at)
+          VALUES (1, ?, ?, ?, ?, ?)
+        `).run(DEFAULT_BALANCE, DEFAULT_BALANCE, JSON.stringify(stats), now, now);
+        this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (1, 'initial_demo_sqlite', ?)").run(now);
+      });
+    }
+    const v2 = this.db.prepare("SELECT version FROM schema_migrations WHERE version = 2").get();
+    if (!v2) {
+      this.transaction(() => {
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS demo_events (
+            event_key TEXT PRIMARY KEY,
+            event_type TEXT NOT NULL,
+            trade_id TEXT,
+            created_at TEXT NOT NULL
+          );
+        `);
+        this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (2, 'demo_idempotency_events', ?)").run(nowIso());
+      });
+    }
+    const v3 = this.db.prepare("SELECT version FROM schema_migrations WHERE version = 3").get();
+    if (!v3) {
+      this.transaction(() => {
+        const addColumn = (table: string, definition: string) => {
+          const column = definition.split(/\s+/)[0];
+          const exists = (this.db.prepare(`PRAGMA table_info(${table})`).all() as Record<string, unknown>[])
+            .some((row) => row.name === column);
+          if (!exists) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+        };
+        addColumn("demo_positions", "remaining_position_size REAL NOT NULL DEFAULT 0");
+        addColumn("demo_positions", "realized_pnl_usdc REAL NOT NULL DEFAULT 0");
+        addColumn("demo_positions", "partial_pnl_usdc REAL NOT NULL DEFAULT 0");
+        addColumn("demo_positions", "target1_close_price REAL");
+        addColumn("demo_positions", "max_duration_ms INTEGER NOT NULL DEFAULT 5400000");
+        addColumn("demo_trades", "remaining_position_size REAL NOT NULL DEFAULT 0");
+        addColumn("demo_trades", "realized_pnl_usdc REAL");
+        addColumn("demo_trades", "partial_pnl_usdc REAL");
+        addColumn("demo_trades", "target1_close_price REAL");
+        addColumn("demo_trades", "max_duration_ms INTEGER");
+        this.db.prepare("UPDATE demo_positions SET remaining_position_size = position_size WHERE remaining_position_size = 0").run();
+        this.db.prepare("UPDATE demo_trades SET remaining_position_size = position_size WHERE remaining_position_size = 0").run();
+        this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (3, 'demo_trade_management_fields', ?)").run(nowIso());
+      });
+    }
+    const v4 = this.db.prepare("SELECT version FROM schema_migrations WHERE version = 4").get();
+    if (!v4) {
+      this.transaction(() => {
+        const now = nowIso();
+        const initialUsername = (process.env["ORACULO_INITIAL_ADMIN_USERNAME"] ?? "admin").trim().toLowerCase();
+        const initialName = process.env["ORACULO_INITIAL_ADMIN_NAME"] ?? "Administrador";
+        const initialPassword = process.env["ORACULO_INITIAL_ADMIN_PASSWORD"] ?? process.env["ORACULO_ADMIN_PASSWORD"];
+        const password = hashPassword(initialPassword && initialPassword.length >= 12 ? initialPassword : randomBytes(32).toString("base64url"));
+        const active = initialPassword && initialPassword.length >= 12 ? 1 : 0;
+
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            password_salt TEXT NOT NULL,
+            scrypt_n INTEGER NOT NULL,
+            scrypt_r INTEGER NOT NULL,
+            scrypt_p INTEGER NOT NULL,
+            scrypt_key_len INTEGER NOT NULL,
+            role TEXT NOT NULL CHECK (role IN ('admin','user')),
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_login_at TEXT
+          );
+          CREATE TABLE IF NOT EXISTS auth_sessions (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token_hash TEXT NOT NULL UNIQUE,
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            revoked_at INTEGER,
+            user_agent TEXT,
+            ip TEXT
+          );
+          CREATE TABLE IF NOT EXISTS auth_attempts (
+            identity TEXT PRIMARY KEY,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_attempt_at INTEGER NOT NULL,
+            locked_until INTEGER
+          );
+        `);
+
+        this.db.prepare(`
+          INSERT INTO users
+            (id, name, username, password_hash, password_salt, scrypt_n, scrypt_r, scrypt_p, scrypt_key_len, role, active, created_at, updated_at)
+          VALUES ('admin', ?, ?, ?, ?, ?, ?, ?, ?, 'admin', ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            username = excluded.username,
+            password_hash = CASE WHEN excluded.active = 1 THEN excluded.password_hash ELSE users.password_hash END,
+            password_salt = CASE WHEN excluded.active = 1 THEN excluded.password_salt ELSE users.password_salt END,
+            scrypt_n = CASE WHEN excluded.active = 1 THEN excluded.scrypt_n ELSE users.scrypt_n END,
+            scrypt_r = CASE WHEN excluded.active = 1 THEN excluded.scrypt_r ELSE users.scrypt_r END,
+            scrypt_p = CASE WHEN excluded.active = 1 THEN excluded.scrypt_p ELSE users.scrypt_p END,
+            scrypt_key_len = CASE WHEN excluded.active = 1 THEN excluded.scrypt_key_len ELSE users.scrypt_key_len END,
+            active = CASE WHEN excluded.active = 1 THEN 1 ELSE users.active END,
+            updated_at = excluded.updated_at
+        `).run(
+          initialName,
+          initialUsername,
+          password.password_hash,
+          password.password_salt,
+          password.scrypt_n,
+          password.scrypt_r,
+          password.scrypt_p,
+          password.scrypt_key_len,
+          active,
+          now,
+          now,
+        );
+
+        this.db.exec(`
+          DROP INDEX IF EXISTS demo_positions_open_pair_idx;
+          ALTER TABLE demo_account RENAME TO demo_account_legacy_v4;
+          CREATE TABLE demo_account (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+            balance REAL NOT NULL,
+            configured_balance REAL NOT NULL,
+            daily_stats_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          INSERT INTO demo_account (user_id, balance, configured_balance, daily_stats_json, created_at, updated_at)
+          SELECT 'admin', balance, configured_balance, daily_stats_json, created_at, updated_at
+          FROM demo_account_legacy_v4
+          LIMIT 1;
+          INSERT OR IGNORE INTO demo_account (user_id, balance, configured_balance, daily_stats_json, created_at, updated_at)
+          VALUES ('admin', 1000, 1000, '${JSON.stringify(makeDailyStats(DEFAULT_BALANCE)).replaceAll("'", "''")}', '${now}', '${now}');
+          ALTER TABLE app_settings RENAME TO app_settings_legacy_v4;
+          CREATE TABLE app_settings (
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, key)
+          );
+          INSERT OR IGNORE INTO app_settings (user_id, key, value, updated_at)
+          SELECT 'admin', key, value, updated_at FROM app_settings_legacy_v4;
+        `);
+
+        const addColumn = (table: string, definition: string) => {
+          const column = definition.split(/\s+/)[0];
+          const exists = (this.db.prepare(`PRAGMA table_info(${table})`).all() as Record<string, unknown>[])
+            .some((row) => row.name === column);
+          if (!exists) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+        };
+        addColumn("demo_positions", "user_id TEXT");
+        addColumn("demo_trades", "user_id TEXT");
+        addColumn("demo_events", "user_id TEXT");
+        this.db.prepare("UPDATE demo_positions SET user_id = COALESCE(user_id, 'admin')").run();
+        this.db.prepare("UPDATE demo_trades SET user_id = COALESCE(user_id, 'admin')").run();
+        this.db.prepare("UPDATE demo_events SET user_id = COALESCE(user_id, 'admin')").run();
+        this.db.exec(`
+          CREATE UNIQUE INDEX IF NOT EXISTS demo_positions_open_user_pair_idx
+            ON demo_positions(user_id, pair) WHERE status = 'OPEN';
+          CREATE INDEX IF NOT EXISTS demo_trades_user_time_idx
+            ON demo_trades(user_id, COALESCE(close_time, open_time));
+          CREATE INDEX IF NOT EXISTS demo_events_user_idx
+            ON demo_events(user_id, created_at);
+          CREATE INDEX IF NOT EXISTS auth_sessions_user_idx
+            ON auth_sessions(user_id, expires_at);
+        `);
+        this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (4, 'multiuser_demo_auth', ?)").run(now);
+      });
+    }
+    const v5 = this.db.prepare("SELECT version FROM schema_migrations WHERE version = 5").get();
+    if (!v5) {
+      this.transaction(() => {
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS worker_diagnostics (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            symbol TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('APPROVED','BLOCKED','WAIT','ERROR')),
+            worker_active INTEGER NOT NULL,
+            automation_active INTEGER NOT NULL,
+            cycle_started_at TEXT NOT NULL,
+            cycle_finished_at TEXT NOT NULL,
+            cycle_duration_ms INTEGER NOT NULL,
+            latency_ms INTEGER,
+            decision TEXT NOT NULL,
+            score INTEGER,
+            direction TEXT NOT NULL,
+            quality TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            next_cycle_at TEXT,
+            last_error TEXT,
+            engine_version TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            admin_json TEXT NOT NULL,
+            user_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS worker_diagnostics_user_time_idx
+            ON worker_diagnostics(user_id, cycle_finished_at);
+          CREATE UNIQUE INDEX IF NOT EXISTS worker_diagnostics_dedupe_idx
+            ON worker_diagnostics(user_id, symbol, fingerprint);
+        `);
+        this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (5, 'worker_diagnostics', ?)").run(nowIso());
+      });
+    }
+    const v6 = this.db.prepare("SELECT version FROM schema_migrations WHERE version = 6").get();
+    if (!v6) {
+      this.transaction(() => {
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS controlled_simulations (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            simulation_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            status TEXT NOT NULL CHECK (status IN ('INACTIVE','ACTIVE','COMPLETED','CANCELLED','ERROR')),
+            scenario_json TEXT NOT NULL,
+            current_step TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            completed_at TEXT,
+            cancelled_at TEXT,
+            last_event TEXT,
+            error TEXT
+          );
+          CREATE UNIQUE INDEX IF NOT EXISTS controlled_simulations_active_user_idx
+            ON controlled_simulations(user_id) WHERE status = 'ACTIVE';
+          CREATE INDEX IF NOT EXISTS controlled_simulations_user_time_idx
+            ON controlled_simulations(user_id, started_at);
+          CREATE TABLE IF NOT EXISTS controlled_simulation_events (
+            id TEXT PRIMARY KEY,
+            simulation_id TEXT NOT NULL REFERENCES controlled_simulations(id) ON DELETE CASCADE,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            step TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('APPLIED','IGNORED','ERROR')),
+            message TEXT NOT NULL,
+            snapshot_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+          );
+          CREATE UNIQUE INDEX IF NOT EXISTS controlled_simulation_events_dedupe_idx
+            ON controlled_simulation_events(simulation_id, idempotency_key);
+          CREATE INDEX IF NOT EXISTS controlled_simulation_events_time_idx
+            ON controlled_simulation_events(simulation_id, created_at);
+        `);
+        this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (6, 'controlled_simulations', ?)").run(nowIso());
+      });
+    }
+    const v7 = this.db.prepare("SELECT version FROM schema_migrations WHERE version = 7").get();
+    if (!v7) {
+      this.transaction(() => {
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS notification_preferences (
+            user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            preferences_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          CREATE TABLE IF NOT EXISTS notifications (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            type TEXT NOT NULL,
+            title TEXT NOT NULL,
+            message TEXT NOT NULL,
+            severity TEXT NOT NULL CHECK (severity IN ('info','success','warning','critical')),
+            symbol TEXT,
+            source TEXT NOT NULL CHECK (source IN ('DEMO','HOMOLOGATION','SYSTEM')),
+            related_event_id TEXT,
+            idempotency_key TEXT NOT NULL,
+            read_at TEXT,
+            delivery_status TEXT NOT NULL,
+            failure_reason TEXT,
+            admin_metadata_json TEXT NOT NULL DEFAULT '{}',
+            user_metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL
+          );
+          CREATE UNIQUE INDEX IF NOT EXISTS notifications_dedupe_idx
+            ON notifications(user_id, idempotency_key);
+          CREATE INDEX IF NOT EXISTS notifications_user_time_idx
+            ON notifications(user_id, created_at);
+          CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            endpoint_hash TEXT NOT NULL,
+            endpoint TEXT NOT NULL,
+            p256dh TEXT NOT NULL,
+            auth TEXT NOT NULL,
+            user_agent TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            revoked_at TEXT,
+            failure_reason TEXT
+          );
+          CREATE UNIQUE INDEX IF NOT EXISTS push_subscriptions_user_endpoint_idx
+            ON push_subscriptions(user_id, endpoint_hash);
+          CREATE TABLE IF NOT EXISTS notification_deliveries (
+            id TEXT PRIMARY KEY,
+            notification_id TEXT NOT NULL REFERENCES notifications(id) ON DELETE CASCADE,
+            provider TEXT NOT NULL,
+            subscription_id TEXT,
+            status TEXT NOT NULL,
+            failure_reason TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS notification_deliveries_notification_idx
+            ON notification_deliveries(notification_id, provider);
+        `);
+        this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (7, 'notifications', ?)").run(nowIso());
+      });
+    }
+    const v8 = this.db.prepare("SELECT version FROM schema_migrations WHERE version = 8").get();
+    if (!v8) {
+      this.transaction(() => {
+        const addColumn = (table: string, column: string, definition: string) => {
+          const exists = (this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((row) => row.name === column);
+          if (!exists) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+        };
+        addColumn("notification_deliveries", "attempt_count", "attempt_count INTEGER NOT NULL DEFAULT 0");
+        addColumn("notification_deliveries", "next_attempt_at", "next_attempt_at TEXT");
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS telegram_connections (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            chat_id TEXT NOT NULL,
+            telegram_username TEXT,
+            status TEXT NOT NULL CHECK (status IN ('ACTIVE','REVOKED')),
+            linked_at TEXT NOT NULL,
+            revoked_at TEXT,
+            last_delivery_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          CREATE UNIQUE INDEX IF NOT EXISTS telegram_connections_user_active_idx
+            ON telegram_connections(user_id)
+            WHERE status = 'ACTIVE';
+          CREATE UNIQUE INDEX IF NOT EXISTS telegram_connections_chat_active_idx
+            ON telegram_connections(chat_id)
+            WHERE status = 'ACTIVE';
+          CREATE TABLE IF NOT EXISTS telegram_link_codes (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            code_hash TEXT NOT NULL UNIQUE,
+            expires_at TEXT NOT NULL,
+            used_at TEXT,
+            created_at TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS telegram_link_codes_user_idx
+            ON telegram_link_codes(user_id, created_at);
+        `);
+        this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (8, 'telegram_notifications', ?)").run(nowIso());
+      });
+    }
+  }
+
+  private applyInitialAdminEnv(): void {
+    const initialPassword = process.env["ORACULO_INITIAL_ADMIN_PASSWORD"] ?? process.env["ORACULO_ADMIN_PASSWORD"];
+    if (!initialPassword || initialPassword.length < 12) return;
+    const initialUsername = (process.env["ORACULO_INITIAL_ADMIN_USERNAME"] ?? "admin").trim().toLowerCase();
+    const initialName = process.env["ORACULO_INITIAL_ADMIN_NAME"] ?? "Administrador";
+    const password = hashPassword(initialPassword);
+    const now = nowIso();
+    this.db.prepare(`
+      INSERT INTO users
+        (id, name, username, password_hash, password_salt, scrypt_n, scrypt_r, scrypt_p, scrypt_key_len, role, active, created_at, updated_at)
+      VALUES ('admin', ?, ?, ?, ?, ?, ?, ?, ?, 'admin', 1, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        name = excluded.name,
+        username = excluded.username,
+        password_hash = excluded.password_hash,
+        password_salt = excluded.password_salt,
+        scrypt_n = excluded.scrypt_n,
+        scrypt_r = excluded.scrypt_r,
+        scrypt_p = excluded.scrypt_p,
+        scrypt_key_len = excluded.scrypt_key_len,
+        role = 'admin',
+        active = 1,
+        updated_at = excluded.updated_at
+    `).run(
+      initialName,
+      initialUsername,
+      password.password_hash,
+      password.password_salt,
+      password.scrypt_n,
+      password.scrypt_r,
+      password.scrypt_p,
+      password.scrypt_key_len,
+      now,
+      now,
+    );
+    this.ensureUserAccount("admin");
+  }
+
+  transaction<T>(fn: () => T): T {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = fn();
+      this.db.exec("COMMIT");
+      return result;
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+  }
+
+  private getPasswordRow(username: string): (Record<string, unknown> & PasswordRecord) | undefined {
+    return this.db.prepare("SELECT * FROM users WHERE username = ?").get(username) as (Record<string, unknown> & PasswordRecord) | undefined;
+  }
+
+  private bruteForceLocked(username: string): boolean {
+    const row = this.db.prepare("SELECT locked_until FROM auth_attempts WHERE identity = ?").get(username) as Record<string, unknown> | undefined;
+    return row?.locked_until != null && Number(row.locked_until) > Date.now();
+  }
+
+  private recordAuthFailure(username: string): void {
+    const maxAttempts = envInt("ORACULO_AUTH_MAX_ATTEMPTS", DEFAULT_BRUTE_FORCE_MAX_ATTEMPTS, 2, 50);
+    const lockMs = envInt("ORACULO_AUTH_LOCK_MS", DEFAULT_BRUTE_FORCE_LOCK_MS, 60_000, 24 * 60 * 60 * 1000);
+    const now = Date.now();
+    const row = this.db.prepare("SELECT attempts FROM auth_attempts WHERE identity = ?").get(username) as Record<string, unknown> | undefined;
+    const attempts = (Number(row?.attempts ?? 0) || 0) + 1;
+    const lockedUntil = attempts >= maxAttempts ? now + lockMs : null;
+    this.db.prepare(`
+      INSERT INTO auth_attempts (identity, attempts, last_attempt_at, locked_until)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(identity) DO UPDATE SET
+        attempts = excluded.attempts,
+        last_attempt_at = excluded.last_attempt_at,
+        locked_until = excluded.locked_until
+    `).run(username, attempts, now, lockedUntil);
+  }
+
+  private clearAuthFailures(username: string): void {
+    this.db.prepare("DELETE FROM auth_attempts WHERE identity = ?").run(username);
+  }
+
+  authenticate(body: unknown, meta: { userAgent?: string; ip?: string } = {}) {
+    const input = body as Record<string, unknown>;
+    const username = normalizeUsername(input.username ?? process.env["ORACULO_INITIAL_ADMIN_USERNAME"] ?? "admin");
+    const password = nonEmptyString(input.password, "password", 1024);
+    if (this.bruteForceLocked(username)) throw new HttpError(429, "Invalid credentials");
+
+    const row = this.getPasswordRow(username);
+    if (!row || !Boolean(row.active) || !verifyPassword(password, row)) {
+      this.recordAuthFailure(username);
+      throw new HttpError(401, "Invalid credentials");
+    }
+
+    const user = safeUserFromRow(row);
+    const sessionId = newId("sess");
+    const token = randomBytes(32).toString("base64url");
+    const now = Date.now();
+    const ttl = sessionTtlSeconds();
+    this.transaction(() => {
+      this.clearAuthFailures(username);
+      this.db.prepare(`
+        INSERT INTO auth_sessions (id, user_id, token_hash, created_at, expires_at, user_agent, ip)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(sessionId, user.id, hashSessionToken(token), now, now + ttl * 1000, meta.userAgent ?? null, meta.ip ?? null);
+      this.db.prepare("UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?").run(nowIso(), nowIso(), user.id);
+    });
+    return { user: this.getUser(user.id) ?? user, cookieValue: `${sessionId}.${token}`, maxAge: ttl };
+  }
+
+  sessionUser(cookie: string | undefined): AuthUser | null {
+    if (!cookie) return null;
+    const [sessionId, token] = cookie.split(".");
+    if (!sessionId || !token) return null;
+    const row = this.db.prepare(`
+      SELECT u.* , s.token_hash, s.expires_at, s.revoked_at
+      FROM auth_sessions s
+      JOIN users u ON u.id = s.user_id
+      WHERE s.id = ?
+    `).get(sessionId) as (Record<string, unknown> & { token_hash: string }) | undefined;
+    if (!row || row.revoked_at != null || Number(row.expires_at) <= Date.now() || !Boolean(row.active)) return null;
+    const actual = Buffer.from(String(row.token_hash));
+    const expected = Buffer.from(hashSessionToken(token));
+    if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return null;
+    return safeUserFromRow(row);
+  }
+
+  logout(cookie: string | undefined): void {
+    if (!cookie) return;
+    const [sessionId, token] = cookie.split(".");
+    if (!sessionId || !token) return;
+    this.db.prepare("UPDATE auth_sessions SET revoked_at = ? WHERE id = ? AND token_hash = ? AND revoked_at IS NULL")
+      .run(Date.now(), sessionId, hashSessionToken(token));
+  }
+
+  getUser(userId: string): AuthUser | null {
+    const row = this.db.prepare("SELECT * FROM users WHERE id = ?").get(userId) as Record<string, unknown> | undefined;
+    return row ? safeUserFromRow(row) : null;
+  }
+
+  createUser(admin: AuthUser, body: unknown): AuthUser {
+    if (admin.role !== "admin") throw new HttpError(403, "Admin required");
+    const input = body as Record<string, unknown>;
+    const username = normalizeUsername(input.username);
+    const name = nonEmptyString(input.name ?? username, "name", 120);
+    const role = input.role === "admin" ? "admin" : "user";
+    const password = nonEmptyString(input.password, "password", 1024);
+    if (password.length < 12) throw new HttpError(400, "password must have at least 12 characters");
+    const hash = hashPassword(password);
+    const id = newId("user");
+    const now = nowIso();
+    try {
+      this.transaction(() => {
+        this.db.prepare(`
+          INSERT INTO users
+            (id, name, username, password_hash, password_salt, scrypt_n, scrypt_r, scrypt_p, scrypt_key_len, role, active, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+        `).run(id, name, username, hash.password_hash, hash.password_salt, hash.scrypt_n, hash.scrypt_r, hash.scrypt_p, hash.scrypt_key_len, role, now, now);
+        this.ensureUserAccount(id);
+      });
+    } catch (err) {
+      if (String((err as Error).message).includes("UNIQUE")) throw new HttpError(409, "username already exists");
+      throw err;
+    }
+    return this.getUser(id)!;
+  }
+
+  private ensureUserAccount(userId: string): void {
+    const now = nowIso();
+    const stats = makeDailyStats(DEFAULT_BALANCE);
+    this.db.prepare(`
+      INSERT OR IGNORE INTO demo_account (user_id, balance, configured_balance, daily_stats_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(userId, DEFAULT_BALANCE, DEFAULT_BALANCE, JSON.stringify(stats), now, now);
+  }
+
+  getAutomationUsers(): Array<{ user: AuthUser; automation: { enabled: boolean; symbol: string } }> {
+    const rows = this.db.prepare("SELECT * FROM users WHERE active = 1").all() as Record<string, unknown>[];
+    return rows
+      .map(safeUserFromRow)
+      .map((user) => ({ user, automation: this.getAutomation(user.id) }))
+      .filter((item) => item.automation.enabled);
+  }
+
+  getAccount(userId: string) {
+    this.ensureUserAccount(userId);
+    const row = this.db.prepare("SELECT * FROM demo_account WHERE user_id = ?").get(userId) as Record<string, unknown> | undefined;
+    if (!row) throw new HttpError(500, "demo account is not initialized");
+    return accountFromRow(row);
+  }
+
+  getSession(userId: string): DemoSession {
+    const activeTrade = this.getPositions(userId)[0] ?? null;
+    const history = this.getTrades(userId);
+    const lastPrice = activeTrade
+      ? this.getSetting<number | null>(userId, `demo.lastPrice.${activeTrade.pair}`, null)
+      : null;
+    const unrealizedPnlUSDC = activeTrade && lastPrice !== null
+      ? this.unrealizedFor(activeTrade, lastPrice)
+      : 0;
+    const partialPnlUSDC = (activeTrade?.partialPnlUSDC ?? 0) +
+      history.reduce((sum, trade) => sum + (trade.partialPnlUSDC ?? 0), 0);
+    const realizedPnlUSDC = history.reduce((sum, trade) => sum + (trade.pnlUSDC ?? 0), 0) +
+      (activeTrade?.realizedPnlUSDC ?? 0);
+    return {
+      ...this.getAccount(userId),
+      activeTrade,
+      history,
+      realizedPnlUSDC,
+      unrealizedPnlUSDC,
+      partialPnlUSDC,
+      openRiskUSDC: activeTrade ? Math.abs(activeTrade.entry - activeTrade.stopLoss) * (activeTrade.remainingPositionSize ?? activeTrade.positionSize) : 0,
+    };
+  }
+
+  getSetting<T>(userId: string, key: string, fallback: T): T {
+    const row = this.db.prepare("SELECT value FROM app_settings WHERE user_id = ? AND key = ?").get(userId, key) as Record<string, unknown> | undefined;
+    if (!row) return fallback;
+    return jsonParse<T>(row.value, fallback);
+  }
+
+  setSetting(userId: string, key: string, value: unknown): void {
+    this.db.prepare(`
+      INSERT INTO app_settings (user_id, key, value, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).run(userId, key, JSON.stringify(value), nowIso());
+  }
+
+  getAutomation(userId: string) {
+    return this.getSetting(userId, "demo.automation", { enabled: false, symbol: "BTCUSDT" });
+  }
+
+  recordWorkerDiagnostic(input: WorkerDiagnosticInput): WorkerDiagnosticAdminDto {
+    const now = nowIso();
+    const maxHistory = envInt("ORACULO_WORKER_DIAGNOSTIC_LIMIT", 40, 5, 500);
+    const summary = String(input.userPayload.summary ?? "Aguardando nova leitura do robo.");
+    const quality = String(input.userPayload.quality ?? "indefinida");
+    const id = newId("diag");
+    return this.transaction(() => {
+      this.db.prepare(`
+        INSERT INTO worker_diagnostics
+          (id, user_id, symbol, status, worker_active, automation_active, cycle_started_at, cycle_finished_at,
+           cycle_duration_ms, latency_ms, decision, score, direction, quality, summary, next_cycle_at, last_error,
+           engine_version, fingerprint, admin_json, user_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id, symbol, fingerprint) DO UPDATE SET
+          worker_active = excluded.worker_active,
+          automation_active = excluded.automation_active,
+          cycle_started_at = excluded.cycle_started_at,
+          cycle_finished_at = excluded.cycle_finished_at,
+          cycle_duration_ms = excluded.cycle_duration_ms,
+          latency_ms = excluded.latency_ms,
+          decision = excluded.decision,
+          score = excluded.score,
+          direction = excluded.direction,
+          quality = excluded.quality,
+          summary = excluded.summary,
+          next_cycle_at = excluded.next_cycle_at,
+          last_error = excluded.last_error,
+          engine_version = excluded.engine_version,
+          admin_json = excluded.admin_json,
+          user_json = excluded.user_json,
+          updated_at = excluded.updated_at
+      `).run(
+        id,
+        input.userId,
+        input.symbol,
+        input.status,
+        Number(input.workerActive),
+        Number(input.automationActive),
+        input.cycleStartedAt,
+        input.cycleFinishedAt,
+        input.cycleDurationMs,
+        input.latencyMs,
+        input.decision,
+        input.score,
+        input.direction,
+        quality,
+        summary,
+        input.nextCycleAt,
+        input.lastError,
+        input.engineVersion,
+        input.fingerprint,
+        JSON.stringify(input.adminPayload),
+        JSON.stringify(input.userPayload),
+        now,
+        now,
+      );
+      this.db.prepare(`
+        DELETE FROM worker_diagnostics
+        WHERE user_id = ?
+          AND id NOT IN (
+            SELECT id FROM worker_diagnostics
+            WHERE user_id = ?
+            ORDER BY cycle_finished_at DESC
+            LIMIT ?
+          )
+      `).run(input.userId, input.userId, maxHistory);
+      const row = this.db.prepare(`
+        SELECT * FROM worker_diagnostics
+        WHERE user_id = ? AND symbol = ? AND fingerprint = ?
+      `).get(input.userId, input.symbol, input.fingerprint) as Record<string, unknown>;
+      if (input.status === "APPROVED") {
+        this.createNotification(input.userId, {
+          type: "opportunity_approved",
+          title: "Oportunidade aprovada",
+          message: `${input.symbol}: entrada ${input.direction} aprovada pelo robo.`,
+          severity: "success",
+          symbol: input.symbol,
+          source: "DEMO",
+          relatedEventId: input.fingerprint,
+          idempotencyKey: `${input.userId}:opportunity_approved:${input.symbol}:${input.fingerprint}`,
+          adminMetadata: input.adminPayload,
+        });
+      } else if (input.status === "BLOCKED") {
+        this.createNotification(input.userId, {
+          type: "entry_blocked_exhaustion",
+          title: "Entrada bloqueada",
+          message: `${input.symbol}: entrada bloqueada pelos filtros de risco/exaustao.`,
+          severity: "warning",
+          symbol: input.symbol,
+          source: "DEMO",
+          relatedEventId: input.fingerprint,
+          idempotencyKey: `${input.userId}:entry_blocked:${input.symbol}:${input.fingerprint}`,
+          adminMetadata: input.adminPayload,
+        });
+      } else if (input.status === "ERROR") {
+        this.createNotification(input.userId, {
+          type: "worker_error",
+          title: "Erro do worker",
+          message: `${input.symbol}: o ciclo do robo falhou.`,
+          severity: "critical",
+          symbol: input.symbol,
+          source: "SYSTEM",
+          relatedEventId: input.fingerprint,
+          idempotencyKey: `${input.userId}:worker_error:${input.symbol}:${input.fingerprint}`,
+          adminMetadata: { error: sanitizeFailure(input.lastError), engineVersion: input.engineVersion },
+        });
+      }
+      return diagnosticAdminFromRow(row);
+    });
+  }
+
+  getWorkerDiagnostics(user: AuthUser, limit = 10): { current: WorkerDiagnosticUserDto | WorkerDiagnosticAdminDto | null; history: Array<WorkerDiagnosticUserDto | WorkerDiagnosticAdminDto> } {
+    const safeLimit = Math.max(1, Math.min(50, Math.floor(limit)));
+    const rows = this.db.prepare(`
+      SELECT * FROM worker_diagnostics
+      WHERE user_id = ?
+      ORDER BY cycle_finished_at DESC
+      LIMIT ?
+    `).all(user.id, safeLimit) as Record<string, unknown>[];
+    const mapper = user.role === "admin" ? diagnosticAdminFromRow : diagnosticUserFromRow;
+    const history = rows.map(mapper);
+    return { current: history[0] ?? null, history };
+  }
+
+  getObservabilitySnapshot(): StoreObservabilitySnapshot {
+    const fileBytes = (filePath: string): number => {
+      try {
+        return existsSync(filePath) ? statSync(filePath).size : 0;
+      } catch {
+        return 0;
+      }
+    };
+    const scalar = <T>(sql: string, fallback: T): T => {
+      try {
+        const row = this.db.prepare(sql).get() as Record<string, unknown> | undefined;
+        const value = row ? Object.values(row)[0] : undefined;
+        return value == null ? fallback : value as T;
+      } catch {
+        return fallback;
+      }
+    };
+    let integrity: "ok" | "error" = "ok";
+    let integrityError: string | null = null;
+    try {
+      const row = this.db.prepare("PRAGMA integrity_check").get() as Record<string, unknown> | undefined;
+      const result = String(row ? Object.values(row)[0] : "");
+      if (result !== "ok") {
+        integrity = "error";
+        integrityError = result || "integrity_check failed";
+      }
+    } catch (err) {
+      integrity = "error";
+      integrityError = err instanceof Error ? err.message : String(err);
+    }
+    const latestRow = this.db.prepare("SELECT * FROM worker_diagnostics ORDER BY cycle_finished_at DESC LIMIT 1").get() as Record<string, unknown> | undefined;
+    const now = Date.now();
+    return {
+      sqlite: {
+        databasePath: this.dbPath,
+        databaseBytes: fileBytes(this.dbPath),
+        walBytes: fileBytes(`${this.dbPath}-wal`),
+        shmBytes: fileBytes(`${this.dbPath}-shm`),
+        journalMode: String(scalar("PRAGMA journal_mode", "unknown")),
+        pageCount: Number(scalar("PRAGMA page_count", 0)),
+        pageSize: Number(scalar("PRAGMA page_size", 0)),
+        freelistCount: Number(scalar("PRAGMA freelist_count", 0)),
+        integrity,
+        integrityError,
+      },
+      sessions: {
+        active: Number(scalar(`SELECT COUNT(*) FROM auth_sessions WHERE revoked_at IS NULL AND expires_at > ${now}`, 0)),
+        expired: Number(scalar(`SELECT COUNT(*) FROM auth_sessions WHERE revoked_at IS NULL AND expires_at <= ${now}`, 0)),
+        revoked: Number(scalar("SELECT COUNT(*) FROM auth_sessions WHERE revoked_at IS NOT NULL", 0)),
+      },
+      worker: {
+        automationUsers: this.getAutomationUsers().length,
+        diagnosticsStored: Number(scalar("SELECT COUNT(*) FROM worker_diagnostics", 0)),
+        latest: latestRow ? diagnosticAdminFromRow(latestRow) : null,
+      },
+      notifications: {
+        stored: Number(scalar("SELECT COUNT(*) FROM notifications", 0)),
+        unread: Number(scalar("SELECT COUNT(*) FROM notifications WHERE read_at IS NULL", 0)),
+        pushSubscriptions: Number(scalar("SELECT COUNT(*) FROM push_subscriptions WHERE revoked_at IS NULL", 0)),
+        deliveries: Number(scalar("SELECT COUNT(*) FROM notification_deliveries", 0)),
+      },
+    };
+  }
+
+  getPublicOracleState(): PublicOracleState {
+    const openPosition = this.db.prepare(`
+      SELECT direction, updated_at
+      FROM demo_positions
+      WHERE status = 'OPEN'
+      ORDER BY updated_at DESC, open_time DESC
+      LIMIT 1
+    `).get() as Record<string, unknown> | undefined;
+    const latestDiagnostic = this.db.prepare(`
+      SELECT status, direction, decision, cycle_finished_at, updated_at
+      FROM worker_diagnostics
+      ORDER BY cycle_finished_at DESC
+      LIMIT 1
+    `).get() as Record<string, unknown> | undefined;
+
+    const state = resolveOracleVisualState({
+      requireAuthentication: false,
+      activeTrade: openPosition ? { direction: openPosition.direction } : null,
+      worker: latestDiagnostic ? {
+        lastStatus: latestDiagnostic.status,
+        lastDirection: latestDiagnostic.direction,
+        lastDecision: latestDiagnostic.decision,
+      } : null,
+    });
+
+    return {
+      state,
+      updatedAt: String(openPosition?.updated_at ?? latestDiagnostic?.cycle_finished_at ?? latestDiagnostic?.updated_at ?? nowIso()),
+    };
+  }
+
+  private simulationUserId(admin: AuthUser): string {
+    return `sim_${admin.id}`.slice(0, 120);
+  }
+
+  private ensureSimulationUser(admin: AuthUser): string {
+    const simulationUserId = this.simulationUserId(admin);
+    const existing = this.db.prepare("SELECT id FROM users WHERE id = ?").get(simulationUserId);
+    if (!existing) {
+      const password = hashPassword(randomBytes(32).toString("base64url"));
+      const now = nowIso();
+      this.db.prepare(`
+        INSERT INTO users
+          (id, name, username, password_hash, password_salt, scrypt_n, scrypt_r, scrypt_p, scrypt_key_len, role, active, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'user', 0, ?, ?)
+      `).run(
+        simulationUserId,
+        `Simulacao ${admin.username}`,
+        `sim-${admin.username}`.toLowerCase().replace(/[^a-z0-9._-]/g, "-").slice(0, 80),
+        password.password_hash,
+        password.password_salt,
+        password.scrypt_n,
+        password.scrypt_r,
+        password.scrypt_p,
+        password.scrypt_key_len,
+        now,
+        now,
+      );
+    }
+    this.ensureUserAccount(simulationUserId);
+    return simulationUserId;
+  }
+
+  private simulationDto(row: Record<string, unknown>): ControlledSimulationDto {
+    const scenario = jsonParse<ControlledSimulationScenario>(String(row.scenario_json), {
+      symbol: "BTCUSDT",
+      direction: "BUY",
+      entry: 100,
+      stopLoss: 95,
+      target1: 105,
+      target2: 110,
+      quantity: 1,
+      riskAmount: 5,
+      maxDurationMs: DEFAULT_MAX_DURATION_MS,
+      initialPrice: 100,
+    });
+    const simulationUserId = String(row.simulation_user_id);
+    const session = this.getSession(simulationUserId);
+    const status = simulationStatusFromRow(row);
+    return {
+      id: String(row.id),
+      userId: String(row.user_id),
+      simulationUserId,
+      status,
+      scenario,
+      currentStep: String(row.current_step),
+      startedAt: String(row.started_at),
+      updatedAt: String(row.updated_at),
+      completedAt: row.completed_at == null ? null : String(row.completed_at),
+      cancelledAt: row.cancelled_at == null ? null : String(row.cancelled_at),
+      lastEvent: row.last_event == null ? null : String(row.last_event),
+      error: row.error == null ? null : String(row.error),
+      session,
+      allowedSteps: allowedSimulationSteps(status, session),
+    };
+  }
+
+  private getSimulationRow(userId: string, id: string): Record<string, unknown> {
+    const row = this.db.prepare("SELECT * FROM controlled_simulations WHERE user_id = ? AND id = ?").get(userId, id) as Record<string, unknown> | undefined;
+    if (!row) throw new HttpError(404, "simulation not found");
+    return row;
+  }
+
+  private validateSimulationScenario(body: unknown): ControlledSimulationScenario {
+    const input = body as Record<string, unknown>;
+    const symbol = nonEmptyString(input.symbol ?? "BTCUSDT", "symbol", 32).toUpperCase();
+    if (!["BTCUSDT", "ETHUSDT", "SOLUSDT"].includes(symbol)) throw new HttpError(400, "invalid simulation symbol");
+    const direction = nonEmptyString(input.direction ?? "BUY", "direction") as TradeDirection;
+    if (direction !== "BUY" && direction !== "SELL") throw new HttpError(400, "direction must be BUY or SELL");
+    const entry = finiteNumber(input.entry, "entry", 0.00000001, MAX_PRICE);
+    const stopLoss = finiteNumber(input.stopLoss ?? input.stop, "stopLoss", 0.00000001, MAX_PRICE);
+    const target1 = finiteNumber(input.target1, "target1", 0.00000001, MAX_PRICE);
+    const target2 = finiteNumber(input.target2, "target2", 0.00000001, MAX_PRICE);
+    const quantity = finiteNumber(input.quantity ?? input.positionSize, "quantity", 0.00000001, MAX_POSITION_SIZE);
+    const riskAmount = finiteNumber(input.riskAmount ?? Math.abs(entry - stopLoss) * quantity, "riskAmount", 0, MAX_BALANCE);
+    const maxDurationMs = finiteNumber(input.maxDurationMs ?? DEFAULT_MAX_DURATION_MS, "maxDurationMs", 60_000, 24 * 60 * 60 * 1000);
+    const initialPrice = finiteNumber(input.initialPrice ?? entry, "initialPrice", 0.00000001, MAX_PRICE);
+    if (direction === "BUY" && !(stopLoss < entry && target1 > entry && target2 > target1)) throw new HttpError(400, "invalid BUY simulation plan");
+    if (direction === "SELL" && !(stopLoss > entry && target1 < entry && target2 < target1)) throw new HttpError(400, "invalid SELL simulation plan");
+    return { symbol, direction, entry, stopLoss, target1, target2, quantity, riskAmount, maxDurationMs, initialPrice };
+  }
+
+  createControlledSimulation(admin: AuthUser, body: unknown): ControlledSimulationDto {
+    if (admin.role !== "admin") throw new HttpError(403, "Admin required");
+    const scenario = this.validateSimulationScenario(body);
+    const now = nowIso();
+    const simulationId = newId("sim");
+    return this.transaction(() => {
+      if (this.getPositions(admin.id).length > 0) throw new HttpError(409, "close the real demo position before starting a controlled simulation");
+      const active = this.db.prepare("SELECT id FROM controlled_simulations WHERE user_id = ? AND status = 'ACTIVE'").get(admin.id);
+      if (active) throw new HttpError(409, "controlled simulation already active");
+      const simulationUserId = this.ensureSimulationUser(admin);
+      this.db.prepare("DELETE FROM demo_positions WHERE user_id = ?").run(simulationUserId);
+      this.db.prepare("DELETE FROM demo_trades WHERE user_id = ?").run(simulationUserId);
+      this.db.prepare("DELETE FROM demo_events WHERE user_id = ?").run(simulationUserId);
+      this.putAccount(simulationUserId, { balance: DEFAULT_BALANCE, configuredBalance: DEFAULT_BALANCE, dailyStats: makeDailyStats(DEFAULT_BALANCE) });
+      this.db.prepare(`
+        INSERT INTO controlled_simulations
+          (id, user_id, simulation_user_id, status, scenario_json, current_step, started_at, updated_at)
+        VALUES (?, ?, ?, 'ACTIVE', ?, 'CREATED', ?, ?)
+      `).run(simulationId, admin.id, simulationUserId, JSON.stringify(scenario), now, now);
+      this.createNotification(admin.id, {
+        type: "simulation_started",
+        title: "HOMOLOGACAO iniciada",
+        message: `Simulacao controlada iniciada em ${scenario.symbol}.`,
+        severity: "info",
+        symbol: scenario.symbol,
+        source: "HOMOLOGATION",
+        relatedEventId: simulationId,
+        idempotencyKey: `${admin.id}:simulation_started:${simulationId}:${scenario.symbol}`,
+        adminMetadata: { scenario },
+      });
+      return this.simulationDto(this.getSimulationRow(admin.id, simulationId));
+    });
+  }
+
+  getCurrentControlledSimulation(admin: AuthUser): ControlledSimulationDto | null {
+    if (admin.role !== "admin") throw new HttpError(403, "Admin required");
+    const row = this.db.prepare(`
+      SELECT * FROM controlled_simulations
+      WHERE user_id = ?
+      ORDER BY CASE status WHEN 'ACTIVE' THEN 0 ELSE 1 END, started_at DESC
+      LIMIT 1
+    `).get(admin.id) as Record<string, unknown> | undefined;
+    return row ? this.simulationDto(row) : null;
+  }
+
+  getControlledSimulationEvents(admin: AuthUser, id: string): ControlledSimulationEventDto[] {
+    if (admin.role !== "admin") throw new HttpError(403, "Admin required");
+    this.getSimulationRow(admin.id, id);
+    return (this.db.prepare("SELECT * FROM controlled_simulation_events WHERE user_id = ? AND simulation_id = ? ORDER BY created_at ASC")
+      .all(admin.id, id) as Record<string, unknown>[]).map(simulationEventFromRow);
+  }
+
+  private recordSimulationEvent(userId: string, simulationId: string, step: ControlledSimulationStep, idempotencyKey: string, status: "APPLIED" | "IGNORED" | "ERROR", message: string, snapshot: Record<string, unknown>): ControlledSimulationEventDto {
+    const now = nowIso();
+    const id = newId("simev");
+    this.db.prepare(`
+      INSERT INTO controlled_simulation_events
+        (id, simulation_id, user_id, step, idempotency_key, status, message, snapshot_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(simulation_id, idempotency_key) DO NOTHING
+    `).run(id, simulationId, userId, step, idempotencyKey, status, message, JSON.stringify(snapshot), now);
+    const row = this.db.prepare("SELECT * FROM controlled_simulation_events WHERE simulation_id = ? AND idempotency_key = ?")
+      .get(simulationId, idempotencyKey) as Record<string, unknown>;
+    const type = step === "CANCEL"
+      ? "simulation_cancelled"
+      : ["TARGET2", "STOP", "TIMEOUT", "LOSS_OF_STRENGTH"].includes(step)
+        ? "simulation_completed"
+        : "simulation_event";
+    this.createNotification(userId, {
+      type,
+      title: type === "simulation_cancelled" ? "HOMOLOGACAO cancelada" : type === "simulation_completed" ? "HOMOLOGACAO concluida" : "Evento de HOMOLOGACAO",
+      message: `HOMOLOGACAO: ${message}`,
+      severity: status === "ERROR" ? "critical" : type === "simulation_cancelled" ? "warning" : "info",
+      source: "HOMOLOGATION",
+      relatedEventId: String(row.id),
+      idempotencyKey: `${userId}:${type}:${simulationId}:${idempotencyKey}`,
+      adminMetadata: { step, status, simulationId, snapshot },
+    });
+    return simulationEventFromRow(row);
+  }
+
+  stepControlledSimulation(admin: AuthUser, id: string, body: unknown): ControlledSimulationDto {
+    if (admin.role !== "admin") throw new HttpError(403, "Admin required");
+    const input = body as Record<string, unknown>;
+    const step = nonEmptyString(input.step, "step") as ControlledSimulationStep;
+    if (!["OPEN", "MOVE", "TARGET1", "PARTIAL", "BREAKEVEN", "TRAILING", "TARGET2", "STOP", "LOSS_OF_STRENGTH", "TIMEOUT", "CANCEL"].includes(step)) {
+      throw new HttpError(400, "invalid simulation step");
+    }
+    if (step === "CANCEL") return this.cancelControlledSimulation(admin, id);
+    const idempotencyKey = typeof input.idempotencyKey === "string" && input.idempotencyKey.trim()
+      ? input.idempotencyKey.trim().slice(0, 160)
+      : `${step}:${id}`;
+    const existingEvent = this.db.prepare("SELECT * FROM controlled_simulation_events WHERE simulation_id = ? AND idempotency_key = ?")
+      .get(id, idempotencyKey) as Record<string, unknown> | undefined;
+    if (existingEvent) return this.simulationDto(this.getSimulationRow(admin.id, id));
+
+    const row = this.getSimulationRow(admin.id, id);
+    const current = this.simulationDto(row);
+    if (current.status !== "ACTIVE") throw new HttpError(409, "simulation is not active");
+    const allowed = new Set(current.allowedSteps);
+    if (!allowed.has(step)) throw new HttpError(409, `step ${step} is not allowed now`);
+
+    const scenario = current.scenario;
+    const simulationUserId = current.simulationUserId;
+    let message = "Evento aplicado.";
+    try {
+      if (step === "OPEN") {
+        const trade: DemoTrade = {
+          id: simulationTradeId(id),
+          pair: scenario.symbol,
+          direction: scenario.direction,
+          openTime: Date.now(),
+          entry: scenario.entry,
+          stopLoss: scenario.stopLoss,
+          stopLossOriginal: scenario.stopLoss,
+          target1: scenario.target1,
+          target2: scenario.target2,
+          balanceAtOpen: this.getAccount(simulationUserId).balance,
+          riskAmount: scenario.riskAmount,
+          positionSize: scenario.quantity,
+          remainingPositionSize: scenario.quantity,
+          riskReward: "controlled",
+          status: "OPEN",
+          target1Hit: false,
+          isBreakevenStop: false,
+          realizedPnlUSDC: 0,
+          partialPnlUSDC: 0,
+          maxDurationMs: scenario.maxDurationMs,
+          signalReasons: ["CONTROLLED_SIMULATION: entrada criada por administrador para homologacao."],
+          marketConditions: "CONTROLLED_SIMULATION",
+        };
+        this.postPosition(simulationUserId, trade);
+        this.updatePrices(simulationUserId, { pair: scenario.symbol, price: scenario.initialPrice });
+        message = "Entrada controlada aberta.";
+      } else if (step === "MOVE") {
+        const price = finiteNumber(input.price ?? scenario.initialPrice, "price", 0.00000001, MAX_PRICE);
+        this.updatePrices(simulationUserId, { pair: scenario.symbol, price });
+        message = "Preco movimentado sem depender da Binance.";
+      } else if (step === "TARGET1" || step === "PARTIAL" || step === "BREAKEVEN") {
+        this.updatePrices(simulationUserId, { pair: scenario.symbol, price: scenario.target1 });
+        message = "Alvo 1 processado pela gestao demo com parcial e breakeven idempotentes.";
+      } else if (step === "TRAILING") {
+        const price = input.price === undefined
+          ? scenario.direction === "BUY" ? scenario.target1 * 1.01 : scenario.target1 * 0.99
+          : finiteNumber(input.price, "price", 0.00000001, MAX_PRICE);
+        this.updatePrices(simulationUserId, { pair: scenario.symbol, price });
+        message = "Trailing atualizado pela gestao demo.";
+      } else if (step === "TARGET2") {
+        this.updatePrices(simulationUserId, { pair: scenario.symbol, price: scenario.target2 });
+        message = "Alvo 2 processado pela gestao demo.";
+      } else if (step === "STOP") {
+        const activeTrade = this.getSession(simulationUserId).activeTrade;
+        if (!activeTrade) throw new HttpError(409, "simulation position is already closed");
+        this.updatePrices(simulationUserId, { pair: scenario.symbol, price: activeTrade.stopLoss });
+        message = "Stop processado pela gestao demo.";
+      } else if (step === "LOSS_OF_STRENGTH" || step === "TIMEOUT") {
+        const activeTrade = this.getSession(simulationUserId).activeTrade;
+        if (!activeTrade) throw new HttpError(409, "simulation position is already closed");
+        const closePrice = finiteNumber(input.price ?? activeTrade.entry, "price", 0.00000001, MAX_PRICE);
+        this.patchPosition(simulationUserId, activeTrade.id, {
+          status: "LOSS",
+          closePrice,
+          exitReason: step === "TIMEOUT" ? "TIMEOUT" : "LOSS_OF_STRENGTH",
+        });
+        message = step === "TIMEOUT" ? "Fechamento por tempo maximo processado." : "Fechamento por perda de forca processado.";
+      }
+      const session = this.getSession(simulationUserId);
+      const finished = session.activeTrade === null && step !== "MOVE" && step !== "OPEN" && step !== "TARGET1" && step !== "PARTIAL" && step !== "BREAKEVEN" && step !== "TRAILING";
+      const now = nowIso();
+      this.db.prepare(`
+        UPDATE controlled_simulations
+        SET current_step = ?, last_event = ?, status = ?, completed_at = COALESCE(completed_at, ?), updated_at = ?, error = NULL
+        WHERE user_id = ? AND id = ?
+      `).run(step, step, finished ? "COMPLETED" : "ACTIVE", finished ? now : null, now, admin.id, id);
+      this.recordSimulationEvent(admin.id, id, step, idempotencyKey, "APPLIED", message, { session: this.getSession(simulationUserId) });
+      return this.simulationDto(this.getSimulationRow(admin.id, id));
+    } catch (err) {
+      const messageText = err instanceof Error ? err.message : String(err);
+      this.db.prepare("UPDATE controlled_simulations SET status = 'ERROR', error = ?, updated_at = ? WHERE user_id = ? AND id = ?")
+        .run(messageText.slice(0, 500), nowIso(), admin.id, id);
+      this.recordSimulationEvent(admin.id, id, step, idempotencyKey, "ERROR", messageText.slice(0, 500), {});
+      if (err instanceof HttpError) throw err;
+      throw new HttpError(500, "controlled simulation step failed");
+    }
+  }
+
+  cancelControlledSimulation(admin: AuthUser, id: string): ControlledSimulationDto {
+    if (admin.role !== "admin") throw new HttpError(403, "Admin required");
+    const row = this.getSimulationRow(admin.id, id);
+    const current = this.simulationDto(row);
+    if (current.status !== "ACTIVE") return current;
+    const now = nowIso();
+    this.db.prepare(`
+      UPDATE controlled_simulations
+      SET status = 'CANCELLED', current_step = 'CANCEL', last_event = 'CANCEL', cancelled_at = ?, updated_at = ?
+      WHERE user_id = ? AND id = ?
+    `).run(now, now, admin.id, id);
+    this.db.prepare("DELETE FROM demo_positions WHERE user_id = ?").run(current.simulationUserId);
+    this.recordSimulationEvent(admin.id, id, "CANCEL", `CANCEL:${id}`, "APPLIED", "Simulacao cancelada pelo administrador.", { session: this.getSession(current.simulationUserId) });
+    return this.simulationDto(this.getSimulationRow(admin.id, id));
+  }
+
+  getNotificationPreferences(userId: string): NotificationPreferences {
+    const row = this.db.prepare("SELECT preferences_json FROM notification_preferences WHERE user_id = ?").get(userId) as Record<string, unknown> | undefined;
+    const prefs = row ? jsonParse<NotificationPreferences>(String(row.preferences_json), defaultNotificationPreferences()) : defaultNotificationPreferences();
+    return { ...defaultNotificationPreferences(), ...prefs, quietHours: { ...defaultNotificationPreferences().quietHours, ...(prefs.quietHours ?? {}) } };
+  }
+
+  putNotificationPreferences(userId: string, body: unknown): NotificationPreferences {
+    const input = body as Partial<NotificationPreferences>;
+    const current = this.getNotificationPreferences(userId);
+    const next: NotificationPreferences = {
+      ...current,
+      internal: input.internal === undefined ? current.internal : input.internal === true,
+      push: input.push === undefined ? current.push : input.push === true,
+      telegram: input.telegram === undefined ? current.telegram : input.telegram === true,
+      importantOnly: input.importantOnly === undefined ? current.importantOnly : input.importantOnly === true,
+      includeBlockedEntries: input.includeBlockedEntries === undefined ? current.includeBlockedEntries : input.includeBlockedEntries === true,
+      includeSimulation: input.includeSimulation === undefined ? current.includeSimulation : input.includeSimulation === true,
+      mutedUntil: typeof input.mutedUntil === "string" ? input.mutedUntil : input.mutedUntil === null ? null : current.mutedUntil,
+      quietHours: typeof input.quietHours === "object" && input.quietHours
+        ? { ...current.quietHours, ...input.quietHours, enabled: input.quietHours.enabled === true }
+        : current.quietHours,
+      enabledTypes: Array.isArray(input.enabledTypes)
+        ? input.enabledTypes.filter((item) => typeof item === "string").slice(0, 80)
+        : current.enabledTypes,
+    };
+    this.db.prepare(`
+      INSERT INTO notification_preferences (user_id, preferences_json, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(user_id) DO UPDATE SET preferences_json = excluded.preferences_json, updated_at = excluded.updated_at
+    `).run(userId, JSON.stringify(next), nowIso());
+    return next;
+  }
+
+  private notificationAllowed(userId: string, input: { type: string; severity: NotificationSeverity; source: NotificationSource }): boolean {
+    const prefs = this.getNotificationPreferences(userId);
+    if (!prefs.internal) return false;
+    if (prefs.mutedUntil && Date.parse(prefs.mutedUntil) > Date.now()) return false;
+    if (input.source === "HOMOLOGATION" && !prefs.includeSimulation) return false;
+    if (input.type === "entry_blocked_exhaustion" && !prefs.includeBlockedEntries) return false;
+    if (prefs.importantOnly && !["warning", "critical"].includes(input.severity)) return false;
+    if (prefs.enabledTypes.length > 0 && !prefs.enabledTypes.includes(input.type)) return false;
+    if (prefs.quietHours.enabled && !["critical"].includes(input.severity)) {
+      const now = new Date();
+      const current = now.getHours() * 60 + now.getMinutes();
+      const [startH, startM] = prefs.quietHours.start.split(":").map(Number);
+      const [endH, endM] = prefs.quietHours.end.split(":").map(Number);
+      const start = (Number.isFinite(startH) ? startH : 22) * 60 + (Number.isFinite(startM) ? startM : 0);
+      const end = (Number.isFinite(endH) ? endH : 7) * 60 + (Number.isFinite(endM) ? endM : 0);
+      const quiet = start <= end ? current >= start && current < end : current >= start || current < end;
+      if (quiet) return false;
+    }
+    return true;
+  }
+
+  createNotification(userId: string, input: {
+    type: string;
+    title: string;
+    message: string;
+    severity?: NotificationSeverity;
+    symbol?: string | null;
+    source?: NotificationSource;
+    relatedEventId?: string | null;
+    idempotencyKey?: string;
+    adminMetadata?: Record<string, unknown>;
+    userMetadata?: Record<string, unknown>;
+  }): NotificationDto | null {
+    const source = input.source ?? "DEMO";
+    const severity = input.severity ?? "info";
+    const type = input.type.slice(0, 120);
+    if (!this.notificationAllowed(userId, { type, severity, source })) return null;
+    const symbol = input.symbol ? input.symbol.toUpperCase().slice(0, 32) : null;
+    const relatedEventId = input.relatedEventId?.slice(0, 160) ?? null;
+    const idempotencyKey = input.idempotencyKey ?? [userId, type, relatedEventId ?? "none", symbol ?? "none"].join(":");
+    const now = nowIso();
+    const id = newId("ntf");
+    this.db.prepare(`
+      INSERT OR IGNORE INTO notifications
+        (id, user_id, type, title, message, severity, symbol, source, related_event_id, idempotency_key,
+         delivery_status, failure_reason, admin_metadata_json, user_metadata_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'internal', NULL, ?, ?, ?)
+    `).run(
+      id,
+      userId,
+      type,
+      input.title.slice(0, 180),
+      input.message.slice(0, 600),
+      severity,
+      symbol,
+      source,
+      relatedEventId,
+      idempotencyKey.slice(0, 240),
+      JSON.stringify(input.adminMetadata ?? {}),
+      JSON.stringify(input.userMetadata ?? {}),
+      now,
+    );
+    this.pruneNotifications(userId);
+    const row = this.db.prepare("SELECT * FROM notifications WHERE user_id = ? AND idempotency_key = ?").get(userId, idempotencyKey.slice(0, 240)) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    this.queuePushDeliveries(userId, String(row.id));
+    this.queueTelegramDeliveries(userId, String(row.id));
+    void this.flushTelegramDeliveries(userId, String(row.id));
+    return notificationFromRow(row, this.getUser(userId)?.role ?? "user");
+  }
+
+  private pruneNotifications(userId: string): void {
+    const keep = envInt("ORACULO_NOTIFICATION_LIMIT", 200, 50, 2000);
+    this.db.prepare(`
+      DELETE FROM notifications
+      WHERE user_id = ?
+        AND id NOT IN (
+          SELECT id FROM notifications
+          WHERE user_id = ?
+          ORDER BY created_at DESC
+          LIMIT ?
+        )
+    `).run(userId, userId, keep);
+  }
+
+  getNotifications(user: AuthUser, query: unknown = {}) {
+    const input = query as Record<string, unknown>;
+    const limit = Math.max(1, Math.min(100, Math.floor(Number(input.limit ?? 30))));
+    const rows = this.db.prepare(`
+      SELECT * FROM notifications
+      WHERE user_id = ?
+        AND (? IS NULL OR type = ?)
+        AND (? IS NULL OR source = ?)
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(
+      user.id,
+      typeof input.type === "string" && input.type ? input.type : null,
+      typeof input.type === "string" && input.type ? input.type : null,
+      typeof input.source === "string" && input.source ? input.source : null,
+      typeof input.source === "string" && input.source ? input.source : null,
+      limit,
+    ) as Record<string, unknown>[];
+    const unread = this.db.prepare("SELECT COUNT(*) AS count FROM notifications WHERE user_id = ? AND read_at IS NULL").get(user.id) as Record<string, unknown>;
+    return { unreadCount: Number(unread.count ?? 0), items: rows.map((row) => notificationFromRow(row, user.role)) };
+  }
+
+  markNotificationRead(userId: string, id: string): NotificationDto {
+    this.db.prepare("UPDATE notifications SET read_at = COALESCE(read_at, ?) WHERE user_id = ? AND id = ?").run(nowIso(), userId, id);
+    const row = this.db.prepare("SELECT * FROM notifications WHERE user_id = ? AND id = ?").get(userId, id) as Record<string, unknown> | undefined;
+    if (!row) throw new HttpError(404, "notification not found");
+    return notificationFromRow(row, this.getUser(userId)?.role ?? "user");
+  }
+
+  markAllNotificationsRead(userId: string): { read: number } {
+    const result = this.db.prepare("UPDATE notifications SET read_at = COALESCE(read_at, ?) WHERE user_id = ? AND read_at IS NULL").run(nowIso(), userId);
+    return { read: Number(result.changes) };
+  }
+
+  private queuePushDeliveries(userId: string, notificationId: string): void {
+    const prefs = this.getNotificationPreferences(userId);
+    if (!prefs.push) return;
+    const subscriptions = this.db.prepare("SELECT * FROM push_subscriptions WHERE user_id = ? AND revoked_at IS NULL").all(userId) as Record<string, unknown>[];
+    for (const subscription of subscriptions) {
+      this.db.prepare(`
+        INSERT INTO notification_deliveries
+          (id, notification_id, provider, subscription_id, status, failure_reason, created_at, updated_at)
+        VALUES (?, ?, 'webpush', ?, 'queued', NULL, ?, ?)
+      `).run(newId("dlv"), notificationId, String(subscription.id), nowIso(), nowIso());
+    }
+  }
+
+  private queueTelegramDeliveries(userId: string, notificationId: string): void {
+    const prefs = this.getNotificationPreferences(userId);
+    if (!prefs.telegram) return;
+    const connection = this.db.prepare("SELECT * FROM telegram_connections WHERE user_id = ? AND status = 'ACTIVE' ORDER BY linked_at DESC LIMIT 1")
+      .get(userId) as Record<string, unknown> | undefined;
+    if (!connection) return;
+    const now = nowIso();
+    const existing = this.db.prepare(`
+      SELECT id FROM notification_deliveries
+      WHERE notification_id = ? AND provider = 'telegram' AND subscription_id = ?
+    `).get(notificationId, String(connection.id));
+    if (existing) return;
+    this.db.prepare(`
+      INSERT INTO notification_deliveries
+        (id, notification_id, provider, subscription_id, status, failure_reason, created_at, updated_at, attempt_count, next_attempt_at)
+      VALUES (?, ?, 'telegram', ?, 'queued', NULL, ?, ?, 0, NULL)
+    `).run(newId("dlv"), notificationId, String(connection.id), now, now);
+  }
+
+  async flushTelegramDeliveries(userId: string, notificationId?: string): Promise<void> {
+    const maxAttempts = envInt("ORACULO_TELEGRAM_MAX_ATTEMPTS", 3, 1, 10);
+    const now = nowIso();
+    const rows = this.db.prepare(`
+      SELECT d.*, n.user_id, c.chat_id, c.id AS connection_id, n.id AS notification_id
+      FROM notification_deliveries d
+      JOIN notifications n ON n.id = d.notification_id
+      JOIN telegram_connections c ON c.id = d.subscription_id AND c.status = 'ACTIVE'
+      WHERE n.user_id = ?
+        AND d.provider = 'telegram'
+        AND d.status IN ('queued','failed')
+        AND d.attempt_count < ?
+        AND (? IS NULL OR d.notification_id = ?)
+        AND (d.next_attempt_at IS NULL OR d.next_attempt_at <= ?)
+      ORDER BY d.created_at ASC
+      LIMIT 10
+    `).all(userId, maxAttempts, notificationId ?? null, notificationId ?? null, now) as Record<string, unknown>[];
+    for (const delivery of rows) {
+      try {
+        const notificationRow = this.db.prepare("SELECT * FROM notifications WHERE id = ? AND user_id = ?")
+          .get(String(delivery.notification_id), userId) as Record<string, unknown> | undefined;
+        if (!notificationRow) continue;
+        const user = this.getUser(userId);
+        const notification = notificationFromRow(notificationRow, user?.role ?? "user");
+        const message = notificationTelegramMessage(notification, user?.role ?? "user");
+        await this.sendTelegramMessage(String(delivery.chat_id), message);
+        this.db.prepare(`
+          UPDATE notification_deliveries
+          SET status = 'delivered', failure_reason = NULL, attempt_count = attempt_count + 1, updated_at = ?, next_attempt_at = NULL
+          WHERE id = ?
+        `).run(nowIso(), String(delivery.id));
+        this.db.prepare("UPDATE telegram_connections SET last_delivery_at = ?, updated_at = ? WHERE id = ?")
+          .run(nowIso(), nowIso(), String(delivery.connection_id));
+      } catch (err) {
+        const attempt = Number(delivery.attempt_count ?? 0) + 1;
+        const failure = sanitizeFailure(err) ?? "telegram delivery failed";
+        const permanent = failure.includes("chat not found") || failure.includes("bot was blocked") || failure.includes("forbidden");
+        if (permanent) {
+          this.db.prepare("UPDATE telegram_connections SET status = 'REVOKED', revoked_at = ?, updated_at = ? WHERE id = ?")
+            .run(nowIso(), nowIso(), String(delivery.connection_id));
+        }
+        const status = permanent || attempt >= maxAttempts ? "failed" : "queued";
+        const backoffMs = Math.min(15 * 60_000, 2 ** Math.max(0, attempt - 1) * 30_000);
+        const nextAttemptAt = status === "queued" ? new Date(Date.now() + backoffMs).toISOString() : null;
+        this.db.prepare(`
+          UPDATE notification_deliveries
+          SET status = ?, failure_reason = ?, attempt_count = ?, updated_at = ?, next_attempt_at = ?
+          WHERE id = ?
+        `).run(status, failure, attempt, nowIso(), nextAttemptAt, String(delivery.id));
+      }
+    }
+  }
+
+  private async sendTelegramMessage(chatId: string, text: string): Promise<void> {
+    if (process.env["ORACULO_TELEGRAM_MOCK"] === "true") return;
+    if (!telegramConfigured()) throw new Error("Telegram provider is not configured");
+    const response = await fetch(telegramApiUrl("sendMessage"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        disable_web_page_preview: true,
+      }),
+    });
+    if (!response.ok) {
+      let description = `telegram ${response.status}`;
+      try {
+        const payload = await response.json() as { description?: string };
+        if (payload.description) description = payload.description;
+      } catch {
+        // Telegram failures must not break the worker.
+      }
+      throw new Error(description);
+    }
+  }
+
+  getPushPublicKey(): { publicKey: string | null; configured: boolean } {
+    const publicKey = process.env["ORACULO_VAPID_PUBLIC_KEY"] ?? null;
+    return { publicKey, configured: !!publicKey && !!process.env["ORACULO_VAPID_PRIVATE_KEY"] };
+  }
+
+  listPushSubscriptions(userId: string): PushSubscriptionDto[] {
+    return (this.db.prepare("SELECT * FROM push_subscriptions WHERE user_id = ? AND revoked_at IS NULL ORDER BY updated_at DESC").all(userId) as Record<string, unknown>[])
+      .map(pushSubscriptionFromRow);
+  }
+
+  subscribePush(userId: string, body: unknown, userAgent?: string): PushSubscriptionDto {
+    const input = body as Record<string, unknown>;
+    const endpoint = nonEmptyString(input.endpoint, "endpoint", 2000);
+    const keys = input.keys as Record<string, unknown> | undefined;
+    const p256dh = nonEmptyString(keys?.p256dh, "p256dh", 500);
+    const auth = nonEmptyString(keys?.auth, "auth", 500);
+    const endpointHash = createHash("sha256").update(endpoint).digest("hex");
+    const now = nowIso();
+    const id = newId("push");
+    this.db.prepare(`
+      INSERT INTO push_subscriptions (id, user_id, endpoint_hash, endpoint, p256dh, auth, user_agent, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(user_id, endpoint_hash) DO UPDATE SET
+        endpoint = excluded.endpoint,
+        p256dh = excluded.p256dh,
+        auth = excluded.auth,
+        user_agent = excluded.user_agent,
+        revoked_at = NULL,
+        failure_reason = NULL,
+        updated_at = excluded.updated_at
+    `).run(id, userId, endpointHash, endpoint, p256dh, auth, userAgent ?? null, now, now);
+    const row = this.db.prepare("SELECT * FROM push_subscriptions WHERE user_id = ? AND endpoint_hash = ?").get(userId, endpointHash) as Record<string, unknown>;
+    return pushSubscriptionFromRow(row);
+  }
+
+  deletePushSubscription(userId: string, id: string): { removed: boolean } {
+    const result = this.db.prepare("UPDATE push_subscriptions SET revoked_at = ?, updated_at = ? WHERE user_id = ? AND id = ? AND revoked_at IS NULL")
+      .run(nowIso(), nowIso(), userId, id);
+    return { removed: result.changes > 0 };
+  }
+
+  removeInvalidPushSubscription(userId: string, id: string, reason: unknown): void {
+    this.db.prepare("UPDATE push_subscriptions SET revoked_at = ?, failure_reason = ?, updated_at = ? WHERE user_id = ? AND id = ?")
+      .run(nowIso(), sanitizeFailure(reason), nowIso(), userId, id);
+  }
+
+  getTelegramStatus(userId: string): TelegramStatusDto {
+    const row = this.db.prepare("SELECT * FROM telegram_connections WHERE user_id = ? AND status = 'ACTIVE' ORDER BY linked_at DESC LIMIT 1")
+      .get(userId) as Record<string, unknown> | undefined;
+    return {
+      configured: telegramConfigured(),
+      connected: !!row,
+      botUsername: telegramBotUsername(),
+      telegramUsername: row?.telegram_username == null ? null : String(row.telegram_username),
+      linkedAt: row?.linked_at == null ? null : String(row.linked_at),
+      lastDeliveryAt: row?.last_delivery_at == null ? null : String(row.last_delivery_at),
+    };
+  }
+
+  createTelegramLinkCode(userId: string): TelegramLinkCodeDto {
+    if (!telegramConfigured()) throw new HttpError(503, "Telegram is not configured");
+    const now = Date.now();
+    const ttlMs = envInt("ORACULO_TELEGRAM_LINK_TTL_SECONDS", 600, 60, 3600) * 1000;
+    const expiresAt = new Date(now + ttlMs).toISOString();
+    const code = randomBytes(5).toString("base64url").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8).padEnd(8, "7");
+    const id = newId("tglc");
+    this.db.prepare("DELETE FROM telegram_link_codes WHERE user_id = ? AND (used_at IS NOT NULL OR expires_at <= ?)").run(userId, nowIso());
+    this.db.prepare(`
+      INSERT INTO telegram_link_codes (id, user_id, code_hash, expires_at, used_at, created_at)
+      VALUES (?, ?, ?, ?, NULL, ?)
+    `).run(id, userId, sha256(code), expiresAt, nowIso());
+    const botUsername = telegramBotUsername();
+    return {
+      code,
+      expiresAt,
+      botUsername,
+      deepLink: botUsername ? `https://t.me/${botUsername}?start=${encodeURIComponent(code)}` : null,
+    };
+  }
+
+  disconnectTelegram(userId: string): { disconnected: boolean } {
+    const result = this.db.prepare(`
+      UPDATE telegram_connections
+      SET status = 'REVOKED', revoked_at = ?, updated_at = ?
+      WHERE user_id = ? AND status = 'ACTIVE'
+    `).run(nowIso(), nowIso(), userId);
+    return { disconnected: result.changes > 0 };
+  }
+
+  processTelegramWebhook(body: unknown): { ok: boolean; linked: boolean; reason?: string } {
+    const update = body as Record<string, unknown>;
+    const message = update.message as Record<string, unknown> | undefined;
+    if (!message) return { ok: true, linked: false, reason: "ignored_update" };
+    const chat = message.chat as Record<string, unknown> | undefined;
+    const text = typeof message.text === "string" ? message.text.trim() : "";
+    if (!chat || String(chat.type) !== "private") return { ok: true, linked: false, reason: "private_chat_required" };
+    const match = text.match(/^\/start(?:@\w+)?\s+([A-Za-z0-9_-]{4,64})$/);
+    if (!match) return { ok: true, linked: false, reason: "link_code_required" };
+    const codeHash = sha256(match[1].toUpperCase());
+    const now = nowIso();
+    const codeRow = this.db.prepare(`
+      SELECT * FROM telegram_link_codes
+      WHERE code_hash = ? AND used_at IS NULL AND expires_at > ?
+      ORDER BY created_at DESC
+      LIMIT 1
+    `).get(codeHash, now) as Record<string, unknown> | undefined;
+    if (!codeRow) return { ok: true, linked: false, reason: "invalid_or_expired_code" };
+    const chatId = String(chat.id ?? "");
+    if (!chatId || chatId.length > 80) return { ok: true, linked: false, reason: "invalid_chat_id" };
+    const from = message.from as Record<string, unknown> | undefined;
+    const username = typeof from?.username === "string" ? from.username.slice(0, 120) : null;
+    this.transaction(() => {
+      this.db.prepare("UPDATE telegram_link_codes SET used_at = ? WHERE id = ? AND used_at IS NULL").run(now, String(codeRow.id));
+      this.db.prepare("UPDATE telegram_connections SET status = 'REVOKED', revoked_at = ?, updated_at = ? WHERE user_id = ? AND status = 'ACTIVE'")
+        .run(now, now, String(codeRow.user_id));
+      this.db.prepare("UPDATE telegram_connections SET status = 'REVOKED', revoked_at = ?, updated_at = ? WHERE chat_id = ? AND status = 'ACTIVE'")
+        .run(now, now, chatId);
+      this.db.prepare(`
+        INSERT INTO telegram_connections
+          (id, user_id, chat_id, telegram_username, status, linked_at, revoked_at, last_delivery_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 'ACTIVE', ?, NULL, NULL, ?, ?)
+      `).run(newId("tgl"), String(codeRow.user_id), chatId, username, now, now, now);
+    });
+    void this.sendTelegramMessage(chatId, "ORACULO — Telegram conectado com sucesso. Seus alertas do Oraculo podem chegar por aqui.").catch(() => undefined);
+    return { ok: true, linked: true };
+  }
+
+  createTelegramTestNotification(user: AuthUser): NotificationDto | null {
+    const status = this.getTelegramStatus(user.id);
+    if (!status.connected) throw new HttpError(409, "Telegram is not connected");
+    const prefs = this.getNotificationPreferences(user.id);
+    if (!prefs.telegram) this.putNotificationPreferences(user.id, { telegram: true });
+    const notification = this.createNotification(user.id, {
+      type: "test",
+      title: "Teste Telegram",
+      message: "Mensagem de teste enviada pelo Oraculo.",
+      severity: "info",
+      source: "SYSTEM",
+      idempotencyKey: `${user.id}:telegram_test:${Math.floor(Date.now() / 60_000)}`,
+      adminMetadata: user.role === "admin" ? { provider: "telegram" } : {},
+    });
+    if (notification) void this.flushTelegramDeliveries(user.id, notification.id);
+    return notification;
+  }
+
+  createTestNotification(user: AuthUser): NotificationDto | null {
+    return this.createNotification(user.id, {
+      type: "test",
+      title: "Teste de alerta",
+      message: "Alerta interno e Push preparados para este dispositivo.",
+      severity: "info",
+      source: "SYSTEM",
+      idempotencyKey: `${user.id}:test:${Math.floor(Date.now() / 60_000)}`,
+      adminMetadata: user.role === "admin" ? { provider: "internal-webpush", telegram: "prepared" } : {},
+    });
+  }
+
+  tradeManagementSettings(userId: string) {
+    return this.getSetting(userId, "demo.tradeManagement", {
+      maxDurationMs: DEFAULT_MAX_DURATION_MS,
+      breakevenBufferPct: DEFAULT_BREAKEVEN_BUFFER_PCT,
+      trailingStopPct: DEFAULT_TRAILING_STOP_PCT,
+      lossOfStrengthPct: DEFAULT_LOSS_OF_STRENGTH_PCT,
+      closeAtOperationalEnd: false,
+    });
+  }
+
+  setAutomation(userId: string, body: unknown) {
+    const input = body as Record<string, unknown>;
+    const enabled = input.enabled === true;
+    const symbol = typeof input.symbol === "string" && input.symbol.trim() ? input.symbol.toUpperCase() : "BTCUSDT";
+    const next = { enabled, symbol };
+    this.setSetting(userId, "demo.automation", next);
+    this.createNotification(userId, {
+      type: enabled ? "automation_enabled" : "automation_disabled",
+      title: enabled ? "Automacao ativada" : "Automacao desativada",
+      message: enabled ? `Robo demo ativado para ${symbol}.` : "Robo demo desativado.",
+      severity: enabled ? "success" : "warning",
+      symbol,
+      source: "DEMO",
+      relatedEventId: `automation:${symbol}`,
+      idempotencyKey: `${userId}:automation:${enabled}:${symbol}:${Math.floor(Date.now() / 60_000)}`,
+    });
+    return next;
+  }
+
+  putAccount(userId: string, body: unknown) {
+    const input = body as Record<string, unknown>;
+    const balance = finiteNumber(input.balance, "balance", 0, MAX_BALANCE);
+    const configuredBalance = finiteNumber(input.configuredBalance ?? input.configured_balance, "configuredBalance", 0, MAX_BALANCE);
+    const dailyStats = input.dailyStats ?? makeDailyStats(balance);
+    const now = nowIso();
+    this.db.prepare(`
+      UPDATE demo_account
+      SET balance = ?, configured_balance = ?, daily_stats_json = ?, updated_at = ?
+      WHERE user_id = ?
+    `).run(balance, configuredBalance, JSON.stringify(dailyStats), now, userId);
+    return this.getAccount(userId);
+  }
+
+  resetSession(userId: string, body: unknown) {
+    const input = body as Record<string, unknown>;
+    const configuredBalance = finiteNumber(input.configuredBalance ?? DEFAULT_BALANCE, "configuredBalance", 100, MAX_BALANCE);
+    return this.transaction(() => {
+      this.db.prepare("DELETE FROM demo_positions WHERE user_id = ?").run(userId);
+      this.db.prepare("DELETE FROM demo_trades WHERE user_id = ?").run(userId);
+      this.db.prepare("DELETE FROM demo_events WHERE user_id = ?").run(userId);
+      this.putAccount(userId, { balance: configuredBalance, configuredBalance, dailyStats: makeDailyStats(configuredBalance) });
+      return this.getSession(userId);
+    });
+  }
+
+  getPositions(userId: string) {
+    return (this.db.prepare("SELECT * FROM demo_positions WHERE user_id = ? AND status = 'OPEN' ORDER BY open_time DESC").all(userId) as Record<string, unknown>[]).map(tradeFromRow);
+  }
+
+  getTrades(userId: string) {
+    return (this.db.prepare("SELECT * FROM demo_trades WHERE user_id = ? ORDER BY COALESCE(close_time, open_time) DESC").all(userId) as Record<string, unknown>[]).map(tradeFromRow);
+  }
+
+  private validatePosition(body: unknown): DemoTrade {
+    const input = body as Record<string, unknown>;
+    const direction = nonEmptyString(input.direction, "direction");
+    if (direction !== "BUY" && direction !== "SELL") throw new HttpError(400, "direction must be BUY or SELL");
+    return {
+      id: nonEmptyString(input.id, "id", 128),
+      pair: nonEmptyString(input.pair, "pair", 32).toUpperCase(),
+      direction,
+      openTime: finiteNumber(input.openTime, "openTime", 1),
+      entry: finiteNumber(input.entry, "entry", 0.00000001, MAX_PRICE),
+      stopLoss: finiteNumber(input.stopLoss, "stopLoss", 0.00000001, MAX_PRICE),
+      stopLossOriginal: finiteNumber(input.stopLossOriginal ?? input.stopLoss, "stopLossOriginal", 0.00000001, MAX_PRICE),
+      target1: finiteNumber(input.target1, "target1", 0.00000001, MAX_PRICE),
+      target2: finiteNumber(input.target2, "target2", 0.00000001, MAX_PRICE),
+      balanceAtOpen: finiteNumber(input.balanceAtOpen, "balanceAtOpen", 0, MAX_BALANCE),
+      riskAmount: finiteNumber(input.riskAmount, "riskAmount", 0, MAX_BALANCE),
+      positionSize: finiteNumber(input.positionSize, "positionSize", 0, MAX_POSITION_SIZE),
+      remainingPositionSize: finiteNumber(input.remainingPositionSize ?? input.positionSize, "remainingPositionSize", 0, MAX_POSITION_SIZE),
+      riskReward: nonEmptyString(input.riskReward, "riskReward", 32),
+      status: "OPEN",
+      target1Hit: bool(input.target1Hit),
+      isBreakevenStop: bool(input.isBreakevenStop),
+      realizedPnlUSDC: finiteNumber(input.realizedPnlUSDC ?? 0, "realizedPnlUSDC", -MAX_BALANCE, MAX_BALANCE),
+      partialPnlUSDC: finiteNumber(input.partialPnlUSDC ?? 0, "partialPnlUSDC", -MAX_BALANCE, MAX_BALANCE),
+      target1ClosePrice: input.target1ClosePrice === undefined ? undefined : finiteNumber(input.target1ClosePrice, "target1ClosePrice", 0.00000001, MAX_PRICE),
+      maxDurationMs: finiteNumber(input.maxDurationMs ?? DEFAULT_MAX_DURATION_MS, "maxDurationMs", 60_000, 24 * 60 * 60 * 1000),
+      signalReasons: stringArray(input.signalReasons ?? [], "signalReasons"),
+      marketConditions: nonEmptyString(input.marketConditions, "marketConditions", 5000),
+    };
+  }
+
+  postPosition(userId: string, body: unknown) {
+    const position = this.validatePosition(body);
+    const now = nowIso();
+    try {
+      this.db.prepare(`
+        INSERT INTO demo_positions
+          (id, user_id, pair, direction, status, open_time, entry, stop_loss, stop_loss_original, target1, target2,
+           balance_at_open, risk_amount, position_size, remaining_position_size, risk_reward, target1_hit, is_breakeven_stop,
+           realized_pnl_usdc, partial_pnl_usdc, target1_close_price, max_duration_ms,
+           signal_reasons_json, market_conditions, updated_at)
+        VALUES (?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        position.id, userId, position.pair, position.direction, position.openTime, position.entry, position.stopLoss,
+        position.stopLossOriginal, position.target1, position.target2, position.balanceAtOpen, position.riskAmount,
+        position.positionSize, position.remainingPositionSize, position.riskReward, Number(position.target1Hit), Number(position.isBreakevenStop),
+        position.realizedPnlUSDC ?? 0, position.partialPnlUSDC ?? 0, position.target1ClosePrice ?? null, position.maxDurationMs ?? DEFAULT_MAX_DURATION_MS,
+        JSON.stringify(position.signalReasons), position.marketConditions, now,
+      );
+    } catch (err) {
+      if (String((err as Error).message).includes("UNIQUE")) throw new HttpError(409, "an open position already exists for this pair");
+      throw err;
+    }
+    this.setSetting(userId, `demo.priceHistory.${position.id}`, [{ price: position.entry, at: position.openTime }]);
+    this.createNotification(userId, {
+      type: "demo_entry_opened",
+      title: "Entrada demo aberta",
+      message: `${position.pair}: ${position.direction} aberta em ${position.entry}.`,
+      severity: "success",
+      symbol: position.pair,
+      source: "DEMO",
+      relatedEventId: position.id,
+      idempotencyKey: `${userId}:demo_entry_opened:${position.id}:${position.pair}`,
+      adminMetadata: { trade: position },
+    });
+    return position;
+  }
+
+  openFromSignal(userId: string, body: unknown) {
+    const input = body as DemoSignalInput;
+    const pair = nonEmptyString(input.pair, "pair", 32).toUpperCase();
+    const decision = input.decision;
+    if (decision !== "BUY" && decision !== "SELL") return this.getSession(userId);
+    const entry = finiteNumber(input.entryNum, "entryNum", 0.00000001, MAX_PRICE);
+    const stop = finiteNumber(input.stopLossNum, "stopLossNum", 0.00000001, MAX_PRICE);
+    const target1 = finiteNumber(input.target1Num, "target1Num", 0.00000001, MAX_PRICE);
+    const target2 = finiteNumber(input.target2Num, "target2Num", 0.00000001, MAX_PRICE);
+    const key = `signal:${signalKey({ ...input, pair })}`;
+    return this.transaction(() => {
+      const existingEvent = this.db.prepare("SELECT event_key FROM demo_events WHERE event_key = ?").get(`${userId}:${key}`);
+      if (existingEvent) return this.getSession(userId);
+      if (this.getPositions(userId).some((position) => position.pair === pair)) {
+        this.recordEvent(userId, key, "duplicate_signal_blocked", null);
+        return this.getSession(userId);
+      }
+      const account = this.getAccount(userId);
+      if (isSafetyLimited(account.dailyStats)) {
+        this.recordEvent(userId, key, "risk_limited_signal_blocked", null);
+        return this.getSession(userId);
+      }
+      const { riskAmount, positionSize } = calcPositionSize(account.balance, entry, stop);
+      const steps = Array.isArray(input.steps) ? input.steps : [];
+      const signalReasons = steps.slice(0, 10).map((step) =>
+        `[${step.number ?? "?"}] ${step.name ?? "Regra"}: ${step.value ?? "-"} - ${step.reason ?? ""}`,
+      );
+      const trade: DemoTrade = {
+        id: newTradeId(),
+        pair,
+        direction: decision,
+        openTime: Date.now(),
+        entry,
+        stopLoss: stop,
+        stopLossOriginal: stop,
+        target1,
+        target2,
+        balanceAtOpen: account.balance,
+        riskAmount,
+        positionSize,
+        remainingPositionSize: positionSize,
+        riskReward: input.riskReward ?? "-",
+        status: "OPEN",
+        target1Hit: false,
+        isBreakevenStop: false,
+        realizedPnlUSDC: 0,
+        partialPnlUSDC: 0,
+        maxDurationMs: this.tradeManagementSettings(userId).maxDurationMs,
+        signalReasons,
+        marketConditions: signalReasons.join(" | "),
+      };
+      this.postPosition(userId, trade);
+      this.setSetting(userId, `demo.priceHistory.${trade.id}`, [{ price: entry, at: Date.now() }]);
+      this.recordEvent(userId, key, "signal_opened", trade.id);
+      return this.getSession(userId);
+    });
+  }
+
+  updatePrices(userId: string, body: unknown) {
+    const input = body as Record<string, unknown>;
+    const price = finiteNumber(input.price, "price", 0.00000001, MAX_PRICE);
+    const pair = typeof input.pair === "string" ? input.pair.toUpperCase() : undefined;
+    return this.transaction(() => {
+      const positions = this.getPositions(userId).filter((position) => !pair || position.pair === pair);
+      for (const position of positions) this.setSetting(userId, `demo.lastPrice.${position.pair}`, price);
+      for (const trade of positions) this.applyPriceToPosition(userId, trade, price);
+      return this.getSession(userId);
+    });
+  }
+
+  patchPosition(userId: string, id: string, body: unknown) {
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM demo_positions WHERE user_id = ? AND id = ? AND status = 'OPEN'").get(userId, id) as Record<string, unknown> | undefined;
+      if (!row) throw new HttpError(404, "open position not found");
+      const current = tradeFromRow(row);
+      const input = body as Record<string, unknown>;
+      if (input.status && input.status !== "OPEN") {
+        const closePrice = finiteNumber(input.closePrice, "closePrice", 0.00000001, MAX_PRICE);
+        const reason = nonEmptyString(input.exitReason, "exitReason") as ManagedTradeExitReason;
+        if (!["STOP_LOSS", "BREAKEVEN", "TARGET_1", "TARGET_2", "TIMEOUT", "TIME_EXIT", "TRAILING_STOP", "LOSS_OF_STRENGTH", "SESSION_END"].includes(reason)) throw new HttpError(400, "invalid exitReason");
+        return this.closePosition(userId, current, closePrice, reason);
+      }
+
+      const stopLoss = input.stopLoss === undefined ? current.stopLoss : finiteNumber(input.stopLoss, "stopLoss", 0.00000001, MAX_PRICE);
+      const target1Hit = input.target1Hit === undefined ? current.target1Hit : bool(input.target1Hit);
+      const isBreakevenStop = input.isBreakevenStop === undefined ? current.isBreakevenStop : bool(input.isBreakevenStop);
+      this.db.prepare(`
+        UPDATE demo_positions
+        SET stop_loss = ?, target1_hit = ?, is_breakeven_stop = ?, updated_at = ?
+        WHERE user_id = ? AND id = ?
+      `).run(stopLoss, Number(target1Hit), Number(isBreakevenStop), nowIso(), userId, id);
+      return { ...current, stopLoss, target1Hit, isBreakevenStop };
+    });
+  }
+
+  private recordEvent(userId: string, key: string, type: string, tradeId: string | null): boolean {
+    const scopedKey = `${userId}:${key}`;
+    const result = this.db.prepare(`
+      INSERT OR IGNORE INTO demo_events (event_key, user_id, event_type, trade_id, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(scopedKey, userId, type, tradeId, nowIso());
+    return result.changes > 0;
+  }
+
+  private getOpenPosition(userId: string, id: string): DemoTrade | null {
+    const row = this.db.prepare("SELECT * FROM demo_positions WHERE user_id = ? AND id = ? AND status = 'OPEN'").get(userId, id) as Record<string, unknown> | undefined;
+    return row ? tradeFromRow(row) : null;
+  }
+
+  private priceHistory(userId: string, tradeId: string): Array<{ price: number; at: number }> {
+    const rows = this.getSetting<Array<{ price: number; at: number }>>(userId, `demo.priceHistory.${tradeId}`, []);
+    return rows.filter((row) =>
+      typeof row === "object"
+      && Number.isFinite(row.price)
+      && row.price > 0
+      && Number.isFinite(row.at)
+      && row.at > 0,
+    ).slice(-PRICE_HISTORY_LIMIT);
+  }
+
+  private pushPriceHistory(userId: string, trade: DemoTrade, price: number): Array<{ price: number; at: number }> {
+    const next = [...this.priceHistory(userId, trade.id), { price, at: Date.now() }].slice(-PRICE_HISTORY_LIMIT);
+    this.setSetting(userId, `demo.priceHistory.${trade.id}`, next);
+    return next;
+  }
+
+  private appendPositionReason(userId: string, trade: DemoTrade, reason: string): DemoTrade {
+    const signalReasons = [...trade.signalReasons, reason].slice(-40);
+    const marketConditions = signalReasons.join(" | ");
+    this.db.prepare("UPDATE demo_positions SET signal_reasons_json = ?, market_conditions = ?, updated_at = ? WHERE user_id = ? AND id = ? AND status = 'OPEN'")
+      .run(JSON.stringify(signalReasons), marketConditions, nowIso(), userId, trade.id);
+    return { ...trade, signalReasons, marketConditions };
+  }
+
+  private unrealizedFor(trade: DemoTrade, price: number): number {
+    const size = trade.remainingPositionSize ?? trade.positionSize;
+    return trade.direction === "BUY"
+      ? (price - trade.entry) * size
+      : (trade.entry - price) * size;
+  }
+
+  private applyPriceToPosition(userId: string, trade: DemoTrade, price: number): void {
+    const isBuy = trade.direction === "BUY";
+    const settings = this.tradeManagementSettings(userId);
+    const history = this.pushPriceHistory(userId, trade, price);
+
+    if (isBuy ? price <= trade.stopLoss : price >= trade.stopLoss) {
+      const reason: ManagedTradeExitReason = trade.isBreakevenStop ? "BREAKEVEN" : "STOP_LOSS";
+      const key = `close:${trade.id}:${reason}`;
+      if (this.recordEvent(userId, key, "close", trade.id)) this.closePosition(userId, trade, trade.stopLoss, reason);
+      return;
+    }
+
+    if (isBuy ? price >= trade.target2 : price <= trade.target2) {
+      const key = `close:${trade.id}:TARGET_2`;
+      if (this.recordEvent(userId, key, "close", trade.id)) this.closePosition(userId, trade, trade.target2, "TARGET_2");
+      return;
+    }
+
+    let current = trade;
+    if (!trade.target1Hit && (isBuy ? price >= trade.target1 : price <= trade.target1)) {
+      const key = `target1:${trade.id}`;
+      if (this.recordEvent(userId, key, "target1", trade.id)) {
+        current = this.realizeTarget1(userId, trade, settings.breakevenBufferPct);
+      }
+    }
+
+    if (current.target1Hit) {
+      current = this.updateTrailingStop(userId, current, price, settings.trailingStopPct, history);
+      if (this.lossOfStrengthReached(userId, current, price, settings.lossOfStrengthPct, history)) {
+        const key = `close:${current.id}:LOSS_OF_STRENGTH`;
+        if (this.recordEvent(userId, key, "close", current.id)) this.closePosition(userId, current, price, "LOSS_OF_STRENGTH");
+        return;
+      }
+    }
+
+    if (tradeAgeMs(current) >= (current.maxDurationMs ?? settings.maxDurationMs)) {
+      const key = `close:${current.id}:TIMEOUT`;
+      if (this.recordEvent(userId, key, "close", current.id)) this.closePosition(userId, current, price, "TIMEOUT");
+    }
+  }
+
+  private realizeTarget1(userId: string, trade: DemoTrade, bufferPct: number): DemoTrade {
+    const latest = this.getOpenPosition(userId, trade.id) ?? trade;
+    if (latest.target1Hit) return latest;
+    const currentRemaining = latest.remainingPositionSize ?? latest.positionSize;
+    const closedSize = Math.min(currentRemaining, latest.positionSize * 0.5);
+    const remainingPositionSize = Math.max(0, currentRemaining - closedSize);
+    const partialPnlUSDC = trade.direction === "BUY"
+      ? (latest.target1 - latest.entry) * closedSize
+      : (latest.entry - latest.target1) * closedSize;
+    const rawBreakevenStop = latest.direction === "BUY"
+      ? latest.entry * (1 + bufferPct)
+      : latest.entry * (1 - bufferPct);
+    const stopLoss = latest.direction === "BUY"
+      ? Math.max(latest.stopLoss, rawBreakevenStop)
+      : Math.min(latest.stopLoss, rawBreakevenStop);
+    const realizedPnlUSDC = (latest.realizedPnlUSDC ?? 0) + partialPnlUSDC;
+    const next = {
+      ...latest,
+      target1Hit: true,
+      stopLoss,
+      isBreakevenStop: true,
+      remainingPositionSize,
+      realizedPnlUSDC,
+      partialPnlUSDC,
+      target1ClosePrice: latest.target1,
+    };
+    this.db.prepare(`
+      UPDATE demo_positions
+      SET stop_loss = ?, target1_hit = 1, is_breakeven_stop = 1,
+          remaining_position_size = ?, realized_pnl_usdc = ?, partial_pnl_usdc = ?,
+          target1_close_price = ?, updated_at = ?
+      WHERE user_id = ? AND id = ? AND status = 'OPEN'
+    `).run(stopLoss, remainingPositionSize, realizedPnlUSDC, partialPnlUSDC, latest.target1, nowIso(), userId, latest.id);
+    const withReason = this.appendPositionReason(userId, next, `TARGET_1 parcial: realizou ${closedSize.toFixed(8)} em ${latest.target1}; PnL parcial ${partialPnlUSDC.toFixed(8)}; stop movido para breakeven ${stopLoss.toFixed(8)} com buffer ${(bufferPct * 100).toFixed(4)}%.`);
+
+    const account = this.getAccount(userId);
+    const stats = { ...account.dailyStats };
+    stats.dailyPnL += partialPnlUSDC;
+    const newBalance = account.balance + partialPnlUSDC;
+    stats.peakBalance = Math.max(stats.peakBalance, newBalance);
+    stats.maxDrawdown = Math.max(stats.maxDrawdown, stats.peakBalance - newBalance);
+    stats.safetyLimited = isSafetyLimited(stats);
+    this.putAccount(userId, { balance: newBalance, configuredBalance: account.configuredBalance, dailyStats: stats });
+    this.createNotification(userId, {
+      type: "target1_hit",
+      title: "Alvo 1 atingido",
+      message: `${latest.pair}: Alvo 1 atingido em ${latest.target1}.`,
+      severity: "success",
+      symbol: latest.pair,
+      source: "DEMO",
+      relatedEventId: latest.id,
+      idempotencyKey: `${userId}:target1_hit:${latest.id}:${latest.pair}`,
+      adminMetadata: { tradeId: latest.id, target1: latest.target1 },
+    });
+    this.createNotification(userId, {
+      type: "partial_executed",
+      title: "Parcial executada",
+      message: `${latest.pair}: parcial de 50% realizada; PnL ${partialPnlUSDC.toFixed(4)}.`,
+      severity: "success",
+      symbol: latest.pair,
+      source: "DEMO",
+      relatedEventId: latest.id,
+      idempotencyKey: `${userId}:partial_executed:${latest.id}:${latest.pair}`,
+      adminMetadata: { closedSize, remainingPositionSize, partialPnlUSDC },
+    });
+    this.createNotification(userId, {
+      type: "breakeven_moved",
+      title: "Stop em breakeven",
+      message: `${latest.pair}: stop movido para ${stopLoss.toFixed(8)}.`,
+      severity: "success",
+      symbol: latest.pair,
+      source: "DEMO",
+      relatedEventId: latest.id,
+      idempotencyKey: `${userId}:breakeven_moved:${latest.id}:${latest.pair}`,
+      adminMetadata: { stopLoss, bufferPct },
+    });
+    return withReason;
+  }
+
+  private adaptiveTrailingPct(trade: DemoTrade, price: number, fallbackPct: number, history: Array<{ price: number; at: number }>): number {
+    const limits = TRAILING_BY_SYMBOL[trade.pair] ?? TRAILING_BY_SYMBOL["BTCUSDT"];
+    const prices = history.map((item) => item.price).filter((value) => Number.isFinite(value) && value > 0);
+    const recentRangePct = prices.length >= 3 && price > 0
+      ? (Math.max(...prices) - Math.min(...prices)) / price
+      : 0;
+    const volatilityPct = recentRangePct * 0.6;
+    const candidate = Math.max(Number.isFinite(fallbackPct) && fallbackPct > 0 ? fallbackPct : 0, volatilityPct);
+    return clamp(candidate, limits.minPct, limits.maxPct);
+  }
+
+  private updateTrailingStop(userId: string, trade: DemoTrade, price: number, trailingPct: number, history: Array<{ price: number; at: number }>): DemoTrade {
+    if (!Number.isFinite(price) || price <= 0) return trade;
+    const adaptivePct = this.adaptiveTrailingPct(trade, price, trailingPct, history);
+    const nextStop = trade.direction === "BUY"
+      ? Math.max(trade.stopLoss, price * (1 - adaptivePct))
+      : Math.min(trade.stopLoss, price * (1 + adaptivePct));
+    if (nextStop === trade.stopLoss) return trade;
+    this.db.prepare("UPDATE demo_positions SET stop_loss = ?, updated_at = ? WHERE user_id = ? AND id = ? AND status = 'OPEN'")
+      .run(nextStop, nowIso(), userId, trade.id);
+    const next = { ...trade, stopLoss: nextStop };
+    const bucket = Math.floor(Date.now() / envInt("ORACULO_TRAILING_ALERT_COOLDOWN_MS", 300_000, 60_000, 3_600_000));
+    this.createNotification(userId, {
+      type: "trailing_updated",
+      title: "Trailing atualizado",
+      message: `${trade.pair}: stop ajustado para ${nextStop.toFixed(8)}.`,
+      severity: "info",
+      symbol: trade.pair,
+      source: "DEMO",
+      relatedEventId: trade.id,
+      idempotencyKey: `${userId}:trailing_updated:${trade.id}:${bucket}`,
+      adminMetadata: { nextStop, adaptivePct, price },
+    });
+    return this.appendPositionReason(userId, next, `TRAILING: stop ajustado para ${nextStop.toFixed(8)} usando ${(adaptivePct * 100).toFixed(3)}% adaptativo pela volatilidade recente.`);
+  }
+
+  private lossOfStrengthReached(userId: string, trade: DemoTrade, price: number, thresholdPct: number, history: Array<{ price: number; at: number }>): boolean {
+    if (!trade.target1Hit || !Number.isFinite(thresholdPct) || thresholdPct <= 0) return false;
+    const prices = history.map((item) => item.price).filter((value) => Number.isFinite(value) && value > 0).slice(-5);
+    const previous = prices.at(-2);
+    const beforePrevious = prices.at(-3);
+    const contraryClose = previous !== undefined
+      ? trade.direction === "BUY" ? price < previous : price > previous
+      : false;
+    const failedContinuation = trade.direction === "BUY"
+      ? price <= trade.target1 * (1 - thresholdPct)
+      : price >= trade.target1 * (1 + thresholdPct);
+    const shortStructureReversal = previous !== undefined && beforePrevious !== undefined
+      ? trade.direction === "BUY" ? price < previous && previous < beforePrevious : price > previous && previous > beforePrevious
+      : false;
+    const lostBreakevenBuffer = trade.direction === "BUY"
+      ? price <= trade.entry * (1 + DEFAULT_BREAKEVEN_BUFFER_PCT)
+      : price >= trade.entry * (1 - DEFAULT_BREAKEVEN_BUFFER_PCT);
+    const signals = [contraryClose, failedContinuation, shortStructureReversal, lostBreakevenBuffer].filter(Boolean).length;
+    if (signals >= 2) {
+      this.appendPositionReason(userId, trade, `LOSS_OF_STRENGTH: ${signals}/4 sinais ativos; fechamento contrario=${contraryClose}; falha continuacao=${failedContinuation}; reversao curta=${shortStructureReversal}; perda breakeven=${lostBreakevenBuffer}.`);
+      return true;
+    }
+    if (signals === 1) {
+      this.appendPositionReason(userId, trade, `ALERTA perda de forca: 1/4 sinal ativo; posicao mantida.`);
+    }
+    return false;
+  }
+
+  private closePosition(userId: string, position: DemoTrade, closePrice: number, exitReason: ManagedTradeExitReason) {
+    const latest = this.getOpenPosition(userId, position.id);
+    if (!latest) {
+      return this.getTrades(userId).find((trade) => trade.id === position.id) ?? position;
+    }
+    position = latest;
+    const remainingSize = position.remainingPositionSize ?? position.positionSize;
+    const remainingPnl = position.direction === "BUY"
+      ? (closePrice - position.entry) * remainingSize
+      : (position.entry - closePrice) * remainingSize;
+    const realizedBeforeClose = position.realizedPnlUSDC ?? 0;
+    const pnlUSDC = realizedBeforeClose + remainingPnl;
+    const pnlPct = position.balanceAtOpen > 0 ? (pnlUSDC / position.balanceAtOpen) * 100 : 0;
+    const status = closedStatus(pnlUSDC);
+    const closeTime = Date.now();
+    const durationMs = tradeAgeMs(position, closeTime);
+    const signalReasons = [...position.signalReasons, `FECHAMENTO ${exitReason}: preco ${closePrice}; duracao ${durationMs}ms; PnL ${pnlUSDC.toFixed(8)}.`].slice(-40);
+    const closed: DemoTrade = {
+      ...position,
+      status,
+      closeTime,
+      closePrice,
+      exitReason,
+      remainingPositionSize: 0,
+      realizedPnlUSDC: pnlUSDC,
+      signalReasons,
+      marketConditions: signalReasons.join(" | "),
+      pnlUSDC,
+      pnlPct,
+    };
+    this.upsertTrade(userId, closed);
+    this.db.prepare("DELETE FROM demo_positions WHERE user_id = ? AND id = ?").run(userId, position.id);
+    const account = this.getAccount(userId);
+    const stats = { ...account.dailyStats };
+    stats.totalTrades += 1;
+    stats.wins += status === "WIN" ? 1 : 0;
+    stats.losses += status === "LOSS" ? 1 : 0;
+    stats.breakevens += status === "BREAKEVEN" ? 1 : 0;
+    stats.consecutiveLosses = status === "LOSS" ? stats.consecutiveLosses + 1 : 0;
+    stats.maxConsecutiveLosses = Math.max(stats.maxConsecutiveLosses, stats.consecutiveLosses);
+    stats.dailyPnL += remainingPnl;
+    const newBalance = account.balance + remainingPnl;
+    stats.peakBalance = Math.max(stats.peakBalance, newBalance);
+    stats.maxDrawdown = Math.max(stats.maxDrawdown, stats.peakBalance - newBalance);
+    stats.safetyLimited = stats.totalTrades >= 8 || stats.consecutiveLosses >= 3 || stats.dailyPnL <= -(stats.startOfDayBalance * 0.03);
+    this.putAccount(userId, { balance: newBalance, configuredBalance: account.configuredBalance, dailyStats: stats });
+    const alertType = exitReason === "TARGET_2"
+      ? "target2_hit"
+      : exitReason === "TIMEOUT"
+        ? "timeout"
+        : exitReason === "LOSS_OF_STRENGTH"
+          ? "loss_of_strength"
+          : "stop_loss";
+    this.createNotification(userId, {
+      type: alertType,
+      title: exitReason === "TARGET_2" ? "Alvo 2 atingido" : exitReason === "TIMEOUT" ? "Fechamento por timeout" : exitReason === "LOSS_OF_STRENGTH" ? "Fechamento por perda de forca" : "Stop acionado",
+      message: `${position.pair}: posicao encerrada por ${exitReason}; PnL ${pnlUSDC.toFixed(4)}.`,
+      severity: exitReason === "TARGET_2" ? "success" : exitReason === "BREAKEVEN" ? "info" : "warning",
+      symbol: position.pair,
+      source: "DEMO",
+      relatedEventId: position.id,
+      idempotencyKey: `${userId}:${alertType}:${position.id}:${position.pair}`,
+      adminMetadata: { exitReason, pnlUSDC, status, closePrice },
+    });
+    return closed;
+  }
+
+  postTrade(userId: string, body: unknown) {
+    const input = body as Record<string, unknown>;
+    const trade = this.validatePosition({ ...input, status: "OPEN" });
+    const closePrice = input.closePrice === undefined ? undefined : finiteNumber(input.closePrice, "closePrice", 0.00000001, MAX_PRICE);
+    const status = nonEmptyString(input.status ?? "OPEN", "status") as TradeStatus;
+    if (!["OPEN", "WIN", "LOSS", "BREAKEVEN"].includes(status)) throw new HttpError(400, "invalid status");
+    const fullTrade: DemoTrade = {
+      ...trade,
+      status,
+      closeTime: input.closeTime === undefined ? undefined : finiteNumber(input.closeTime, "closeTime", 1),
+      closePrice,
+      exitReason: input.exitReason as ManagedTradeExitReason | undefined,
+      pnlUSDC: closePrice === undefined ? undefined : (trade.direction === "BUY" ? (closePrice - trade.entry) : (trade.entry - closePrice)) * trade.positionSize,
+      pnlPct: undefined,
+    };
+    fullTrade.pnlPct = fullTrade.pnlUSDC === undefined || fullTrade.balanceAtOpen <= 0 ? undefined : (fullTrade.pnlUSDC / fullTrade.balanceAtOpen) * 100;
+    this.upsertTrade(userId, fullTrade);
+    return fullTrade;
+  }
+
+  private upsertTrade(userId: string, trade: DemoTrade): void {
+    const owner = this.db.prepare("SELECT user_id FROM demo_trades WHERE id = ?").get(trade.id) as Record<string, unknown> | undefined;
+    if (owner && owner.user_id !== userId) throw new HttpError(404, "trade not found");
+    const now = nowIso();
+    this.db.prepare(`
+      INSERT INTO demo_trades
+        (id, user_id, pair, direction, status, open_time, close_time, entry, close_price, stop_loss, stop_loss_original,
+         target1, target2, balance_at_open, risk_amount, position_size, remaining_position_size, risk_reward, pnl_usdc, pnl_pct,
+         realized_pnl_usdc, partial_pnl_usdc, target1_close_price, max_duration_ms,
+         exit_reason, target1_hit, is_breakeven_stop, signal_reasons_json, market_conditions, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        status = excluded.status, close_time = excluded.close_time, close_price = excluded.close_price,
+        pnl_usdc = excluded.pnl_usdc, pnl_pct = excluded.pnl_pct, exit_reason = excluded.exit_reason,
+        remaining_position_size = excluded.remaining_position_size,
+        realized_pnl_usdc = excluded.realized_pnl_usdc, partial_pnl_usdc = excluded.partial_pnl_usdc,
+        target1_close_price = excluded.target1_close_price, max_duration_ms = excluded.max_duration_ms,
+        stop_loss = excluded.stop_loss, target1_hit = excluded.target1_hit,
+        is_breakeven_stop = excluded.is_breakeven_stop, updated_at = excluded.updated_at
+    `).run(
+      trade.id, userId, trade.pair, trade.direction, trade.status, trade.openTime, trade.closeTime ?? null,
+      trade.entry, trade.closePrice ?? null, trade.stopLoss, trade.stopLossOriginal, trade.target1, trade.target2,
+      trade.balanceAtOpen, trade.riskAmount, trade.positionSize, trade.remainingPositionSize ?? trade.positionSize,
+      trade.riskReward, trade.pnlUSDC ?? null, trade.pnlPct ?? null,
+      trade.realizedPnlUSDC ?? null, trade.partialPnlUSDC ?? null, trade.target1ClosePrice ?? null, trade.maxDurationMs ?? null,
+      trade.exitReason ?? null, Number(trade.target1Hit), Number(trade.isBreakevenStop),
+      JSON.stringify(trade.signalReasons), trade.marketConditions, now, now,
+    );
+  }
+
+  migrateSession(userId: string, session: DemoSession) {
+    return this.transaction(() => {
+      const hash = migrationHash(session);
+      const key = `demo.localStorageMigration.${hash}`;
+      const existing = this.db.prepare("SELECT value FROM app_settings WHERE user_id = ? AND key = ?").get(userId, key);
+      if (existing) return { applied: false, hash, account: this.getAccount(userId), positions: this.getPositions(userId), trades: this.getTrades(userId) };
+      this.putAccount(userId, { balance: session.balance, configuredBalance: session.configuredBalance, dailyStats: session.dailyStats });
+      if (session.activeTrade) {
+        try { this.postPosition(userId, session.activeTrade); } catch (err) { if (!(err instanceof HttpError && err.status === 409)) throw err; }
+      }
+      for (const trade of session.history) this.postTrade(userId, trade);
+      this.setSetting(userId, key, "applied");
+      return { applied: true, hash, account: this.getAccount(userId), positions: this.getPositions(userId), trades: this.getTrades(userId) };
+    });
+  }
+}
+
+export { AUTH_COOKIE_NAME };
