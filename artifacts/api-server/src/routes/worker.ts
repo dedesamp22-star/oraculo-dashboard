@@ -32,4 +32,19 @@ router.get("/worker/diagnostics/admin", requireAuth, requireAdmin, ((req, res) =
   handle(res, () => store.getWorkerDiagnostics(user, limit));
 }) as RequestHandler);
 
+router.get("/worker/audit", requireAuth, requireAdmin, ((req, res) => {
+  const user = (req as AuthenticatedRequest).user;
+  const symbol = typeof req.query.symbol === "string" ? req.query.symbol : undefined;
+  const limit = req.query.limit !== undefined ? Number(req.query.limit) : 50;
+  const offset = req.query.offset !== undefined ? Number(req.query.offset) : 0;
+  handle(res, () => store.getEngineAuditLog(user, { symbol, limit, offset }));
+}) as RequestHandler);
+
+router.get("/worker/audit/summary", requireAuth, requireAdmin, ((req, res) => {
+  const user = (req as AuthenticatedRequest).user;
+  const symbol = typeof req.query.symbol === "string" ? req.query.symbol : undefined;
+  handle(res, () => store.getEngineAuditSummary(user, symbol));
+}) as RequestHandler);
+
 export default router;
+

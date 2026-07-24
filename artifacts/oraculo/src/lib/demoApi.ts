@@ -164,6 +164,58 @@ export interface TelegramLinkCodeDto {
   deepLink: string | null;
 }
 
+export interface EngineAuditFilterRecord {
+  name: string;
+  reason: string;
+  penalty?: number | null;
+}
+
+export interface EngineAuditEntry {
+  id: string;
+  userId: string;
+  symbol: string;
+  analyzedAt: string;
+  score: number;
+  scoreContextual: number;
+  scoreRaw: number;
+  direction: string;
+  decision: string;
+  decisionState: string;
+  triggerStage: string;
+  rrStatus: string;
+  trend1h: string;
+  trend15m: string;
+  filtersPassed: string[];
+  filtersBlocked: EngineAuditFilterRecord[];
+  filtersPenalty: EngineAuditFilterRecord[];
+  blockedReasons: string[];
+  qualityPenalties: string[];
+  decisiveReason: string;
+  missingConditions: string[];
+  entryPrice: number | null;
+  stopPrice: number | null;
+  target1: number | null;
+  target2: number | null;
+  rr: number | null;
+  volumeRelative: number | null;
+  engineVersion: string;
+  createdAt: string;
+}
+
+export interface EngineAuditResponse {
+  entries: EngineAuditEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface EngineAuditSummary {
+  total: number;
+  byDecision: Record<string, number>;
+  byState: Record<string, number>;
+}
+
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return await apiJson<T>(path, {
     ...init,
@@ -398,3 +450,22 @@ export async function persistClosedTrade(trade: DemoTrade): Promise<void> {
     });
   }
 }
+
+export async function fetchEngineAuditLog(params: {
+  symbol?: string;
+  limit?: number;
+  offset?: number;
+} = {}): Promise<EngineAuditResponse> {
+  const query = new URLSearchParams();
+  if (params.symbol) query.set('symbol', params.symbol);
+  if (params.limit !== undefined) query.set('limit', String(params.limit));
+  if (params.offset !== undefined) query.set('offset', String(params.offset));
+  const qs = query.toString();
+  return await request<EngineAuditResponse>(`/api/worker/audit${qs ? `?${qs}` : ''}`);
+}
+
+export async function fetchEngineAuditSummary(symbol?: string): Promise<EngineAuditSummary> {
+  const qs = symbol ? `?symbol=${encodeURIComponent(symbol)}` : '';
+  return await request<EngineAuditSummary>(`/api/worker/audit/summary${qs}`);
+}
+

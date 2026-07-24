@@ -150,6 +150,81 @@ export interface WorkerDiagnosticAdminDto extends WorkerDiagnosticUserDto {
   full: Record<string, unknown>;
 }
 
+export interface EngineAuditFilterRecord {
+  name: string;
+  reason: string;
+  penalty?: number | null;
+}
+
+export interface EngineAuditInput {
+  userId: string;
+  symbol: string;
+  analyzedAt: string;
+  score: number;
+  scoreContextual: number;
+  scoreRaw: number;
+  direction: string;
+  decision: string;
+  decisionState: string;
+  triggerStage: string;
+  rrStatus: string;
+  trend1h: string;
+  trend15m: string;
+  filtersPassed: string[];
+  filtersBlocked: EngineAuditFilterRecord[];
+  filtersPenalty: EngineAuditFilterRecord[];
+  blockedReasons: string[];
+  qualityPenalties: string[];
+  decisiveReason: string;
+  missingConditions: string[];
+  entryPrice: number | null;
+  stopPrice: number | null;
+  target1: number | null;
+  target2: number | null;
+  rr: number | null;
+  volumeRelative: number | null;
+  engineVersion: string;
+}
+
+export interface EngineAuditEntry {
+  id: string;
+  userId: string;
+  symbol: string;
+  analyzedAt: string;
+  score: number;
+  scoreContextual: number;
+  scoreRaw: number;
+  direction: string;
+  decision: string;
+  decisionState: string;
+  triggerStage: string;
+  rrStatus: string;
+  trend1h: string;
+  trend15m: string;
+  filtersPassed: string[];
+  filtersBlocked: EngineAuditFilterRecord[];
+  filtersPenalty: EngineAuditFilterRecord[];
+  blockedReasons: string[];
+  qualityPenalties: string[];
+  decisiveReason: string;
+  missingConditions: string[];
+  entryPrice: number | null;
+  stopPrice: number | null;
+  target1: number | null;
+  target2: number | null;
+  rr: number | null;
+  volumeRelative: number | null;
+  engineVersion: string;
+  createdAt: string;
+}
+
+export interface EngineAuditResponse {
+  entries: EngineAuditEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export interface StoreObservabilitySnapshot {
   sqlite: {
     databasePath: string;
@@ -1199,6 +1274,49 @@ export class DemoStore {
         this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (8, 'telegram_notifications', ?)").run(nowIso());
       });
     }
+    const v9 = this.db.prepare("SELECT version FROM schema_migrations WHERE version = 9").get();
+    if (!v9) {
+      this.transaction(() => {
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS engine_audit_log (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            symbol TEXT NOT NULL,
+            analyzed_at TEXT NOT NULL,
+            score INTEGER NOT NULL,
+            score_contextual INTEGER NOT NULL,
+            score_raw INTEGER NOT NULL,
+            direction TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            decision_state TEXT NOT NULL,
+            trigger_stage TEXT NOT NULL,
+            rr_status TEXT NOT NULL,
+            trend_1h TEXT NOT NULL,
+            trend_15m TEXT NOT NULL,
+            filters_passed_json TEXT NOT NULL,
+            filters_blocked_json TEXT NOT NULL,
+            filters_penalty_json TEXT NOT NULL,
+            blocked_reasons_json TEXT NOT NULL,
+            quality_penalties_json TEXT NOT NULL,
+            decisive_reason TEXT NOT NULL,
+            missing_conditions_json TEXT NOT NULL,
+            entry_price REAL,
+            stop_price REAL,
+            target1 REAL,
+            target2 REAL,
+            rr REAL,
+            volume_relative REAL,
+            engine_version TEXT NOT NULL,
+            created_at TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS engine_audit_log_user_time_idx
+            ON engine_audit_log(user_id, analyzed_at);
+          CREATE INDEX IF NOT EXISTS engine_audit_log_symbol_idx
+            ON engine_audit_log(user_id, symbol, analyzed_at);
+        `);
+        this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (9, 'engine_audit_log', ?)").run(nowIso());
+      });
+    }
   }
 
   private applyInitialAdminEnv(): void {
@@ -1554,6 +1672,142 @@ export class DemoStore {
     const mapper = user.role === "admin" ? diagnosticAdminFromRow : diagnosticUserFromRow;
     const history = rows.map(mapper);
     return { current: history[0] ?? null, history };
+  }
+
+  recordEngineAudit(input: EngineAuditInput): void {
+    const now = nowIso();
+    const maxAudit = envInt("ORACULO_AUDIT_LIMIT", 500, 50, 5000);
+    const id = newId("audit");
+    this.transaction(() => {
+      this.db.prepare(`
+        INSERT INTO engine_audit_log
+          (id, user_id, symbol, analyzed_at, score, score_contextual, score_raw,
+           direction, decision, decision_state, trigger_stage, rr_status,
+           trend_1h, trend_15m,
+           filters_passed_json, filters_blocked_json, filters_penalty_json,
+           blocked_reasons_json, quality_penalties_json,
+           decisive_reason, missing_conditions_json,
+           entry_price, stop_price, target1, target2, rr, volume_relative,
+           engine_version, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        id,
+        input.userId,
+        input.symbol,
+        input.analyzedAt,
+        input.score,
+        input.scoreContextual,
+        input.scoreRaw,
+        input.direction,
+        input.decision,
+        input.decisionState,
+        input.triggerStage,
+        input.rrStatus,
+        input.trend1h,
+        input.trend15m,
+        JSON.stringify(input.filtersPassed),
+        JSON.stringify(input.filtersBlocked),
+        JSON.stringify(input.filtersPenalty),
+        JSON.stringify(input.blockedReasons),
+        JSON.stringify(input.qualityPenalties),
+        input.decisiveReason,
+        JSON.stringify(input.missingConditions),
+        input.entryPrice,
+        input.stopPrice,
+        input.target1,
+        input.target2,
+        input.rr,
+        input.volumeRelative,
+        input.engineVersion,
+        now,
+      );
+      this.db.prepare(`
+        DELETE FROM engine_audit_log
+        WHERE user_id = ?
+          AND id NOT IN (
+            SELECT id FROM engine_audit_log
+            WHERE user_id = ?
+            ORDER BY analyzed_at DESC
+            LIMIT ?
+          )
+      `).run(input.userId, input.userId, maxAudit);
+    });
+  }
+
+  getEngineAuditLog(user: AuthUser, params: { symbol?: string; limit?: number; offset?: number } = {}): EngineAuditResponse {
+    if (user.role !== "admin") throw new HttpError(403, "Admin required");
+    const safeLimit = Math.max(1, Math.min(200, Math.floor(params.limit ?? 50)));
+    const safeOffset = Math.max(0, Math.floor(params.offset ?? 0));
+    const symbol = params.symbol ?? null;
+    const rows = symbol
+      ? (this.db.prepare(`
+          SELECT * FROM engine_audit_log
+          WHERE user_id = ? AND symbol = ?
+          ORDER BY analyzed_at DESC
+          LIMIT ? OFFSET ?
+        `).all(user.id, symbol, safeLimit, safeOffset) as Record<string, unknown>[])
+      : (this.db.prepare(`
+          SELECT * FROM engine_audit_log
+          WHERE user_id = ?
+          ORDER BY analyzed_at DESC
+          LIMIT ? OFFSET ?
+        `).all(user.id, safeLimit, safeOffset) as Record<string, unknown>[]);
+    const totalRow = symbol
+      ? (this.db.prepare("SELECT COUNT(*) AS cnt FROM engine_audit_log WHERE user_id = ? AND symbol = ?").get(user.id, symbol) as Record<string, unknown>)
+      : (this.db.prepare("SELECT COUNT(*) AS cnt FROM engine_audit_log WHERE user_id = ?").get(user.id) as Record<string, unknown>);
+    const total = Number(totalRow?.cnt ?? 0);
+    const entries: EngineAuditEntry[] = rows.map((row) => ({
+      id: String(row.id),
+      userId: String(row.user_id),
+      symbol: String(row.symbol),
+      analyzedAt: String(row.analyzed_at),
+      score: Number(row.score),
+      scoreContextual: Number(row.score_contextual),
+      scoreRaw: Number(row.score_raw),
+      direction: String(row.direction),
+      decision: String(row.decision),
+      decisionState: String(row.decision_state),
+      triggerStage: String(row.trigger_stage),
+      rrStatus: String(row.rr_status),
+      trend1h: String(row.trend_1h),
+      trend15m: String(row.trend_15m),
+      filtersPassed: jsonParse<string[]>(String(row.filters_passed_json), []),
+      filtersBlocked: jsonParse<EngineAuditFilterRecord[]>(String(row.filters_blocked_json), []),
+      filtersPenalty: jsonParse<EngineAuditFilterRecord[]>(String(row.filters_penalty_json), []),
+      blockedReasons: jsonParse<string[]>(String(row.blocked_reasons_json), []),
+      qualityPenalties: jsonParse<string[]>(String(row.quality_penalties_json), []),
+      decisiveReason: String(row.decisive_reason),
+      missingConditions: jsonParse<string[]>(String(row.missing_conditions_json), []),
+      entryPrice: row.entry_price == null ? null : Number(row.entry_price),
+      stopPrice: row.stop_price == null ? null : Number(row.stop_price),
+      target1: row.target1 == null ? null : Number(row.target1),
+      target2: row.target2 == null ? null : Number(row.target2),
+      rr: row.rr == null ? null : Number(row.rr),
+      volumeRelative: row.volume_relative == null ? null : Number(row.volume_relative),
+      engineVersion: String(row.engine_version),
+      createdAt: String(row.created_at),
+    }));
+    return { entries, total, limit: safeLimit, offset: safeOffset };
+  }
+
+  getEngineAuditSummary(user: AuthUser, symbol?: string): Record<string, unknown> {
+    if (user.role !== "admin") throw new HttpError(403, "Admin required");
+    const baseWhere = symbol ? "WHERE user_id = ? AND symbol = ?" : "WHERE user_id = ?";
+    const args = symbol ? [user.id, symbol] : [user.id];
+    const byDecisionRows = this.db.prepare(
+      `SELECT decision, COUNT(*) as cnt FROM engine_audit_log ${baseWhere} GROUP BY decision`
+    ).all(...args) as Record<string, unknown>[];
+    const byStateRows = this.db.prepare(
+      `SELECT decision_state, COUNT(*) as cnt FROM engine_audit_log ${baseWhere} GROUP BY decision_state`
+    ).all(...args) as Record<string, unknown>[];
+    const totalRow = this.db.prepare(
+      `SELECT COUNT(*) AS cnt FROM engine_audit_log ${baseWhere}`
+    ).get(...args) as Record<string, unknown>;
+    const byDecision: Record<string, number> = {};
+    for (const r of byDecisionRows) byDecision[String(r.decision)] = Number(r.cnt);
+    const byState: Record<string, number> = {};
+    for (const r of byStateRows) byState[String(r.decision_state)] = Number(r.cnt);
+    return { total: Number(totalRow?.cnt ?? 0), byDecision, byState };
   }
 
   getObservabilitySnapshot(): StoreObservabilitySnapshot {

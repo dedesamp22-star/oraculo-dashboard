@@ -4,6 +4,10 @@ import { APP_VERSION } from "@shared/appVersion";
 import { analyzeDemoSignal, fetchDisplayPrice, type QualityFilter, type RadarLikeAnalysis } from "./demo-worker-engine";
 import type { DemoDecision, WorkerDiagnosticStatus } from "./demo-store";
 
+// engine_version = APP_VERSION + optional short commit hash from env
+const ENGINE_COMMIT = (process.env["ORACULO_ENGINE_COMMIT"] ?? "").trim().slice(0, 12);
+const ENGINE_VERSION_AUDIT = ENGINE_COMMIT ? `${APP_VERSION}+${ENGINE_COMMIT}` : APP_VERSION;
+
 const TICK_MS = 30_000;
 
 let started = false;
@@ -135,6 +139,44 @@ async function tick(): Promise<void> {
             summary: publicSummary(status, analysis, filters),
           },
         });
+        // ── Auditor mode: record every engine decision without deduplication ──
+        try {
+          demoStore.recordEngineAudit({
+            userId: user.id,
+            symbol,
+            analyzedAt: new Date(finishedAt).toISOString(),
+            score: analysis.scoreOperacional,
+            scoreContextual: analysis.scoreContextual,
+            scoreRaw: analysis.diagnostics.rawScore,
+            direction: analysis.suggestedDirection,
+            decision: signal.decision,
+            decisionState: analysis.decisionState,
+            triggerStage: analysis.triggerStage,
+            rrStatus: analysis.rrStatus,
+            trend1h: analysis.trend1h,
+            trend15m: analysis.trend15m,
+            filtersPassed: filters.filter((f) => f.passed).map((f) => f.name),
+            filtersBlocked: filters
+              .filter((f) => !f.passed && f.severity !== "penalty")
+              .map((f) => ({ name: f.name, reason: f.reason, penalty: f.penalty ?? null })),
+            filtersPenalty: filters
+              .filter((f) => !f.passed && f.severity === "penalty")
+              .map((f) => ({ name: f.name, reason: f.reason, penalty: f.penalty ?? null })),
+            blockedReasons: analysis.blockedReasons,
+            qualityPenalties: analysis.qualityPenalties,
+            decisiveReason: analysis.decisiveReason,
+            missingConditions: analysis.missingConditions,
+            entryPrice: analysis.conservativeEntry,
+            stopPrice: analysis.stop,
+            target1: analysis.target1,
+            target2: analysis.target2,
+            rr: analysis.rr,
+            volumeRelative: analysis.volume?.relative ?? null,
+            engineVersion: ENGINE_VERSION_AUDIT,
+          });
+        } catch (auditErr) {
+          logger.warn({ err: auditErr, userId: user.id, symbol }, "Engine audit record failed (non-critical)");
+        }
       } catch (err) {
         const finishedAt = Date.now();
         const message = err instanceof Error ? err.message : String(err);

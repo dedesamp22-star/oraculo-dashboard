@@ -29,6 +29,7 @@ import { RobotDiagnosticsPanel } from '../components/RobotDiagnosticsPanel';
 import { ControlledSimulationPanel } from '../components/ControlledSimulationPanel';
 import { NotificationsPanel } from '../components/NotificationsPanel';
 import { ObservabilityPanel } from '../components/ObservabilityPanel';
+import { EngineAuditPanel } from '../components/EngineAuditPanel';
 import { PremiumLanding } from '../components/PremiumLanding';
 import { getAuth, loginUser, logoutUser, type AuthUser } from '../lib/demoApi';
 import { resolveOracleVisualState, type OracleVisualState } from '@shared/oracleVisualState';
@@ -1148,6 +1149,7 @@ export default function Home() {
           {authUser.role === 'admin' && (
             <ObservabilityPanel publicHealth={apiHealth.health} publicError={apiHealth.error} />
           )}
+          {authUser.role === 'admin' && <EngineAuditPanel />}
           <RobotDiagnosticsPanel user={authUser} />
           <MarketRadarPanel
             analysis={radar.analysis}
@@ -1213,6 +1215,12 @@ export default function Home() {
         {authUser.role === 'admin' && (
           <div className="hidden lg:block">
             <ObservabilityPanel publicHealth={apiHealth.health} publicError={apiHealth.error} />
+          </div>
+        )}
+
+        {authUser.role === 'admin' && (
+          <div className="hidden lg:block">
+            <EngineAuditPanel />
           </div>
         )}
 
