@@ -34,23 +34,23 @@ import { getAuth, loginUser, logoutUser, type AuthUser } from '../lib/demoApi';
 import { resolveOracleVisualState, type OracleVisualState } from '@shared/oracleVisualState';
 import { APP_DISPLAY_NAME, APP_NAME, APP_VERSION } from '@shared/appVersion';
 
-// ── Formatters ────────────────────────────────────────────────────────────────
+// â”€â”€ Formatters â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function isFiniteNumber(n: number | null | undefined): n is number {
   return typeof n === 'number' && Number.isFinite(n);
 }
 
 function fmtPrice(n: number | null | undefined): string {
-  if (!isFiniteNumber(n)) return '—';
+  if (!isFiniteNumber(n)) return 'â€”';
   return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function fmtCurrency(n: number | null | undefined): string {
-  return isFiniteNumber(n) ? `$${fmtPrice(n)}` : '—';
+  return isFiniteNumber(n) ? `$${fmtPrice(n)}` : 'â€”';
 }
 
 function fmtSignedCurrency(n: number | null | undefined): string {
-  if (!isFiniteNumber(n)) return '—';
+  if (!isFiniteNumber(n)) return 'â€”';
   return `${n >= 0 ? '+' : '-'}$${fmtPrice(Math.abs(n))}`;
 }
 
@@ -138,7 +138,7 @@ function OfflineScreen() {
   );
 }
 
-// ── Alert toast ───────────────────────────────────────────────────────────────
+// â”€â”€ Alert toast â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface AlertMsg {
   id: number;
@@ -176,12 +176,12 @@ function AlertToast({ msg, onDismiss }: { msg: AlertMsg; onDismiss: () => void }
         <p className="text-xs uppercase tracking-[0.15em] font-bold" style={{ color: cfg.color }}>{msg.title}</p>
         <p className="text-[11px] text-foreground/60 mt-0.5 leading-relaxed">{msg.body}</p>
       </div>
-      <button className="text-muted-foreground/40 hover:text-muted-foreground text-xs flex-shrink-0 mt-0.5">✕</button>
+      <button className="text-muted-foreground/40 hover:text-muted-foreground text-xs flex-shrink-0 mt-0.5">âœ•</button>
     </motion.div>
   );
 }
 
-// ── Step row ─────────────────────────────────────────────────────────────────
+// â”€â”€ Step row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const STATUS_COLORS: Record<StepStatus, string> = {
   PASS: '#00ff66',
@@ -231,7 +231,7 @@ function StepRow({ step, index }: { step: RuleStep; index: number }) {
         className="w-full flex items-center gap-4 px-5 py-3 text-left hover:bg-white/[0.02] transition-colors"
       >
         <span className="text-[10px] font-mono text-muted-foreground w-4 flex-shrink-0 select-none">
-          {step.number < 7 ? `0${step.number}` : '→'}
+          {step.number < 7 ? `0${step.number}` : 'â†’'}
         </span>
         {step.status === 'PASS'
           ? <CheckCircle2 className="w-4 h-4 flex-shrink-0" style={{ color }} />
@@ -246,7 +246,7 @@ function StepRow({ step, index }: { step: RuleStep; index: number }) {
         >
           {step.value}
         </span>
-        <span className="text-muted-foreground/40 text-xs ml-2 flex-shrink-0 select-none">{open ? '▲' : '▼'}</span>
+        <span className="text-muted-foreground/40 text-xs ml-2 flex-shrink-0 select-none">{open ? 'â–²' : 'â–¼'}</span>
       </button>
       <AnimatePresence>
         {open && (
@@ -268,7 +268,7 @@ function StepRow({ step, index }: { step: RuleStep; index: number }) {
   );
 }
 
-// ── PriceBlock ────────────────────────────────────────────────────────────────
+// â”€â”€ PriceBlock â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function PriceBlock({ label, value, accent, icon }: {
   label: string; value: string; accent: string; icon: React.ReactNode;
@@ -285,7 +285,7 @@ function PriceBlock({ label, value, accent, icon }: {
   );
 }
 
-// ── Decision banner ───────────────────────────────────────────────────────────
+// â”€â”€ Decision banner â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function DecisionBanner({ decision }: { decision: Decision }) {
   const cfg = {
@@ -302,7 +302,7 @@ function DecisionBanner({ decision }: { decision: Decision }) {
       <div className="flex items-center gap-4 pl-2">
         <span style={{ color: cfg.color }}>{cfg.icon}</span>
         <div>
-          <p className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.2em]">Decisão do Motor</p>
+          <p className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.2em]">DecisÃ£o do Motor</p>
           <p className="text-3xl font-mono font-bold"
             style={{ color: cfg.color, textShadow: `0 0 20px ${cfg.color}66` }}>
             {cfg.label}
@@ -311,17 +311,17 @@ function DecisionBanner({ decision }: { decision: Decision }) {
       </div>
       <div className="text-right hidden sm:block">
         <p className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em]">
-          {decision === 'SEM ENTRADA' ? 'Regras não satisfeitas' : 'Todas as regras aprovadas'}
+          {decision === 'SEM ENTRADA' ? 'Regras nÃ£o satisfeitas' : 'Todas as regras aprovadas'}
         </p>
         <p className="text-xs font-mono" style={{ color: cfg.color }}>
-          {decision === 'SEM ENTRADA' ? 'Aguardar setup completo' : 'Operar com gestão de risco'}
+          {decision === 'SEM ENTRADA' ? 'Aguardar setup completo' : 'Operar com gestÃ£o de risco'}
         </p>
       </div>
     </div>
   );
 }
 
-// ── Toggle ────────────────────────────────────────────────────────────────────
+// â”€â”€ Toggle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function Toggle({ checked, onChange, disabled, accentColor }: {
   checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; accentColor?: string;
@@ -349,11 +349,11 @@ function Toggle({ checked, onChange, disabled, accentColor }: {
   );
 }
 
-// ── Market status badge ───────────────────────────────────────────────────────
+// â”€â”€ Market status badge â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function MarketStatusBadge({ decision }: { decision: Decision | null }) {
   if (!decision) return (
-    <span className="text-xs font-mono text-muted-foreground/50 uppercase tracking-[0.15em]">—</span>
+    <span className="text-xs font-mono text-muted-foreground/50 uppercase tracking-[0.15em]">â€”</span>
   );
   const cfg = {
     BUY:           { color: '#00ff66', label: 'COMPRA'      },
@@ -368,7 +368,7 @@ function MarketStatusBadge({ decision }: { decision: Decision | null }) {
   );
 }
 
-// ── Price levels bar ──────────────────────────────────────────────────────────
+// â”€â”€ Price levels bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function PriceLevelsBar({ entry, stopLoss, target1, target2 }: {
   entry: string; stopLoss: string; target1: string; target2: string;
@@ -396,7 +396,7 @@ function PriceLevelsBar({ entry, stopLoss, target1, target2 }: {
   );
 }
 
-// ── Motivos section ───────────────────────────────────────────────────────────
+// â”€â”€ Motivos section â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function MotivosSection({ steps }: { steps: RuleStep[] }) {
   const failed = steps.filter(s => s.status === 'FAIL' && s.number < 7);
@@ -408,7 +408,7 @@ function MotivosSection({ steps }: { steps: RuleStep[] }) {
         <div className="flex items-center gap-2">
           <AlertCircle className="w-3.5 h-3.5 text-[#ff4444]" />
           <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-[#ff4444]/80">
-            Motivos — {failed.length} regra{failed.length > 1 ? 's' : ''} reprovada{failed.length > 1 ? 's' : ''}
+            Motivos â€” {failed.length} regra{failed.length > 1 ? 's' : ''} reprovada{failed.length > 1 ? 's' : ''}
           </span>
         </div>
         <div className="flex flex-col gap-3">
@@ -429,7 +429,7 @@ function MotivosSection({ steps }: { steps: RuleStep[] }) {
   );
 }
 
-// ── O que falta ───────────────────────────────────────────────────────────────
+// â”€â”€ O que falta â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function OQueFaltaSection({ steps }: { steps: RuleStep[] }) {
   const needItems = steps.filter(s => s.status === 'FAIL' && s.number < 7 && s.missing);
@@ -441,13 +441,13 @@ function OQueFaltaSection({ steps }: { steps: RuleStep[] }) {
         <div className="flex items-center gap-2">
           <Lightbulb className="w-3.5 h-3.5 text-[#ffaa00]" />
           <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-[#ffaa00]/80">
-            O que falta — {needItems.length} confirmação{needItems.length > 1 ? 'ões' : ''} pendente{needItems.length > 1 ? 's' : ''}
+            O que falta â€” {needItems.length} confirmaÃ§Ã£o{needItems.length > 1 ? 'Ãµes' : ''} pendente{needItems.length > 1 ? 's' : ''}
           </span>
         </div>
         <div className="flex flex-col gap-2">
           {needItems.map(step => (
             <div key={step.number} className="flex items-start gap-2">
-              <span className="text-[#ffaa00]/60 text-[11px] font-mono mt-0.5 flex-shrink-0">→</span>
+              <span className="text-[#ffaa00]/60 text-[11px] font-mono mt-0.5 flex-shrink-0">â†’</span>
               <span className="text-[11px] font-mono text-foreground/60 leading-relaxed">{step.missing}</span>
             </div>
           ))}
@@ -457,7 +457,7 @@ function OQueFaltaSection({ steps }: { steps: RuleStep[] }) {
   );
 }
 
-// ── Position parameters panel ─────────────────────────────────────────────────
+// â”€â”€ Position parameters panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function PositionParamsPanel({ entry, stopLoss, target1, target2, riskReward, direction }: {
   entry: string; stopLoss: string; target1: string; target2: string;
@@ -469,7 +469,7 @@ function PositionParamsPanel({ entry, stopLoss, target1, target2, riskReward, di
       <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-primary/40 to-transparent" />
       <div className="flex items-center justify-between">
         <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.2em]">
-          Parâmetros da Operação
+          ParÃ¢metros da OperaÃ§Ã£o
         </span>
         <span className="text-[10px] font-mono font-bold px-2 py-0.5 border"
           style={{ color: accent, borderColor: `${accent}44`, background: `${accent}12` }}>
@@ -486,19 +486,19 @@ function PositionParamsPanel({ entry, stopLoss, target1, target2, riskReward, di
   );
 }
 
-// ── S/R levels panel ──────────────────────────────────────────────────────────
+// â”€â”€ S/R levels panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function SRLevelsPanel({ support, resistance }: { support: string | null; resistance: string | null }) {
   if (!support && !resistance) return null;
   return (
     <div className="border border-border/50 bg-card/30 p-4 flex flex-col gap-3">
       <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.2em]">
-        Níveis Identificados (15M)
+        NÃ­veis Identificados (15M)
       </span>
       {resistance && (
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-xs font-mono text-[#ff4444]/80 uppercase tracking-wider">
-            <ArrowUpRight className="w-3 h-3" /> Resistência
+            <ArrowUpRight className="w-3 h-3" /> ResistÃªncia
           </div>
           <span className="font-mono font-bold text-[#ff4444]">{resistance}</span>
         </div>
@@ -515,7 +515,7 @@ function SRLevelsPanel({ support, resistance }: { support: string | null; resist
   );
 }
 
-// ── Demo status badge ─────────────────────────────────────────────────────────
+// â”€â”€ Demo status badge â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function DemoStatusBadge({ enabled, limited, reason }: {
   enabled: boolean; limited: boolean; reason?: string;
@@ -546,7 +546,7 @@ function DemoStatusBadge({ enabled, limited, reason }: {
   );
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
+// â”€â”€ Main â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function MobileSystemStatus({
   apiOnline,
@@ -668,8 +668,8 @@ function MobilePanelOverview({ session }: { session: DemoSession }) {
         <MobileMiniCell label="P&L dia" value={fmtSignedCurrency(session.dailyStats?.dailyPnL)} color={signedColor(session.dailyStats?.dailyPnL)} />
         <MobileMiniCell label="Flutuante" value={fmtSignedCurrency(session.unrealizedPnlUSDC)} color={signedColor(session.unrealizedPnlUSDC)} />
         <MobileMiniCell label="Abertas" value={session.activeTrade ? '1' : '0'} color={session.activeTrade ? '#00f0ff' : '#aaaaaa'} />
-        <MobileMiniCell label="Trades" value={isFiniteNumber(session.dailyStats?.totalTrades) ? String(session.dailyStats.totalTrades) : '—'} color="#ffffff" />
-        <MobileMiniCell label="W/L/BE" value={`${isFiniteNumber(session.dailyStats?.wins) ? session.dailyStats.wins : '—'}/${isFiniteNumber(session.dailyStats?.losses) ? session.dailyStats.losses : '—'}/${isFiniteNumber(session.dailyStats?.breakevens) ? session.dailyStats.breakevens : '—'}`} color="#ffffff" />
+        <MobileMiniCell label="Trades" value={isFiniteNumber(session.dailyStats?.totalTrades) ? String(session.dailyStats.totalTrades) : 'â€”'} color="#ffffff" />
+        <MobileMiniCell label="W/L/BE" value={`${isFiniteNumber(session.dailyStats?.wins) ? session.dailyStats.wins : 'â€”'}/${isFiniteNumber(session.dailyStats?.losses) ? session.dailyStats.losses : 'â€”'}/${isFiniteNumber(session.dailyStats?.breakevens) ? session.dailyStats.breakevens : 'â€”'}`} color="#ffffff" />
         <MobileMiniCell label="Drawdown" value={fmtCurrency(session.dailyStats?.maxDrawdown)} color="#ffaa00" />
         <MobileMiniCell label="Risco aberto" value={fmtCurrency(session.openRiskUSDC)} color="#ffaa00" />
       </div>
@@ -691,7 +691,7 @@ export default function Home() {
   const [result,       setResult]       = useState<EngineResult | null>(null);
   const [resultTime,   setResultTime]   = useState<Date | null>(null);
 
-  // Auto mode (schedule-gated, Mon–Fri 08:30–17:00 SP)
+  // Auto mode (schedule-gated, Monâ€“Fri 08:30â€“17:00 SP)
   const [autoEnabled,  setAutoEnabled]  = useState(false);
 
   // Steps expand/collapse
@@ -782,7 +782,7 @@ export default function Home() {
   const radar = useMarketRadar(isAuthenticated);
   const demoAgents = useDemoAgents(radar.analysis);
 
-  // ── Demo trading ──────────────────────────────────────────────────────────
+  // â”€â”€ Demo trading â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const {
     session: demoSession,
@@ -809,7 +809,7 @@ export default function Home() {
   const safeLimited = isSafetyLimited(demoSession.dailyStats);
   const safeReason  = safeLimited ? safetyLimitReason(demoSession.dailyStats) : undefined;
 
-  // ── Alert emission ────────────────────────────────────────────────────────
+  // â”€â”€ Alert emission â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const pushAlert = useCallback((msg: Omit<AlertMsg, 'id'>) => {
     const id = ++alertIdCounter;
@@ -820,7 +820,7 @@ export default function Home() {
     setAlerts(prev => prev.filter(a => a.id !== id));
   }, []);
 
-  // ── Manual+Auto result handler ────────────────────────────────────────────
+  // â”€â”€ Manual+Auto result handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const handleResult = useCallback((res: EngineResult, triggeredAt?: Date) => {
     setResult(res);
@@ -832,20 +832,20 @@ export default function Home() {
     if (prev !== null && prev !== curr) {
       if (prev === 'SEM ENTRADA' && curr === 'BUY') {
         pushAlert({ kind: 'buy',  title: 'Sinal de Compra Detectado',
-          body: 'O motor identificou um setup de COMPRA. Verifique os níveis e aplique gestão de risco.' });
+          body: 'O motor identificou um setup de COMPRA. Verifique os nÃ­veis e aplique gestÃ£o de risco.' });
       } else if (prev === 'SEM ENTRADA' && curr === 'SELL') {
         pushAlert({ kind: 'sell', title: 'Sinal de Venda Detectado',
-          body: 'O motor identificou um setup de VENDA. Verifique os níveis e aplique gestão de risco.' });
+          body: 'O motor identificou um setup de VENDA. Verifique os nÃ­veis e aplique gestÃ£o de risco.' });
       } else if ((prev === 'BUY' || prev === 'SELL') && curr === 'SEM ENTRADA') {
         const prevLabel = prev === 'BUY' ? 'COMPRA' : 'VENDA';
         pushAlert({ kind: 'invalidated', title: `Setup de ${prevLabel} Invalidado`,
-          body: 'As condições do setup anterior deixaram de ser satisfeitas. Sinal cancelado.' });
+          body: 'As condiÃ§Ãµes do setup anterior deixaram de ser satisfeitas. Sinal cancelado.' });
       }
     }
     prevDecisionRef.current = curr;
   }, [pushAlert]);
 
-  // ── Demo signal handler (24/7, separate callback) ─────────────────────────
+  // â”€â”€ Demo signal handler (24/7, separate callback) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const prevDemoDecisionRef = useRef<Decision | null>(null);
 
@@ -859,8 +859,8 @@ export default function Home() {
           const label = res.decision === 'BUY' ? 'COMPRA' : 'VENDA';
           pushAlert({
             kind: 'demo',
-            title: `Demo — Operação de ${label} Aberta`,
-            body: `Operação simulada de ${label} registrada em ${selectedPair}. Acompanhe no painel demo.`,
+            title: `Demo â€” OperaÃ§Ã£o de ${label} Aberta`,
+            body: `OperaÃ§Ã£o simulada de ${label} registrada em ${selectedPair}. Acompanhe no painel demo.`,
           });
         }
       }
@@ -868,7 +868,7 @@ export default function Home() {
     prevDemoDecisionRef.current = res.decision;
   }, [feedSignal, selectedPair, safeLimited, pushAlert]);
 
-  // ── Auto-analysis hook (schedule-gated, Mon–Fri 08:30–17:00 SP) ──────────
+  // â”€â”€ Auto-analysis hook (schedule-gated, Monâ€“Fri 08:30â€“17:00 SP) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const autoState = useAutoAnalysis({
     enabled:    isAuthenticated && autoEnabled,
@@ -879,7 +879,7 @@ export default function Home() {
     onResult:   handleResult,
   });
 
-  // ── Demo auto-analysis hook (24/7, no schedule gate) ─────────────────────
+  // â”€â”€ Demo auto-analysis hook (24/7, no schedule gate) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const demoAutoState = useDemoAutoAnalysis({
     enabled:    isAuthenticated && demoEnabled && !market.loading && !market.error,
@@ -890,7 +890,7 @@ export default function Home() {
     onResult:   handleDemoSignal,
   });
 
-  // ── Manual analysis ───────────────────────────────────────────────────────
+  // â”€â”€ Manual analysis â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const canAnalyze =
     isAuthenticated && !analyzing && !market.loading && !market.error &&
@@ -930,9 +930,9 @@ export default function Home() {
     return <PremiumLanding loading={authLoading} error={authError} onLogin={handleLogin} state={publicOracle.state} />;
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // RENDER
-  // ─────────────────────────────────────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   return (
     <div className="premium-dashboard-shell min-h-screen w-full bg-background text-foreground font-sans selection:bg-primary/30 flex flex-col items-center p-4 sm:p-8 relative overflow-hidden">
@@ -941,7 +941,7 @@ export default function Home() {
       <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-primary/5 rounded-full blur-[120px] pointer-events-none" />
       <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-primary/5 rounded-full blur-[120px] pointer-events-none" />
 
-      {/* ── Alert toasts ─────────────────────────────────────────────────── */}
+      {/* â”€â”€ Alert toasts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <div className="fixed top-6 right-6 z-[100] flex flex-col gap-2 items-end pointer-events-none">
         <AnimatePresence mode="popLayout">
           {alerts.map(msg => (
@@ -952,7 +952,7 @@ export default function Home() {
         </AnimatePresence>
       </div>
 
-      {/* ── Header ──────────────────────────────────────────────────────── */}
+      {/* â”€â”€ Header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <header className="w-full max-w-5xl flex items-center justify-between mb-8 border-b border-border pb-6 pt-4 relative z-10">
         <div className="flex items-center gap-4">
           <div className="relative flex items-center justify-center w-10 h-10">
@@ -981,7 +981,7 @@ export default function Home() {
           <OracleLiveStateBadge state={oracleVisualState} />
         </div>
 
-        {/* ── Live price ──────────────────────────────────────────────────── */}
+        {/* â”€â”€ Live price â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         <section className="hidden lg:block bg-card/50 backdrop-blur-md border border-border p-5 relative overflow-hidden">
           <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-primary/30 to-transparent" />
           {market.error ? (
@@ -992,13 +992,13 @@ export default function Home() {
           ) : market.loading ? (
             <div className="flex items-center gap-3 text-muted-foreground font-mono text-sm">
               <RefreshCw className="w-4 h-4 animate-spin" />
-              <span className="tracking-widest text-xs uppercase">Conectando à Binance...</span>
+              <span className="tracking-widest text-xs uppercase">Conectando Ã  Binance...</span>
             </div>
           ) : (
             <div className="flex flex-col sm:flex-row sm:items-end gap-4 justify-between">
               <div className="flex flex-col gap-1">
                 <span className="text-[10px] font-mono uppercase tracking-[0.25em] text-muted-foreground">
-                  BTC / USDT · Preço Atual
+                  BTC / USDT Â· PreÃ§o Atual
                 </span>
                 <AnimatePresence mode="wait">
                   <motion.span
@@ -1018,14 +1018,14 @@ export default function Home() {
                   <span className="tracking-widest">
                     {market.lastUpdate.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', second: '2-digit' })} (SP)
                   </span>
-                  <span className="text-primary/50 ml-1">· 30s</span>
+                  <span className="text-primary/50 ml-1">Â· 30s</span>
                 </div>
               )}
             </div>
           )}
         </section>
 
-        {/* ── Controls ────────────────────────────────────────────────────── */}
+        {/* â”€â”€ Controls â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         <section className="hidden lg:grid grid-cols-1 sm:grid-cols-3 gap-2">
           <div className="border border-border/50 bg-card/30 px-4 py-3">
             <span className="text-[9px] font-mono uppercase tracking-[0.18em] text-muted-foreground">API</span>
@@ -1235,7 +1235,7 @@ export default function Home() {
                   >
                     <option value="BTCUSDT">BTC / USDT</option>
                   </select>
-                  <div className="absolute right-5 top-1/2 -translate-y-1/2 pointer-events-none text-primary text-sm">▼</div>
+                  <div className="absolute right-5 top-1/2 -translate-y-1/2 pointer-events-none text-primary text-sm">â–¼</div>
                 </div>
               </div>
 
@@ -1259,28 +1259,6 @@ export default function Home() {
                   }
                 </div>
               </button>
-            </div>
-
-            {/* Auto toggle (schedule-gated) */}
-            <div className="flex items-center justify-between border border-border/50 bg-background/30 px-5 py-4 relative">
-              <div className="absolute left-0 top-0 bottom-0 w-[2px]"
-                style={{ background: autoEnabled ? 'var(--color-primary)' : '#ffffff22' }} />
-              <div className="flex flex-col gap-0.5 pl-2">
-                <span className="text-[11px] font-mono uppercase tracking-[0.2em] text-foreground/80">
-                  Análise Automática
-                </span>
-                <span className={`text-[10px] font-mono uppercase tracking-[0.15em] ${autoEnabled ? 'text-primary' : 'text-muted-foreground/50'}`}>
-                  {autoEnabled ? '● AUTOMÁTICO ATIVO' : '○ AUTOMÁTICO DESATIVADO'}
-                </span>
-                <span className="text-[9px] font-mono text-muted-foreground/30 mt-0.5">
-                  Seg–Sex 08:30–17:00 (Brasília)
-                </span>
-              </div>
-              <Toggle
-                checked={autoEnabled}
-                onChange={setAutoEnabled}
-                disabled={market.loading || !!market.error}
-              />
             </div>
 
             {/* Demo toggle (24/7) */}
@@ -1320,74 +1298,7 @@ export default function Home() {
           </div>
         </section>
 
-        {/* ── Auto-mode status panel (schedule-gated) ──────────────────────── */}
-        <AnimatePresence>
-          {autoEnabled && (
-            <motion.section
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{    opacity: 0, height: 0    }}
-              transition={{ duration: 0.3, ease: 'easeInOut' }}
-              className="hidden lg:block overflow-hidden"
-            >
-              {!autoState.isOperational ? (
-                <div className="bg-card/40 border border-border/50 p-5 relative overflow-hidden">
-                  <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-[#ffaa00]" />
-                  <div className="flex flex-col sm:flex-row sm:items-center gap-4 pl-2">
-                    <div className="flex items-center gap-3 flex-1">
-                      <CalendarOff className="w-5 h-5 text-[#ffaa00] flex-shrink-0" />
-                      <div>
-                        <p className="text-xs font-mono font-bold text-[#ffaa00] uppercase tracking-[0.15em]">
-                          Fora do Horário Operacional
-                        </p>
-                        <p className="text-[11px] font-mono text-foreground/50 mt-0.5">
-                          Sinais automáticos disponíveis seg–sex, 08:30–17:00 (Brasília).
-                          Análise manual continua disponível.
-                        </p>
-                      </div>
-                    </div>
-                    <div className="text-right font-mono flex-shrink-0">
-                      <p className="text-[10px] text-muted-foreground uppercase tracking-[0.15em]">Hora atual (SP)</p>
-                      <p className="text-base text-foreground/70">{spClock}</p>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <div className="bg-card/40 border border-primary/20 p-4 flex flex-col gap-2 relative overflow-hidden col-span-2 sm:col-span-1">
-                    <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-primary" />
-                    <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] pl-2 flex items-center gap-1">
-                      <Bell className="w-3 h-3" /> Status
-                    </span>
-                    <span className="text-xs font-mono font-bold text-primary uppercase tracking-[0.1em] pl-2">● ATIVO</span>
-                  </div>
-                  <div className="bg-card/40 border border-border/50 p-4 flex flex-col gap-2">
-                    <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] flex items-center gap-1">
-                      <Activity className="w-3 h-3" /> Mercado
-                    </span>
-                    <MarketStatusBadge decision={result?.decision ?? null} />
-                  </div>
-                  <div className="bg-card/40 border border-border/50 p-4 flex flex-col gap-2">
-                    <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] flex items-center gap-1">
-                      <Clock className="w-3 h-3" /> Última análise
-                    </span>
-                    <span className="text-sm font-mono text-foreground/80">
-                      {autoState.lastAnalysisTime ? fmtTimeSP(autoState.lastAnalysisTime) : '—'}
-                    </span>
-                  </div>
-                  <div className="bg-card/40 border border-border/50 p-4 flex flex-col gap-2">
-                    <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] flex items-center gap-1">
-                      <Timer className="w-3 h-3" /> Próximo candle
-                    </span>
-                    <span className="text-xl font-mono font-bold text-primary tabular-nums">{autoState.countdown}</span>
-                  </div>
-                </div>
-              )}
-            </motion.section>
-          )}
-        </AnimatePresence>
-
-        {/* ── Demo auto status bar ─────────────────────────────────────────── */}
+        {/* â”€â”€ Demo auto status bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         <AnimatePresence>
           {demoEnabled && (
             <motion.div
@@ -1409,16 +1320,16 @@ export default function Home() {
 
                 <div className="bg-card/40 border border-border/50 p-4 flex flex-col gap-2">
                   <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] flex items-center gap-1">
-                    <Clock className="w-3 h-3" /> Última análise
+                    <Clock className="w-3 h-3" /> Ãšltima anÃ¡lise
                   </span>
                   <span className="text-sm font-mono text-foreground/80">
-                    {demoAutoState.lastAnalysisTime ? fmtTimeSP(demoAutoState.lastAnalysisTime) : '—'}
+                    {demoAutoState.lastAnalysisTime ? fmtTimeSP(demoAutoState.lastAnalysisTime) : 'â€”'}
                   </span>
                 </div>
 
                 <div className="bg-card/40 border border-border/50 p-4 flex flex-col gap-2">
                   <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] flex items-center gap-1">
-                    <Timer className="w-3 h-3" /> Próximo candle 5M
+                    <Timer className="w-3 h-3" /> PrÃ³ximo candle 5M
                   </span>
                   <span className="text-xl font-mono font-bold tabular-nums" style={{ color: '#00f0ff' }}>
                     {demoAutoState.countdown}
@@ -1443,20 +1354,20 @@ export default function Home() {
           )}
         </AnimatePresence>
 
-        {/* ── Two-column grid: analysis (left) + chart (right) ────────────── */}
+        {/* â”€â”€ Two-column grid: analysis (left) + chart (right) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         <div className="hidden lg:grid grid-cols-1 lg:grid-cols-[5fr_7fr] gap-5 items-start">
 
-          {/* Left — Analysis panel */}
+          {/* Left â€” Analysis panel */}
           <div className="order-2 lg:order-1 flex flex-col gap-4">
             {!result && !analyzing && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
                 className="flex flex-col items-center gap-3 py-14 border border-border/30 bg-card/20 text-center">
                 <Crosshair className="w-10 h-10 text-muted-foreground/20" />
                 <span className="text-xs font-mono uppercase tracking-[0.2em] text-muted-foreground/50">
-                  Aguardando análise
+                  Aguardando anÃ¡lise
                 </span>
                 <span className="text-[11px] font-mono text-muted-foreground/30 max-w-[220px] leading-relaxed">
-                  Clique em "Analisar Agora" ou ative o modo automático
+                  Clique em "Analisar Agora" ou ative o modo automÃ¡tico
                 </span>
               </motion.div>
             )}
@@ -1481,9 +1392,9 @@ export default function Home() {
                   {resultTime && (
                     <div className="flex items-center gap-2 text-[11px] font-mono text-muted-foreground/50">
                       <Clock className="w-3 h-3" />
-                      <span>Análise em {fmtTimeSP(resultTime)} (SP)</span>
+                      <span>AnÃ¡lise em {fmtTimeSP(resultTime)} (SP)</span>
                       {autoEnabled && autoState.isOperational && (
-                        <span className="text-primary/50 ml-1">· automática</span>
+                        <span className="text-primary/50 ml-1">Â· automÃ¡tica</span>
                       )}
                     </div>
                   )}
@@ -1507,7 +1418,7 @@ export default function Home() {
                     <button onClick={() => setStepsExpanded(e => !e)}
                       className="px-5 py-3 flex items-center gap-2 hover:bg-white/[0.02] transition-colors">
                       <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.2em] flex-1">
-                        Motor de Regras · 7 Etapas
+                        Motor de Regras Â· 7 Etapas
                       </span>
                       <span className="text-[10px] font-mono text-muted-foreground">
                         {result.steps.filter(s => s.status === 'PASS').length}/7 aprovadas
@@ -1536,7 +1447,7 @@ export default function Home() {
             </AnimatePresence>
           </div>
 
-          {/* Right — TradingView Chart */}
+          {/* Right â€” TradingView Chart */}
           <div className="order-1 lg:order-2 flex flex-col">
             <button
               onClick={() => setMobileChartOpen(open => !open)}
@@ -1559,9 +1470,9 @@ export default function Home() {
                 <div className="flex items-center gap-2 flex-1">
                   <BarChart2 className="w-4 h-4 text-primary flex-shrink-0" />
                   <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">
-                    Gráfico Avançado
+                    GrÃ¡fico AvanÃ§ado
                   </span>
-                  <span className="text-[10px] font-mono text-primary/50 ml-1">· TradingView</span>
+                  <span className="text-[10px] font-mono text-primary/50 ml-1">Â· TradingView</span>
                 </div>
                 {/* EMA legend */}
                 <div className="hidden sm:flex items-center gap-4">
@@ -1609,7 +1520,7 @@ export default function Home() {
 
         </div>{/* end two-column grid */}
 
-        {/* ── Demo panels (visible when demo mode is enabled) ──────────────── */}
+        {/* â”€â”€ Demo panels (visible when demo mode is enabled) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         <AnimatePresence>
           {demoEnabled && (
             <motion.div
@@ -1644,12 +1555,12 @@ export default function Home() {
                   <Bot className="w-8 h-8 text-[#00f0ff]/20" />
                   <span className="text-xs font-mono text-[#00f0ff]/40 uppercase tracking-[0.2em]">
                     {safeLimited
-                      ? 'Novas operações suspensas — limite de risco atingido'
+                      ? 'Novas operaÃ§Ãµes suspensas â€” limite de risco atingido'
                       : 'Aguardando sinal 24/7 do motor de regras...'}
                   </span>
                   {!safeLimited && (
                     <span className="text-[10px] font-mono text-muted-foreground/30">
-                      Próxima análise em {demoAutoState.countdown}
+                      PrÃ³xima anÃ¡lise em {demoAutoState.countdown}
                     </span>
                   )}
                 </div>

@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import type { OracleVisualState } from '@shared/oracleVisualState';
 
-const PRODUCT_NAME = 'OR\u00c1CULO TRADE AI';
+const PRODUCT_NAME = 'OR\u00c1CULO TRADE IA';
 const HERO_SUBTITLE = 'A intelig\u00eancia que observa o mercado antes de todos.';
 const SUPPORT_PHRASE = 'O mercado deixa sinais. O Oraculo interpreta.';
 const GUARDIAN_IMAGE_SRC = '/brand/oraculo-guardian.png';
@@ -67,7 +67,7 @@ function PremiumLogo() {
       </div>
       <div className="leading-none">
         <p className="text-[11px] font-bold uppercase tracking-[0.32em] text-[#F4F4F5]">Oraculo</p>
-        <p className="mt-1 text-[9px] uppercase tracking-[0.24em] text-[#00D8FF]/75">Trade AI</p>
+        <p className="mt-1 text-[9px] uppercase tracking-[0.24em] text-[#00D8FF]/75">Trade IA</p>
       </div>
     </div>
   );
@@ -102,7 +102,7 @@ function OracleIntro({ onDone }: { onDone: () => void }) {
     <div className="premium-intro" role="status" aria-live="polite">
       <div className="premium-intro-core">
         <div className="premium-intro-mark" />
-        <p className="text-[10px] font-bold uppercase tracking-[0.28em] text-[#D4AF37]">Oraculo Trade AI</p>
+        <p className="text-[10px] font-bold uppercase tracking-[0.28em] text-[#D4AF37]">Oraculo Trade IA</p>
         <p className="mt-3 min-h-6 text-sm text-[#F4F4F5]/72">{introSteps[stepIndex]}</p>
         <div className="mt-5 h-1 overflow-hidden bg-[#232329]">
           <div className="h-full bg-[#D4AF37] transition-all duration-300" style={{ width: `${((stepIndex + 1) / introSteps.length) * 100}%` }} />
@@ -131,7 +131,7 @@ function OracleSoul({ state = 'waiting', framed = false }: { state?: OracleVisua
         <div className="premium-oracle-eye premium-oracle-eye-right" />
         <img
           src={GUARDIAN_IMAGE_SRC}
-          alt="Oraculo Trade AI com guardiao, globo de mercado, touro, urso e candles"
+          alt="Oraculo Trade IA com guardiao, globo de mercado, touro, urso e candles"
           className="premium-oracle-art"
           loading="eager"
           decoding="async"
