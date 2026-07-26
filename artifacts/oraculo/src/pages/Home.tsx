@@ -32,6 +32,7 @@ import { ObservabilityPanel } from '../components/ObservabilityPanel';
 import { EngineAuditPanel } from '../components/EngineAuditPanel';
 import { PremiumLanding } from '../components/PremiumLanding';
 import { getAuth, loginUser, logoutUser, type AuthUser } from '../lib/demoApi';
+import { fetchPrice } from '../lib/binance';
 import { resolveOracleVisualState, type OracleVisualState } from '@shared/oracleVisualState';
 import { APP_DISPLAY_NAME, APP_NAME, APP_VERSION } from '@shared/appVersion';
 
@@ -795,6 +796,9 @@ export default function Home() {
     serverError: demoServerError,
     setAutomationEnabled,
   } = useDemoTrading(isAuthenticated);
+  const activeTradePair = demoSession.activeTrade?.pair ?? null;
+  const [activeTradePrice, setActiveTradePrice] = useState<number | null>(null);
+  const activeTradeCurrentPrice = activeTradePair ? activeTradePrice : null;
   const oracleVisualState = resolveOracleVisualState({
     authenticated: isAuthenticated,
     apiError: apiHealth.error || demoServerError,
@@ -802,10 +806,36 @@ export default function Home() {
     worker: apiHealth.health?.worker,
   });
 
-  // Feed live price into demo state machine every time price updates
   useEffect(() => {
-    if (isAuthenticated && market.price !== null) updatePrice(market.price, selectedPair);
-  }, [isAuthenticated, market.price, selectedPair, updatePrice]);
+    if (!isAuthenticated || !activeTradePair) {
+      setActiveTradePrice(null);
+      return;
+    }
+    let cancelled = false;
+    const controller = new AbortController();
+    const refreshActiveTradePrice = async () => {
+      try {
+        const price = await fetchPrice(activeTradePair, controller.signal);
+        if (!cancelled) setActiveTradePrice(Number.isFinite(price) && price > 0 ? price : null);
+      } catch {
+        if (!cancelled) setActiveTradePrice(null);
+      }
+    };
+    void refreshActiveTradePrice();
+    const id = window.setInterval(refreshActiveTradePrice, 30_000);
+    return () => {
+      cancelled = true;
+      controller.abort();
+      window.clearInterval(id);
+    };
+  }, [isAuthenticated, activeTradePair]);
+
+  // Feed the active trade's own pair price into the demo state machine.
+  useEffect(() => {
+    if (isAuthenticated && activeTradePair && activeTradeCurrentPrice !== null) {
+      updatePrice(activeTradeCurrentPrice, activeTradePair);
+    }
+  }, [activeTradeCurrentPrice, activeTradePair, isAuthenticated, updatePrice]);
 
   const safeLimited = isSafetyLimited(demoSession.dailyStats);
   const safeReason  = safeLimited ? safetyLimitReason(demoSession.dailyStats) : undefined;
@@ -1090,7 +1120,7 @@ export default function Home() {
           />
 
           {demoSession.activeTrade ? (
-            <DemoActivePanel trade={demoSession.activeTrade} currentPrice={market.price} />
+            <DemoActivePanel trade={demoSession.activeTrade} currentPrice={activeTradeCurrentPrice} />
           ) : (
             <MobileEmptyOperation safeLimited={safeLimited} safeReason={safeReason} countdown={demoAutoState.countdown} />
           )}
@@ -1553,7 +1583,7 @@ export default function Home() {
               {demoSession.activeTrade && (
                 <DemoActivePanel
                   trade={demoSession.activeTrade}
-                  currentPrice={market.price}
+                  currentPrice={activeTradeCurrentPrice}
                 />
               )}
 
