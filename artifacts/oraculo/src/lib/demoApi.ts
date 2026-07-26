@@ -284,6 +284,7 @@ export async function migrateLocalSession(session: DemoSession): Promise<DemoSes
     balance: data.account.balance,
     configuredBalance: data.account.configuredBalance,
     dailyStats: data.account.dailyStats,
+    settings: { maxDailyTrades: 0 },
     activeTrade: data.positions[0] ?? null,
     history: data.trades,
   };

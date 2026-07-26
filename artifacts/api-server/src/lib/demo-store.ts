@@ -62,6 +62,9 @@ export interface DemoSession {
   activeTrade: DemoTrade | null;
   history: DemoTrade[];
   dailyStats: DailyStats;
+  settings: {
+    maxDailyTrades: number;
+  };
   realizedPnlUSDC: number;
   unrealizedPnlUSDC: number;
   partialPnlUSDC: number;
@@ -537,6 +540,10 @@ function envInt(name: string, fallback: number, min: number, max: number): numbe
   return Number.isInteger(value) && value >= min && value <= max ? value : fallback;
 }
 
+function demoMaxDailyTrades(): number {
+  return envInt("ORACULO_DEMO_MAX_DAILY_TRADES", 0, 0, 10_000);
+}
+
 function sessionTtlSeconds(): number {
   return envInt("ORACULO_SESSION_TTL_SECONDS", DEFAULT_SESSION_TTL_SECONDS, 300, 30 * 24 * 60 * 60);
 }
@@ -599,9 +606,22 @@ function hashSessionToken(token: string): string {
   return createHash("sha256").update(token).digest("base64url");
 }
 
+function dailyTradeLimitReached(stats: DailyStats): boolean {
+  const maxDailyTrades = demoMaxDailyTrades();
+  return maxDailyTrades > 0 && stats.totalTrades >= maxDailyTrades;
+}
+
+function safetyLimitReason(stats: DailyStats): string {
+  if (dailyTradeLimitReached(stats)) return "Limite diário de operações atingido.";
+  if (stats.consecutiveLosses >= 3) return "Sequência de perdas atingida.";
+  if (stats.dailyPnL <= -(stats.startOfDayBalance * 0.03)) return "Perda diária máxima atingida.";
+  if (stats.safetyLimited) return "Limite de risco ativo.";
+  return "Limite de risco ativo.";
+}
+
 function isSafetyLimited(stats: DailyStats): boolean {
   return stats.safetyLimited ||
-    stats.totalTrades >= 8 ||
+    dailyTradeLimitReached(stats) ||
     stats.consecutiveLosses >= 3 ||
     stats.dailyPnL <= -(stats.startOfDayBalance * 0.03);
 }
@@ -769,8 +789,8 @@ function simulationTradeId(id: string): string {
 const DEFAULT_NOTIFICATION_TYPES = [
   "automation_enabled",
   "automation_disabled",
-  "opportunity_approved",
   "demo_entry_opened",
+  "demo_entry_not_executed",
   "target1_hit",
   "partial_executed",
   "breakeven_moved",
@@ -1598,6 +1618,9 @@ export class DemoStore {
       (activeTrade?.realizedPnlUSDC ?? 0);
     return {
       ...this.getAccount(userId),
+      settings: {
+        maxDailyTrades: demoMaxDailyTrades(),
+      },
       activeTrade,
       history,
       realizedPnlUSDC,
@@ -1695,19 +1718,7 @@ export class DemoStore {
         SELECT * FROM worker_diagnostics
         WHERE user_id = ? AND symbol = ? AND fingerprint = ?
       `).get(input.userId, input.symbol, input.fingerprint) as Record<string, unknown>;
-      if (input.status === "APPROVED") {
-        this.createNotification(input.userId, {
-          type: "opportunity_approved",
-          title: "Oportunidade aprovada",
-          message: `${input.symbol}: entrada ${input.direction} aprovada pelo robo.`,
-          severity: "success",
-          symbol: input.symbol,
-          source: "DEMO",
-          relatedEventId: input.fingerprint,
-          idempotencyKey: `${input.userId}:opportunity_approved:${input.symbol}:${input.fingerprint}`,
-          adminMetadata: input.adminPayload,
-        });
-      } else if (input.status === "BLOCKED") {
+      if (input.status === "BLOCKED") {
         this.createNotification(input.userId, {
           type: "entry_blocked_exhaustion",
           title: "Entrada bloqueada",
@@ -3086,6 +3097,20 @@ export class DemoStore {
     return position;
   }
 
+  private notifyApprovedSignalNotExecuted(userId: string, input: DemoSignalInput, pair: string, reason: string, eventKey: string): void {
+    this.createNotification(userId, {
+      type: "demo_entry_not_executed",
+      title: "Sinal aprovado, mas nao executado",
+      message: `${pair}: sinal ${input.decision} aprovado, mas nao executado - ${reason}`,
+      severity: "warning",
+      symbol: pair,
+      source: "DEMO",
+      relatedEventId: eventKey,
+      idempotencyKey: `${userId}:demo_entry_not_executed:${pair}:${eventKey}:${reason}`,
+      adminMetadata: { reason, signal: { pair, decision: input.decision, signalKey: input.signalKey ?? null } },
+    });
+  }
+
   openFromSignal(userId: string, body: unknown) {
     return this.openFromSignalWithResult(userId, body).session;
   }
@@ -3127,16 +3152,19 @@ export class DemoStore {
       const globalRiskOpenUSDC = positions.reduce((sum, position) => sum + remainingOpenRisk(position), 0);
       const globalRiskLimitUSDC = account.balance * MAX_DEMO_GLOBAL_RISK_PCT;
       const globalRiskRemainingUSDC = Math.max(0, globalRiskLimitUSDC - globalRiskOpenUSDC);
-      const blocked = (blockedReason: string, decisionState: "BLOQUEADO_RISCO" | null = null) => ({
-        session: this.getSession(userId),
-        opened: false,
-        blockedReason,
-        decisionState,
-        riskAmount: null,
-        globalRiskOpenUSDC,
-        globalRiskLimitUSDC,
-        globalRiskRemainingUSDC,
-      });
+      const blocked = (blockedReason: string, decisionState: "BLOQUEADO_RISCO" | null = null) => {
+        this.notifyApprovedSignalNotExecuted(userId, input, pair, blockedReason, key);
+        return {
+          session: this.getSession(userId),
+          opened: false,
+          blockedReason,
+          decisionState,
+          riskAmount: null,
+          globalRiskOpenUSDC,
+          globalRiskLimitUSDC,
+          globalRiskRemainingUSDC,
+        };
+      };
       const existingEvent = this.db.prepare("SELECT event_key FROM demo_events WHERE event_key = ?").get(`${userId}:${key}`);
       if (existingEvent) return blocked("sinal duplicado ja processado.");
       if (positions.some((position) => position.pair === pair)) {
@@ -3145,7 +3173,7 @@ export class DemoStore {
       }
       if (isSafetyLimited(account.dailyStats)) {
         this.recordEvent(userId, key, "risk_limited_signal_blocked", null);
-        return blocked("limite de seguranca diario ativo.");
+        return blocked(safetyLimitReason(account.dailyStats), "BLOQUEADO_RISCO");
       }
       if (positions.length >= MAX_DEMO_OPEN_POSITIONS) {
         this.recordEvent(userId, key, "global_position_limit_signal_blocked", null);
@@ -3516,7 +3544,7 @@ export class DemoStore {
     const newBalance = account.balance + remainingPnl;
     stats.peakBalance = Math.max(stats.peakBalance, newBalance);
     stats.maxDrawdown = Math.max(stats.maxDrawdown, stats.peakBalance - newBalance);
-    stats.safetyLimited = stats.totalTrades >= 8 || stats.consecutiveLosses >= 3 || stats.dailyPnL <= -(stats.startOfDayBalance * 0.03);
+    stats.safetyLimited = isSafetyLimited(stats);
     this.putAccount(userId, { balance: newBalance, configuredBalance: account.configuredBalance, dailyStats: stats });
     const alertType = exitReason === "TARGET_2"
       ? "target2_hit"

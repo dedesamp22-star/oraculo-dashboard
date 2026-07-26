@@ -837,8 +837,9 @@ export default function Home() {
     }
   }, [activeTradeCurrentPrice, activeTradePair, isAuthenticated, updatePrice]);
 
-  const safeLimited = isSafetyLimited(demoSession.dailyStats);
-  const safeReason  = safeLimited ? safetyLimitReason(demoSession.dailyStats) : undefined;
+  const maxDailyTrades = demoSession.settings?.maxDailyTrades ?? 0;
+  const safeLimited = isSafetyLimited(demoSession.dailyStats, maxDailyTrades);
+  const safeReason  = safeLimited ? safetyLimitReason(demoSession.dailyStats, maxDailyTrades) : undefined;
 
   // â”€â”€ Alert emission â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -1197,6 +1198,7 @@ export default function Home() {
             unrealizedPnl={demoSession.unrealizedPnlUSDC ?? 0}
             partialPnl={demoSession.partialPnlUSDC ?? 0}
             openRisk={demoSession.openRiskUSDC ?? 0}
+            maxDailyTrades={maxDailyTrades}
             onReset={() => resetSession(demoSession.configuredBalance)}
             onBalanceChange={b => {
               setConfiguredBalance(b);
@@ -1593,7 +1595,7 @@ export default function Home() {
                   <Bot className="w-8 h-8 text-[#00f0ff]/20" />
                   <span className="text-xs font-mono text-[#00f0ff]/40 uppercase tracking-[0.2em]">
                     {safeLimited
-                      ? 'Novas operaÃ§Ãµes suspensas â€” limite de risco atingido'
+                      ? safeReason ?? 'Novas operações suspensas por limite de risco.'
                       : 'Aguardando sinal 24/7 do motor de regras...'}
                   </span>
                   {!safeLimited && (
@@ -1615,6 +1617,7 @@ export default function Home() {
                   unrealizedPnl={demoSession.unrealizedPnlUSDC ?? 0}
                   partialPnl={demoSession.partialPnlUSDC ?? 0}
                   openRisk={demoSession.openRiskUSDC ?? 0}
+                  maxDailyTrades={maxDailyTrades}
                   onReset={() => resetSession(demoSession.configuredBalance)}
                   onBalanceChange={b => {
                     setConfiguredBalance(b);

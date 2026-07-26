@@ -81,6 +81,9 @@ export interface DemoSession {
   activeTrade: DemoTrade | null;
   history: DemoTrade[];      // closed trades, newest first
   dailyStats: DailyStats;
+  settings?: {
+    maxDailyTrades: number;
+  };
   realizedPnlUSDC?: number;
   unrealizedPnlUSDC?: number;
   partialPnlUSDC?: number;
@@ -116,6 +119,7 @@ export function makeSession(configuredBalance = DEFAULT_BALANCE): DemoSession {
     activeTrade: null,
     history: [],
     dailyStats: makeDailyStats(today, configuredBalance),
+    settings: { maxDailyTrades: 0 },
     realizedPnlUSDC: 0,
     unrealizedPnlUSDC: 0,
     partialPnlUSDC: 0,
@@ -153,19 +157,19 @@ export function fmtEpochSP(ms: number): string {
 // ── Safety rule evaluation ────────────────────────────────────────────────────
 
 /** Returns true when no more demo trades can open today. */
-export function isSafetyLimited(stats: DailyStats): boolean {
+export function isSafetyLimited(stats: DailyStats, maxDailyTrades = 0): boolean {
   if (stats.safetyLimited) return true;
-  if (stats.totalTrades >= 8) return true;
+  if (maxDailyTrades > 0 && stats.totalTrades >= maxDailyTrades) return true;
   if (stats.consecutiveLosses >= 3) return true;
   if (stats.dailyPnL <= -(stats.startOfDayBalance * 0.03)) return true;
   return false;
 }
 
 /** Human-readable reason for safety limit (first applicable rule). */
-export function safetyLimitReason(stats: DailyStats): string {
-  if (stats.totalTrades >= 8) return 'Limite de 8 operações por dia atingido.';
-  if (stats.consecutiveLosses >= 3) return '3 perdas consecutivas — operações pausadas.';
-  if (stats.dailyPnL <= -(stats.startOfDayBalance * 0.03)) return 'Drawdown diário de 3% atingido.';
+export function safetyLimitReason(stats: DailyStats, maxDailyTrades = 0): string {
+  if (maxDailyTrades > 0 && stats.totalTrades >= maxDailyTrades) return 'Limite diário opcional de operações atingido.';
+  if (stats.consecutiveLosses >= 3) return 'Sequência de perdas atingida — novas entradas pausadas.';
+  if (stats.dailyPnL <= -(stats.startOfDayBalance * 0.03)) return 'Perda diária máxima atingida.';
   return 'Limite de risco ativado.';
 }
 

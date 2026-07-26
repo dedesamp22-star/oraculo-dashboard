@@ -9,6 +9,7 @@ interface Props {
   unrealizedPnl?: number;
   partialPnl?: number;
   openRisk?: number;
+  maxDailyTrades?: number;
   onReset: () => void;
   onBalanceChange: (b: number) => void;
 }
@@ -44,6 +45,7 @@ export function DemoStatsPanel({
   unrealizedPnl = 0,
   partialPnl = 0,
   openRisk = 0,
+  maxDailyTrades = 0,
   onReset,
   onBalanceChange,
 }: Props) {
@@ -63,6 +65,7 @@ export function DemoStatsPanel({
   const balancePct = balanceGain !== null && safeConfiguredBalance !== null && safeConfiguredBalance > 0
     ? (balanceGain / safeConfiguredBalance) * 100
     : null;
+  const dailyLimitLabel = maxDailyTrades > 0 ? `Máx. ${maxDailyTrades} operações/dia` : 'Ilimitado';
 
   return (
     <div className="border border-border/50 bg-card/30 relative overflow-hidden">
@@ -79,7 +82,7 @@ export function DemoStatsPanel({
 
       <div className="p-5 flex flex-col gap-5">
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          <StatCell label="Operações" value={String(totalTrades)} sublabel="máx 8" />
+          <StatCell label="Operações" value={String(totalTrades)} sublabel={dailyLimitLabel} />
           <StatCell label="Ganhos" value={String(wins)} color="#00ff66" />
           <StatCell label="Perdas" value={String(losses)} color="#ff4444" />
           <StatCell label="Breakeven" value={String(breakevens)} color="#ffaa00" />
