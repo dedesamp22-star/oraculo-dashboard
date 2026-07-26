@@ -31,7 +31,7 @@ import { NotificationsPanel } from '../components/NotificationsPanel';
 import { ObservabilityPanel } from '../components/ObservabilityPanel';
 import { EngineAuditPanel } from '../components/EngineAuditPanel';
 import { PremiumLanding } from '../components/PremiumLanding';
-import { fetchEngineAuditLog, getAuth, loginUser, logoutUser, type AuthUser, type EngineAuditEntry } from '../lib/demoApi';
+import { fetchEngineAuditLog, getAuth, loadOpenDemoPositions, loginUser, logoutUser, type AuthUser, type EngineAuditEntry } from '../lib/demoApi';
 import { buildEngineAuditInsight } from '../lib/engineAuditInsight';
 import { fetchPrice } from '../lib/binance';
 import { resolveOracleVisualState, type OracleVisualState } from '@shared/oracleVisualState';
@@ -664,6 +664,19 @@ function directionColor(direction: string | null | undefined): string {
   return '#ffaa00';
 }
 
+function sortOpenTrades(trades: NonNullable<DemoSession['activeTrade']>[]): NonNullable<DemoSession['activeTrade']>[] {
+  return [...trades].sort((a, b) => (b.openTime ?? 0) - (a.openTime ?? 0));
+}
+
+function mobileTradeOpenPnl(trade: NonNullable<DemoSession['activeTrade']>, currentPrice: number | null | undefined): number | null {
+  if (!isFiniteNumber(currentPrice)) return null;
+  const remainingSize = trade.remainingPositionSize ?? trade.positionSize;
+  if (!isFiniteNumber(remainingSize) || !isFiniteNumber(trade.entry)) return null;
+  return trade.direction === 'BUY'
+    ? (currentPrice - trade.entry) * remainingSize
+    : (trade.entry - currentPrice) * remainingSize;
+}
+
 function MobileBottomNav({ tab, onChange }: { tab: MobileTab; onChange: (tab: MobileTab) => void }) {
   const items: Array<{ key: MobileTab; label: string; icon: React.ReactNode }> = [
     { key: 'summary', label: 'Resumo', icon: <Activity className="w-4 h-4" /> },
@@ -785,11 +798,7 @@ function MobileSummaryTab({
 function MobileOperationCard({ trade, currentPrice }: { trade: NonNullable<DemoSession['activeTrade']>; currentPrice: number | null }) {
   const remainingSize = trade.remainingPositionSize ?? trade.positionSize;
   const realizedPnl = isFiniteNumber(trade.realizedPnlUSDC) ? trade.realizedPnlUSDC : 0;
-  const floating = currentPrice !== null
-    ? trade.direction === 'BUY'
-      ? (currentPrice - trade.entry) * remainingSize
-      : (trade.entry - currentPrice) * remainingSize
-    : null;
+  const floating = mobileTradeOpenPnl(trade, currentPrice);
   const ageMs = Date.now() - trade.openTime;
   const trailingActive = trade.target1Hit && trade.isBreakevenStop;
   const latestReason = trade.signalReasons.at(-1) ?? trade.marketConditions;
@@ -882,18 +891,81 @@ function MobileCompactHistory({ history }: { history: DemoSession['history'] }) 
   );
 }
 
-function MobileOperationsTab({ session, currentPrice }: {
-  session: DemoSession;
-  currentPrice: number | null;
+function MobileOperationChip({
+  trade,
+  currentPrice,
+  selected,
+  onSelect,
+}: {
+  trade: NonNullable<DemoSession['activeTrade']>;
+  currentPrice: number | null | undefined;
+  selected: boolean;
+  onSelect: () => void;
 }) {
-  const openTrades = session.activeTrade ? [session.activeTrade] : [];
+  const pnl = mobileTradeOpenPnl(trade, currentPrice);
+  const stateLabel = pnl === null ? 'Sem preco' : pnl > 0 ? 'Lucro' : pnl < 0 ? 'Perda' : 'Neutro';
+  const stateColor = pnl === null ? '#aaaaaa' : pnl > 0 ? '#00ff66' : pnl < 0 ? '#ff4444' : '#ffaa00';
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={`min-w-[152px] flex-shrink-0 border px-3 py-2 text-left transition-all ${
+        selected ? 'border-primary/80 bg-primary/[0.10]' : 'border-border/45 bg-background/25'
+      }`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[9px] font-mono font-bold uppercase truncate" style={{ color: directionColor(trade.direction) }}>
+          {trade.direction}
+        </span>
+        <span className="text-[8px] font-mono uppercase truncate" style={{ color: stateColor }}>{stateLabel}</span>
+      </div>
+      <p className="mt-0.5 text-[10px] font-mono font-bold uppercase text-foreground truncate">{trade.pair}</p>
+      <p className="mt-0.5 text-[11px] font-mono font-bold tabular-nums" style={{ color: signedColor(pnl) }}>
+        {fmtSignedCurrency(pnl)}
+      </p>
+    </button>
+  );
+}
+
+function MobileOperationsTab({
+  session,
+  openTrades,
+  pricesByPair,
+  selectedTradeId,
+  onSelectTrade,
+}: {
+  session: DemoSession;
+  openTrades: NonNullable<DemoSession['activeTrade']>[];
+  pricesByPair: Record<string, number | null>;
+  selectedTradeId: string | null;
+  onSelectTrade: (tradeId: string) => void;
+}) {
+  const selectedTrade = openTrades.find((trade) => trade.id === selectedTradeId) ?? openTrades[0] ?? null;
+  const selectedPrice = selectedTrade ? pricesByPair[selectedTrade.pair] ?? null : null;
   return (
     <div className="flex flex-col gap-3">
       <MobileSection title="Operacoes abertas">
         {openTrades.length > 0 ? (
-          <div className="flex flex-col gap-2">
-            {openTrades.map((trade) => <MobileOperationCard key={trade.id} trade={trade} currentPrice={currentPrice} />)}
-          </div>
+          <>
+            <div className="w-full overflow-x-auto overflow-y-hidden pb-1">
+              <div className="flex min-w-0 gap-2">
+                {openTrades.map((trade) => (
+                  <MobileOperationChip
+                    key={trade.id}
+                    trade={trade}
+                    currentPrice={pricesByPair[trade.pair]}
+                    selected={selectedTrade?.id === trade.id}
+                    onSelect={() => onSelectTrade(trade.id)}
+                  />
+                ))}
+              </div>
+            </div>
+            {selectedTrade && (
+              <div className="mt-2">
+                <MobileOperationCard trade={selectedTrade} currentPrice={selectedPrice} />
+              </div>
+            )}
+          </>
         ) : (
           <p className="text-[10px] font-mono text-muted-foreground/65">Nenhuma operacao aberta.</p>
         )}
@@ -1031,6 +1103,9 @@ export default function Home() {
   const [mobileAuditEntries, setMobileAuditEntries] = useState<EngineAuditEntry[]>([]);
   const [mobileAuditLoading, setMobileAuditLoading] = useState(false);
   const [mobileAuditError, setMobileAuditError] = useState<string | null>(null);
+  const [mobileOpenTrades, setMobileOpenTrades] = useState<NonNullable<DemoSession['activeTrade']>[]>([]);
+  const [selectedMobileTradeId, setSelectedMobileTradeId] = useState<string | null>(null);
+  const [mobilePricesByPair, setMobilePricesByPair] = useState<Record<string, number | null>>({});
   const manualAnalyzeTimeoutRef = useRef<number | null>(null);
 
   // Alerts
@@ -1167,6 +1242,58 @@ export default function Home() {
       updatePrice(activeTradeCurrentPrice, activeTradePair);
     }
   }, [activeTradeCurrentPrice, activeTradePair, isAuthenticated, updatePrice]);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setMobileOpenTrades([]);
+      setSelectedMobileTradeId(null);
+      setMobilePricesByPair({});
+      return;
+    }
+
+    let cancelled = false;
+    let priceController: AbortController | null = null;
+
+    const refreshMobileOpenTrades = async () => {
+      priceController?.abort();
+      priceController = new AbortController();
+      try {
+        const positions = sortOpenTrades(await loadOpenDemoPositions());
+        if (cancelled) return;
+
+        setMobileOpenTrades(positions);
+        setSelectedMobileTradeId((current) => {
+          if (current && positions.some((trade) => trade.id === current)) return current;
+          return positions[0]?.id ?? null;
+        });
+
+        const pairs = Array.from(new Set(positions.map((trade) => trade.pair)));
+        const entries = await Promise.all(pairs.map(async (pair) => {
+          try {
+            const price = await fetchPrice(pair, priceController?.signal);
+            return [pair, Number.isFinite(price) && price > 0 ? price : null] as const;
+          } catch {
+            return [pair, null] as const;
+          }
+        }));
+        if (!cancelled) setMobilePricesByPair(Object.fromEntries(entries));
+      } catch {
+        if (!cancelled) {
+          setMobileOpenTrades([]);
+          setSelectedMobileTradeId(null);
+          setMobilePricesByPair({});
+        }
+      }
+    };
+
+    void refreshMobileOpenTrades();
+    const id = window.setInterval(refreshMobileOpenTrades, 5_000);
+    return () => {
+      cancelled = true;
+      priceController?.abort();
+      window.clearInterval(id);
+    };
+  }, [isAuthenticated]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -1470,7 +1597,10 @@ export default function Home() {
           {mobileTab === 'operations' && (
             <MobileOperationsTab
               session={demoSession}
-              currentPrice={activeTradeCurrentPrice}
+              openTrades={mobileOpenTrades}
+              pricesByPair={mobilePricesByPair}
+              selectedTradeId={selectedMobileTradeId}
+              onSelectTrade={setSelectedMobileTradeId}
             />
           )}
 

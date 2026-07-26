@@ -271,6 +271,10 @@ export async function loadServerSession(): Promise<DemoSession> {
   return await request<DemoSession>('/api/demo/session');
 }
 
+export async function loadOpenDemoPositions(): Promise<DemoTrade[]> {
+  return await request<DemoTrade[]>('/api/demo/positions');
+}
+
 export async function migrateLocalSession(session: DemoSession): Promise<DemoSession> {
   const data = await request<{
     account: { balance: number; configuredBalance: number; dailyStats: DemoSession['dailyStats'] };

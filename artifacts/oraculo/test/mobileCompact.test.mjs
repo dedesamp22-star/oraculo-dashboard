@@ -4,6 +4,11 @@ import { test } from 'node:test';
 
 const source = readFileSync(new URL('../src/pages/Home.tsx', import.meta.url), 'utf8');
 const chartSource = readFileSync(new URL('../src/components/TradingViewChart.tsx', import.meta.url), 'utf8');
+const demoApiSource = readFileSync(new URL('../src/lib/demoApi.ts', import.meta.url), 'utf8');
+const mobileOperationsSource = source.slice(
+  source.indexOf('function MobileOperationsTab'),
+  source.indexOf('function mainRadarReason'),
+);
 
 test('mobile dashboard exposes exactly the five approved tabs', () => {
   assert.match(source, /type MobileTab = 'summary' \| 'operations' \| 'radar' \| 'audit' \| 'more'/);
@@ -75,6 +80,25 @@ test('mobile operations tab uses active trade chart and compact complete data', 
 
   assert.match(source, /history\.slice\(0, 3\)/);
   assert.match(source, /Ver mais/);
+});
+
+test('mobile operations source uses open positions endpoint and stable id selection', () => {
+  assert.match(demoApiSource, /export async function loadOpenDemoPositions\(\): Promise<DemoTrade\[]>/);
+  assert.match(demoApiSource, /request<DemoTrade\[]>\('\/api\/demo\/positions'\)/);
+  assert.match(source, /const \[mobileOpenTrades, setMobileOpenTrades\]/);
+  assert.match(source, /const \[selectedMobileTradeId, setSelectedMobileTradeId\]/);
+  assert.match(source, /loadOpenDemoPositions\(\)/);
+  assert.match(source, /trade\.id === current/);
+  assert.match(source, /positions\[0\]\?\.id \?\? null/);
+  assert.match(source, /sortOpenTrades\(await loadOpenDemoPositions\(\)\)/);
+});
+
+test('mobile operations fetch prices per pair without global market contamination', () => {
+  assert.match(source, /const pairs = Array\.from\(new Set\(positions\.map\(\(trade\) => trade\.pair\)\)\)/);
+  assert.match(source, /fetchPrice\(pair, priceController\?\.signal\)/);
+  assert.match(source, /pricesByPair\[trade\.pair\]/);
+  assert.match(source, /mobileTradeOpenPnl\(trade, currentPrice\)/);
+  assert.doesNotMatch(mobileOperationsSource, /market\.price/);
 });
 
 test('compact chart mode preserves desktop default while hiding mobile chrome', () => {
