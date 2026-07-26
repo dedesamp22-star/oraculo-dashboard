@@ -123,9 +123,10 @@ interface Props {
   interval: TVInterval;
   /** Container height — pixels (number) or any CSS value like "45vh" */
   height?: number | string;
+  compact?: boolean;
 }
 
-export function TradingViewChart({ symbol, interval, height = 540 }: Props) {
+export function TradingViewChart({ symbol, interval, height = 540, compact = false }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   // Stable, unique container ID — never changes for the lifetime of this mount
   const containerId  = useRef(`tv_${Math.random().toString(36).slice(2, 10)}`);
@@ -179,11 +180,11 @@ export function TradingViewChart({ symbol, interval, height = 540 }: Props) {
           style:               '1',           // candles
           locale:              'br',
           allow_symbol_change: false,         // symbol controlled from our UI
-          hide_side_toolbar:   false,         // keep drawing tools
-          hide_top_toolbar:    false,         // keep toolbar
-          hide_legend:         false,
-          withdateranges:      true,
-          save_image:          true,
+          hide_side_toolbar:   compact ? true : false,
+          hide_top_toolbar:    compact ? true : false,
+          hide_legend:         compact ? true : false,
+          withdateranges:      compact ? false : true,
+          save_image:          compact ? false : true,
           enable_publishing:   false,
           backgroundColor:     'rgba(5, 8, 16, 1)',
           gridColor:           'rgba(255, 255, 255, 0.04)',

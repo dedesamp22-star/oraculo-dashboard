@@ -57,6 +57,10 @@ function fmtSignedCurrency(n: number | null | undefined): string {
   return `${n >= 0 ? '+' : '-'}$${fmtPrice(Math.abs(n))}`;
 }
 
+function fmtQuantity(n: number | null | undefined): string {
+  return isFiniteNumber(n) ? n.toFixed(6) : '--';
+}
+
 function signedColor(n: number | null | undefined): string {
   if (!isFiniteNumber(n)) return '#aaaaaa';
   return n >= 0 ? '#00ff66' : '#ff4444';
@@ -780,35 +784,78 @@ function MobileSummaryTab({
 
 function MobileOperationCard({ trade, currentPrice }: { trade: NonNullable<DemoSession['activeTrade']>; currentPrice: number | null }) {
   const remainingSize = trade.remainingPositionSize ?? trade.positionSize;
+  const realizedPnl = isFiniteNumber(trade.realizedPnlUSDC) ? trade.realizedPnlUSDC : 0;
   const floating = currentPrice !== null
     ? trade.direction === 'BUY'
       ? (currentPrice - trade.entry) * remainingSize
       : (trade.entry - currentPrice) * remainingSize
     : null;
   const ageMs = Date.now() - trade.openTime;
+  const trailingActive = trade.target1Hit && trade.isBreakevenStop;
+  const latestReason = trade.signalReasons.at(-1) ?? trade.marketConditions;
+  const baseAsset = trade.pair.replace('USDT', '').replace('USDC', '');
   return (
-    <article className="border border-primary/25 bg-primary/[0.04] p-3">
-      <div className="flex items-start justify-between gap-2">
+    <article className="overflow-hidden border border-primary/25 bg-primary/[0.04]">
+      <div className="flex items-center justify-between gap-2 border-b border-border/35 px-3 py-2">
         <div className="min-w-0">
-          <p className="text-[10px] font-mono font-bold uppercase tracking-[0.16em]" style={{ color: directionColor(trade.direction) }}>
+          <p className="text-[10px] font-mono font-bold uppercase tracking-[0.14em] truncate" style={{ color: directionColor(trade.direction) }}>
             {trade.direction} {trade.pair}
           </p>
-          <p className="text-[9px] font-mono text-muted-foreground/70">Aberta ha {fmtDuration(ageMs)}</p>
+          <p className="text-[9px] font-mono text-muted-foreground/70">Duracao {fmtDuration(ageMs)}</p>
         </div>
-        <p className="text-xs font-mono font-bold tabular-nums" style={{ color: signedColor(floating) }}>{fmtSignedCurrency(floating)}</p>
+        <p className="text-sm font-mono font-bold tabular-nums" style={{ color: signedColor(floating) }}>{fmtSignedCurrency(floating)}</p>
       </div>
-      <div className="mt-3 grid grid-cols-2 gap-2">
+
+      <div className="h-[230px] w-full border-b border-border/35 bg-background/40">
+        <TradingViewChart
+          key={`mobile-active-${trade.pair}`}
+          symbol={`BINANCE:${trade.pair}`}
+          interval="5"
+          height={230}
+          compact
+        />
+      </div>
+
+      <div className="grid grid-cols-2 min-[390px]:grid-cols-3 gap-1.5 p-2">
         <MobileMiniCell label="Entrada" value={fmtCurrency(trade.entry)} color="#ffffff" />
         <MobileMiniCell label="Atual" value={fmtCurrency(currentPrice)} color="#00f0ff" />
-        <MobileMiniCell label="Stop" value={fmtCurrency(trade.stopLoss)} color="#ff4444" />
-        <MobileMiniCell label="Alvo" value={fmtCurrency(trade.target1Hit ? trade.target2 : trade.target1)} color="#00ff66" />
+        <MobileMiniCell label="P&L aberto" value={fmtSignedCurrency(floating)} color={signedColor(floating)} />
+        <MobileMiniCell label="Stop Loss" value={fmtCurrency(trade.stopLoss)} color={trade.isBreakevenStop ? '#00ff66' : '#ff4444'} />
+        <MobileMiniCell label="Alvo 1" value={fmtCurrency(trade.target1)} color={trade.target1Hit ? '#00ff66' : '#00cc55'} />
+        <MobileMiniCell label="Alvo 2" value={fmtCurrency(trade.target2)} color="#00aa44" />
+        <MobileMiniCell label="Qtd restante" value={`${fmtQuantity(remainingSize)} ${baseAsset}`} color="#cccccc" />
+        <MobileMiniCell label="Risco" value={fmtCurrency(trade.riskAmount)} color="#ffaa00" />
+        <MobileMiniCell label="P&L realizado" value={fmtSignedCurrency(realizedPnl)} color={signedColor(realizedPnl)} />
+      </div>
+
+      <div className="border-t border-border/35 px-3 py-2">
+        <div className="grid grid-cols-3 gap-1.5">
+          <MobileStatusPill label="Parcial" value={trade.target1Hit ? 'concluida' : 'pendente'} color={trade.target1Hit ? '#00ff66' : '#ffaa00'} />
+          <MobileStatusPill label="Breakeven" value={trade.isBreakevenStop ? 'ativo' : 'pendente'} color={trade.isBreakevenStop ? '#00ff66' : '#ffaa00'} />
+          <MobileStatusPill label="Trailing" value={trailingActive ? 'ativo' : 'aguarda'} color={trailingActive ? '#00ff66' : '#ffaa00'} />
+        </div>
+        {latestReason && (
+          <p className="mt-2 text-[9px] font-mono text-muted-foreground/70 leading-snug line-clamp-2">
+            <span className="text-foreground/60">Motivo atual:</span> {latestReason}
+          </p>
+        )}
       </div>
     </article>
   );
 }
 
+function MobileStatusPill({ label, value, color }: { label: string; value: string; color: string }) {
+  return (
+    <div className="min-w-0 border px-2 py-1.5" style={{ borderColor: `${color}30`, background: `${color}0b` }}>
+      <p className="text-[7px] font-mono uppercase tracking-[0.1em] text-muted-foreground truncate">{label}</p>
+      <p className="text-[9px] font-mono font-bold uppercase truncate" style={{ color }}>{value}</p>
+    </div>
+  );
+}
+
 function MobileCompactHistory({ history }: { history: DemoSession['history'] }) {
-  const recent = history.slice(0, 4);
+  const [expanded, setExpanded] = useState(false);
+  const recent = expanded ? history : history.slice(0, 3);
   if (recent.length === 0) {
     return <p className="text-[10px] font-mono text-muted-foreground/60">Historico vazio.</p>;
   }
@@ -823,16 +870,21 @@ function MobileCompactHistory({ history }: { history: DemoSession['history'] }) 
           <p className="text-[10px] font-mono font-bold tabular-nums" style={{ color: signedColor(trade.pnlUSDC) }}>{fmtSignedCurrency(trade.pnlUSDC)}</p>
         </div>
       ))}
+      {history.length > 3 && (
+        <button
+          onClick={() => setExpanded(value => !value)}
+          className="min-h-9 border border-border/45 bg-background/20 px-3 py-2 text-[10px] font-mono uppercase tracking-[0.14em] text-muted-foreground"
+        >
+          {expanded ? 'Ver menos' : `Ver mais (${history.length - 3})`}
+        </button>
+      )}
     </div>
   );
 }
 
-function MobileOperationsTab({ session, currentPrice, countdown, safeLimited, safeReason }: {
+function MobileOperationsTab({ session, currentPrice }: {
   session: DemoSession;
   currentPrice: number | null;
-  countdown: string;
-  safeLimited: boolean;
-  safeReason?: string;
 }) {
   const openTrades = session.activeTrade ? [session.activeTrade] : [];
   return (
@@ -843,11 +895,8 @@ function MobileOperationsTab({ session, currentPrice, countdown, safeLimited, sa
             {openTrades.map((trade) => <MobileOperationCard key={trade.id} trade={trade} currentPrice={currentPrice} />)}
           </div>
         ) : (
-          <MobileEmptyOperation safeLimited={safeLimited} safeReason={safeReason} countdown={countdown} />
+          <p className="text-[10px] font-mono text-muted-foreground/65">Nenhuma operacao aberta.</p>
         )}
-        <p className="mt-2 text-[9px] font-mono text-muted-foreground/45 leading-snug">
-          Fonte atual do frontend expõe uma posição ativa por sessão; múltiplas posições abertas serão listadas quando a API fornecer a coleção completa.
-        </p>
       </MobileSection>
       <MobileSection title="Historico recente">
         <MobileCompactHistory history={session.history} />
@@ -1422,9 +1471,6 @@ export default function Home() {
             <MobileOperationsTab
               session={demoSession}
               currentPrice={activeTradeCurrentPrice}
-              countdown={demoAutoState.countdown}
-              safeLimited={safeLimited}
-              safeReason={safeReason}
             />
           )}
 
