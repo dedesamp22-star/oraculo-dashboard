@@ -18,7 +18,7 @@ import { useOracleGlobalState } from '../hooks/useOracleGlobalState';
 import { useOnlineStatus }      from '../hooks/useOnlineStatus';
 import { runEngine, type EngineResult, type RuleStep, type StepStatus, type Decision } from '../lib/analysis';
 import { fmtTimeSP, fmtSPNow, isOperational as checkOperational } from '../lib/schedule';
-import { type DemoSession } from '../lib/demo';
+import { fmtDuration, type DemoSession } from '../lib/demo';
 import { TradingViewChart, type TVInterval } from '../components/TradingViewChart';
 import { DemoActivePanel }   from '../components/DemoActivePanel';
 import { DemoHistoryPanel }  from '../components/DemoHistoryPanel';
@@ -31,7 +31,8 @@ import { NotificationsPanel } from '../components/NotificationsPanel';
 import { ObservabilityPanel } from '../components/ObservabilityPanel';
 import { EngineAuditPanel } from '../components/EngineAuditPanel';
 import { PremiumLanding } from '../components/PremiumLanding';
-import { getAuth, loginUser, logoutUser, type AuthUser } from '../lib/demoApi';
+import { fetchEngineAuditLog, getAuth, loginUser, logoutUser, type AuthUser, type EngineAuditEntry } from '../lib/demoApi';
+import { buildEngineAuditInsight } from '../lib/engineAuditInsight';
 import { fetchPrice } from '../lib/binance';
 import { resolveOracleVisualState, type OracleVisualState } from '@shared/oracleVisualState';
 import { APP_DISPLAY_NAME, APP_NAME, APP_VERSION } from '@shared/appVersion';
@@ -550,38 +551,6 @@ function DemoStatusBadge({ enabled, limited, reason }: {
 
 // â”€â”€ Main â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-function MobileSystemStatus({
-  apiOnline,
-  binanceOnline,
-  demoEnabled,
-  safeLimited,
-  symbol,
-  lastUpdate,
-}: {
-  apiOnline: boolean;
-  binanceOnline: boolean;
-  demoEnabled: boolean;
-  safeLimited: boolean;
-  symbol: string;
-  lastUpdate: Date | null;
-}) {
-  const systemOnline = apiOnline && binanceOnline;
-  return (
-    <section className="lg:hidden border border-border/60 bg-card/40 p-3">
-      <div className="grid grid-cols-2 gap-2">
-        <MobileMiniCell label="Sistema" value={systemOnline ? 'Online' : 'Offline'} color={systemOnline ? '#00ff66' : '#ff4444'} />
-        <MobileMiniCell label="Demo" value={demoEnabled ? safeLimited ? 'Pausado' : 'Ativo' : 'Inativo'} color={demoEnabled && !safeLimited ? '#00f0ff' : '#ffaa00'} />
-        <MobileMiniCell label="Par" value={symbol.replace('USDT', '')} color="#ffffff" />
-        <MobileMiniCell
-          label="Atualizacao"
-          value={lastUpdate ? lastUpdate.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--'}
-          color="#aaaaaa"
-        />
-      </div>
-    </section>
-  );
-}
-
 function MobileMiniCell({ label, value, color }: { label: string; value: string; color: string }) {
   return (
     <div className="min-w-0 border border-border/40 bg-background/25 px-3 py-2">
@@ -679,6 +648,316 @@ function MobilePanelOverview({ session }: { session: DemoSession }) {
   );
 }
 
+type MobileTab = 'summary' | 'operations' | 'radar' | 'audit' | 'more';
+
+function shortSymbol(symbol: string): string {
+  return symbol.replace('USDT', '');
+}
+
+function directionColor(direction: string | null | undefined): string {
+  if (direction === 'BUY' || direction === 'COMPRA') return '#00ff66';
+  if (direction === 'SELL' || direction === 'VENDA') return '#ff4444';
+  return '#ffaa00';
+}
+
+function MobileBottomNav({ tab, onChange }: { tab: MobileTab; onChange: (tab: MobileTab) => void }) {
+  const items: Array<{ key: MobileTab; label: string; icon: React.ReactNode }> = [
+    { key: 'summary', label: 'Resumo', icon: <Activity className="w-4 h-4" /> },
+    { key: 'operations', label: 'Operacoes', icon: <Crosshair className="w-4 h-4" /> },
+    { key: 'radar', label: 'Radar', icon: <Bot className="w-4 h-4" /> },
+    { key: 'audit', label: 'Auditor', icon: <ShieldAlert className="w-4 h-4" /> },
+    { key: 'more', label: 'Mais', icon: <ChevronUp className="w-4 h-4" /> },
+  ];
+  return (
+    <nav className="lg:hidden fixed inset-x-0 bottom-0 z-50 border-t border-border/70 bg-background/95 backdrop-blur-xl px-2 pt-1.5 pb-[calc(0.45rem+env(safe-area-inset-bottom))]">
+      <div className="grid grid-cols-5 gap-1">
+        {items.map((item) => {
+          const active = tab === item.key;
+          return (
+            <button
+              key={item.key}
+              onClick={() => onChange(item.key)}
+              className={`min-h-12 flex flex-col items-center justify-center gap-1 border text-[8px] font-mono uppercase tracking-[0.08em] transition-all ${
+                active
+                  ? 'border-primary/70 bg-primary/15 text-primary shadow-[0_0_14px_rgba(0,216,255,0.18)]'
+                  : 'border-transparent text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {item.icon}
+              <span className="leading-none truncate max-w-full">{item.label}</span>
+            </button>
+          );
+        })}
+      </div>
+    </nav>
+  );
+}
+
+function MobileSection({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) {
+  return (
+    <section className="border border-border/55 bg-card/35 p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h2 className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-foreground/85 truncate">{title}</h2>
+        {action}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function MobileSummaryTab({
+  session,
+  apiOnline,
+  binanceOnline,
+  demoEnabled,
+  safeLimited,
+  safeReason,
+  agents,
+  globalRisk,
+  canAnalyze,
+  analyzing,
+  onAnalyze,
+}: {
+  session: DemoSession;
+  apiOnline: boolean;
+  binanceOnline: boolean;
+  demoEnabled: boolean;
+  safeLimited: boolean;
+  safeReason?: string;
+  agents: ReturnType<typeof useDemoAgents>['agents'];
+  globalRisk: ReturnType<typeof useDemoAgents>['globalRisk'];
+  canAnalyze: boolean;
+  analyzing: boolean;
+  onAnalyze: () => void;
+}) {
+  const systemOnline = apiOnline && binanceOnline;
+  return (
+    <div className="flex flex-col gap-3">
+      <MobileSection title="Status">
+        <div className="grid grid-cols-2 gap-2">
+          <MobileMiniCell label="Sistema" value={systemOnline ? 'Online' : 'Offline'} color={systemOnline ? '#00ff66' : '#ff4444'} />
+          <MobileMiniCell label="Demo" value={demoEnabled ? safeLimited ? 'Pausado' : 'Ativo' : 'Inativo'} color={demoEnabled && !safeLimited ? '#00f0ff' : '#ffaa00'} />
+        </div>
+        {safeLimited && <p className="mt-2 text-[10px] font-mono text-[#ffaa00] leading-snug">{safeReason}</p>}
+      </MobileSection>
+
+      <MobileSection title="Banca">
+        <div className="grid grid-cols-2 gap-2">
+          <MobileMiniCell label="Saldo" value={fmtCurrency(session.balance)} color="#ffffff" />
+          <MobileMiniCell label="P&L dia" value={fmtSignedCurrency(session.dailyStats?.dailyPnL)} color={signedColor(session.dailyStats?.dailyPnL)} />
+          <MobileMiniCell label="Risco aberto" value={fmtCurrency(session.openRiskUSDC)} color="#ffaa00" />
+          <MobileMiniCell label="Posicoes" value={`${globalRisk.openPositionsCount}/3`} color={globalRisk.openPositionsCount > 0 ? '#00f0ff' : '#aaaaaa'} />
+        </div>
+      </MobileSection>
+
+      <MobileSection title="Ativos">
+        <div className="grid grid-cols-3 gap-2">
+          {Object.values(agents).map((agent) => (
+            <div key={agent.agentId} className="border border-border/40 bg-background/25 px-2 py-2 min-w-0">
+              <p className="text-[8px] font-mono uppercase text-muted-foreground truncate">{shortSymbol(agent.symbol)}</p>
+              <p className="mt-0.5 text-[10px] font-mono font-bold uppercase truncate" style={{ color: directionColor(agent.lastDecision) }}>
+                {agent.lastDecision}
+              </p>
+              <p className="text-[9px] font-mono text-muted-foreground/70">Indice {agent.oracleScore}</p>
+            </div>
+          ))}
+        </div>
+      </MobileSection>
+
+      <button
+        onClick={onAnalyze}
+        disabled={!canAnalyze}
+        className={`min-h-12 w-full border px-4 py-3 text-[11px] font-mono font-bold uppercase tracking-[0.16em] flex items-center justify-center gap-2 ${
+          canAnalyze ? 'border-primary bg-primary text-primary-foreground' : 'border-primary/20 bg-primary/10 text-primary/40'
+        }`}
+      >
+        <Zap className="w-4 h-4" />
+        {analyzing ? 'Analisando' : 'Analisar agora'}
+      </button>
+    </div>
+  );
+}
+
+function MobileOperationCard({ trade, currentPrice }: { trade: NonNullable<DemoSession['activeTrade']>; currentPrice: number | null }) {
+  const remainingSize = trade.remainingPositionSize ?? trade.positionSize;
+  const floating = currentPrice !== null
+    ? trade.direction === 'BUY'
+      ? (currentPrice - trade.entry) * remainingSize
+      : (trade.entry - currentPrice) * remainingSize
+    : null;
+  const ageMs = Date.now() - trade.openTime;
+  return (
+    <article className="border border-primary/25 bg-primary/[0.04] p-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-[10px] font-mono font-bold uppercase tracking-[0.16em]" style={{ color: directionColor(trade.direction) }}>
+            {trade.direction} {trade.pair}
+          </p>
+          <p className="text-[9px] font-mono text-muted-foreground/70">Aberta ha {fmtDuration(ageMs)}</p>
+        </div>
+        <p className="text-xs font-mono font-bold tabular-nums" style={{ color: signedColor(floating) }}>{fmtSignedCurrency(floating)}</p>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <MobileMiniCell label="Entrada" value={fmtCurrency(trade.entry)} color="#ffffff" />
+        <MobileMiniCell label="Atual" value={fmtCurrency(currentPrice)} color="#00f0ff" />
+        <MobileMiniCell label="Stop" value={fmtCurrency(trade.stopLoss)} color="#ff4444" />
+        <MobileMiniCell label="Alvo" value={fmtCurrency(trade.target1Hit ? trade.target2 : trade.target1)} color="#00ff66" />
+      </div>
+    </article>
+  );
+}
+
+function MobileCompactHistory({ history }: { history: DemoSession['history'] }) {
+  const recent = history.slice(0, 4);
+  if (recent.length === 0) {
+    return <p className="text-[10px] font-mono text-muted-foreground/60">Historico vazio.</p>;
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      {recent.map((trade) => (
+        <div key={trade.id} className="flex items-center justify-between gap-2 border border-border/35 bg-background/20 px-3 py-2">
+          <div className="min-w-0">
+            <p className="text-[10px] font-mono font-bold uppercase truncate">{trade.pair} {trade.direction}</p>
+            <p className="text-[9px] font-mono text-muted-foreground/60 truncate">{trade.exitReason ?? trade.status}</p>
+          </div>
+          <p className="text-[10px] font-mono font-bold tabular-nums" style={{ color: signedColor(trade.pnlUSDC) }}>{fmtSignedCurrency(trade.pnlUSDC)}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MobileOperationsTab({ session, currentPrice, countdown, safeLimited, safeReason }: {
+  session: DemoSession;
+  currentPrice: number | null;
+  countdown: string;
+  safeLimited: boolean;
+  safeReason?: string;
+}) {
+  const openTrades = session.activeTrade ? [session.activeTrade] : [];
+  return (
+    <div className="flex flex-col gap-3">
+      <MobileSection title="Operacoes abertas">
+        {openTrades.length > 0 ? (
+          <div className="flex flex-col gap-2">
+            {openTrades.map((trade) => <MobileOperationCard key={trade.id} trade={trade} currentPrice={currentPrice} />)}
+          </div>
+        ) : (
+          <MobileEmptyOperation safeLimited={safeLimited} safeReason={safeReason} countdown={countdown} />
+        )}
+        <p className="mt-2 text-[9px] font-mono text-muted-foreground/45 leading-snug">
+          Fonte atual do frontend expõe uma posição ativa por sessão; múltiplas posições abertas serão listadas quando a API fornecer a coleção completa.
+        </p>
+      </MobileSection>
+      <MobileSection title="Historico recente">
+        <MobileCompactHistory history={session.history} />
+      </MobileSection>
+    </div>
+  );
+}
+
+function mainRadarReason(analysis: ReturnType<typeof useMarketRadar>['analysis']): string {
+  if (!analysis) return 'Aguardando leitura.';
+  return analysis.decisiveReason || analysis.blockedReasons[0] || analysis.missingConditions[0] || 'Sem motivo decisivo.';
+}
+
+function MobileRadarTab({
+  analysis,
+  loading,
+  error,
+  agents,
+  selectedSymbol,
+  onSymbolChange,
+}: {
+  analysis: ReturnType<typeof useMarketRadar>['analysis'];
+  loading: boolean;
+  error: string | null;
+  agents: ReturnType<typeof useDemoAgents>['agents'];
+  selectedSymbol: ReturnType<typeof useMarketRadar>['symbol'];
+  onSymbolChange: ReturnType<typeof useMarketRadar>['setSymbol'];
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      <MobileSection title="Radar">
+        <div className="grid grid-cols-1 gap-2">
+          {Object.values(agents).map((agent) => {
+            const selected = agent.symbol === selectedSymbol;
+            const source = selected ? analysis : null;
+            const direction = source?.suggestedDirection ?? agent.lastDecision;
+            const score = source?.score ?? agent.oracleScore;
+            return (
+              <button
+                key={agent.agentId}
+                onClick={() => onSymbolChange(agent.symbol)}
+                className={`min-h-20 border p-3 text-left ${selected ? 'border-primary/70 bg-primary/[0.08]' : 'border-border/45 bg-background/20'}`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-mono font-bold uppercase tracking-[0.16em]">{shortSymbol(agent.symbol)}</span>
+                  <span className="text-xs font-mono font-bold" style={{ color: directionColor(direction) }}>{direction}</span>
+                </div>
+                <div className="mt-2 grid grid-cols-3 gap-1 text-[9px] font-mono text-muted-foreground">
+                  <span>Score <b className="text-foreground">{score}</b></span>
+                  <span>1h <b className="text-foreground">{source?.trend1h ?? '-'}</b></span>
+                  <span>15m <b className="text-foreground">{source?.trend15m ?? '-'}</b></span>
+                </div>
+                <p className="mt-2 text-[10px] font-mono text-muted-foreground/75 line-clamp-2">
+                  {selected ? mainRadarReason(analysis) : 'Toque para carregar a analise completa deste ativo.'}
+                </p>
+              </button>
+            );
+          })}
+        </div>
+        {loading && <p className="mt-2 text-[10px] font-mono text-primary">Atualizando radar...</p>}
+        {error && <p className="mt-2 text-[10px] font-mono text-[#ff4444]">{error}</p>}
+      </MobileSection>
+    </div>
+  );
+}
+
+function MobileAuditTab({ entries, loading, error }: { entries: EngineAuditEntry[]; loading: boolean; error: string | null }) {
+  const latest = entries[0] ?? null;
+  const insight = buildEngineAuditInsight(latest);
+  return (
+    <div className="flex flex-col gap-3">
+      <MobileSection title="Auditor">
+        {loading && <p className="text-[10px] font-mono text-primary">Carregando auditoria...</p>}
+        {error && <p className="text-[10px] font-mono text-[#ff4444]">{error}</p>}
+        {!loading && !error && latest && (
+          <div className="space-y-3">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <p className="text-[10px] font-mono font-bold uppercase tracking-[0.16em]">{latest.symbol}</p>
+                <p className="text-[9px] font-mono text-muted-foreground">{insight.stageLabel}</p>
+              </div>
+              <p className="text-xs font-mono font-bold text-primary">{insight.progressPct}%</p>
+            </div>
+            <div className="h-1.5 bg-border/50 overflow-hidden">
+              <div className="h-full bg-primary" style={{ width: `${Math.max(0, Math.min(100, insight.progressPct))}%` }} />
+            </div>
+            <p className="text-[10px] font-mono text-foreground/75 leading-snug">{insight.decisiveReason}</p>
+            <div className="grid grid-cols-1 gap-2">
+              <MobileAuditList title="Confirmado" items={insight.confirmed} color="#00ff66" />
+              <MobileAuditList title="Pendente" items={insight.pending} color="#ffaa00" />
+            </div>
+          </div>
+        )}
+        {!loading && !error && !latest && <p className="text-[10px] font-mono text-muted-foreground/60">Nenhum registro de auditoria encontrado.</p>}
+      </MobileSection>
+    </div>
+  );
+}
+
+function MobileAuditList({ title, items, color }: { title: string; items: string[]; color: string }) {
+  return (
+    <div className="border border-border/35 bg-background/20 px-3 py-2">
+      <p className="text-[8px] font-mono uppercase tracking-[0.14em]" style={{ color }}>{title}</p>
+      <p className="mt-1 text-[10px] font-mono text-muted-foreground/75 leading-snug">
+        {items.length > 0 ? items.slice(0, 4).join(', ') : 'Sem dados.'}
+      </p>
+    </div>
+  );
+}
+
 let alertIdCounter = 0;
 
 export default function Home() {
@@ -698,8 +977,11 @@ export default function Home() {
 
   // Steps expand/collapse
   const [stepsExpanded, setStepsExpanded] = useState(false);
-  const [mobileTab, setMobileTab] = useState<'operation' | 'panel'>('operation');
+  const [mobileTab, setMobileTab] = useState<MobileTab>('summary');
   const [mobileChartOpen, setMobileChartOpen] = useState(false);
+  const [mobileAuditEntries, setMobileAuditEntries] = useState<EngineAuditEntry[]>([]);
+  const [mobileAuditLoading, setMobileAuditLoading] = useState(false);
+  const [mobileAuditError, setMobileAuditError] = useState<string | null>(null);
   const manualAnalyzeTimeoutRef = useRef<number | null>(null);
 
   // Alerts
@@ -836,6 +1118,34 @@ export default function Home() {
       updatePrice(activeTradeCurrentPrice, activeTradePair);
     }
   }, [activeTradeCurrentPrice, activeTradePair, isAuthenticated, updatePrice]);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setMobileAuditEntries([]);
+      setMobileAuditLoading(false);
+      setMobileAuditError(null);
+      return;
+    }
+    let cancelled = false;
+    const loadAudit = async () => {
+      setMobileAuditLoading(true);
+      setMobileAuditError(null);
+      try {
+        const response = await fetchEngineAuditLog({ limit: 6 });
+        if (!cancelled) setMobileAuditEntries(response.entries);
+      } catch (err) {
+        if (!cancelled) setMobileAuditError(err instanceof Error ? err.message : 'Falha ao carregar auditoria.');
+      } finally {
+        if (!cancelled) setMobileAuditLoading(false);
+      }
+    };
+    void loadAudit();
+    const id = window.setInterval(loadAudit, 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [isAuthenticated]);
 
   const maxDailyTrades = demoSession.settings?.maxDailyTrades ?? 0;
   const safeLimited = demoSession.safetyLimit?.limited ?? false;
@@ -1091,122 +1401,102 @@ export default function Home() {
           </div>
         </section>
 
-        <div className="lg:hidden grid grid-cols-2 gap-2 border border-border/60 bg-card/40 p-1">
-          {([
-            ['operation', 'Operacao'],
-            ['panel', 'Painel'],
-          ] as const).map(([key, label]) => (
-            <button
-              key={key}
-              onClick={() => setMobileTab(key)}
-              className={`py-2.5 text-[11px] font-mono uppercase tracking-[0.18em] transition-all ${
-                mobileTab === key
-                  ? 'bg-primary text-primary-foreground shadow-[0_0_10px_var(--color-primary)]'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-
-        <div className={`${mobileTab === 'operation' ? 'flex' : 'hidden'} lg:hidden flex-col gap-3`}>
-          <MobileSystemStatus
-            apiOnline={!apiHealth.error && !apiHealth.loading}
-            binanceOnline={!!apiHealth.health?.binance.ok && !market.error}
-            demoEnabled={demoEnabled}
-            safeLimited={safeLimited}
-            symbol={radar.symbol}
-            lastUpdate={market.lastUpdate ?? radar.lastUpdate}
-          />
-
-          {demoSession.activeTrade ? (
-            <DemoActivePanel trade={demoSession.activeTrade} currentPrice={activeTradeCurrentPrice} />
-          ) : (
-            <MobileEmptyOperation safeLimited={safeLimited} safeReason={safeReason} countdown={demoAutoState.countdown} />
+        <div className="lg:hidden pb-24">
+          {mobileTab === 'summary' && (
+            <MobileSummaryTab
+              session={demoSession}
+              apiOnline={!apiHealth.error && !apiHealth.loading}
+              binanceOnline={!!apiHealth.health?.binance.ok && !market.error}
+              demoEnabled={demoEnabled}
+              safeLimited={safeLimited}
+              safeReason={safeReason}
+              agents={demoAgents.agents}
+              globalRisk={demoAgents.globalRisk}
+              canAnalyze={canAnalyze}
+              analyzing={analyzing}
+              onAnalyze={handleManualAnalyze}
+            />
           )}
 
-          <MobileActions
-            canAnalyze={canAnalyze}
-            analyzing={analyzing}
-            loading={market.loading || radar.loading}
-            demoEnabled={demoEnabled}
-            marketError={market.error}
-            onAnalyze={handleManualAnalyze}
-            onRefresh={handleRefreshMobile}
-            onAutomationChange={(enabled) => setAutomationEnabled(enabled, radar.symbol)}
-          />
-
-          <MarketRadarPanel
-            analysis={radar.analysis}
-            loading={radar.loading}
-            error={radar.error}
-            lastUpdate={radar.lastUpdate}
-            symbol={radar.symbol}
-            onSymbolChange={radar.setSymbol}
-          />
-          <RobotDiagnosticsPanel user={authUser} />
-
-          <button
-            onClick={() => setMobileChartOpen(open => !open)}
-            className="flex min-h-11 items-center justify-between border border-border/60 bg-card/40 px-4 py-3"
-          >
-            <span className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-[0.18em] text-muted-foreground">
-              <BarChart2 className="w-3.5 h-3.5 text-primary" />
-              Grafico
-            </span>
-            {mobileChartOpen
-              ? <ChevronUp className="w-4 h-4 text-muted-foreground/60" />
-              : <ChevronDown className="w-4 h-4 text-muted-foreground/60" />
-            }
-          </button>
-          <section className={`${mobileChartOpen ? 'block' : 'hidden'} bg-card/50 border border-border overflow-hidden`}>
-            <TradingViewChart key={`mobile-${radar.symbol}-${tvInterval}`} symbol={`BINANCE:${radar.symbol}`} interval={tvInterval} height={360} />
-          </section>
-        </div>
-
-        <div className={`${mobileTab === 'panel' ? 'flex' : 'hidden'} lg:hidden flex-col gap-3`}>
-          <NotificationsPanel />
-          <MobilePanelOverview session={demoSession} />
-          <DemoAgentsPanel
-            agents={demoAgents.agents}
-            configs={demoAgents.configs}
-            portfolio={demoAgents.portfolio}
-            globalRisk={demoAgents.globalRisk}
-            selectedSymbol={radar.symbol}
-            onSelectSymbol={radar.setSymbol}
-          />
-          {authUser.role === 'admin' && <ControlledSimulationPanel />}
-          {authUser.role === 'admin' && (
-            <ObservabilityPanel publicHealth={apiHealth.health} publicError={apiHealth.error} />
+          {mobileTab === 'operations' && (
+            <MobileOperationsTab
+              session={demoSession}
+              currentPrice={activeTradeCurrentPrice}
+              countdown={demoAutoState.countdown}
+              safeLimited={safeLimited}
+              safeReason={safeReason}
+            />
           )}
-          {authUser.role === 'admin' && <EngineAuditPanel />}
-          <RobotDiagnosticsPanel user={authUser} />
-          <MarketRadarPanel
-            analysis={radar.analysis}
-            loading={radar.loading}
-            error={radar.error}
-            lastUpdate={radar.lastUpdate}
-            symbol={radar.symbol}
-            onSymbolChange={radar.setSymbol}
-          />
-          <DemoStatsPanel
-            stats={demoSession.dailyStats}
-            currentBalance={demoSession.balance}
-            configuredBalance={demoSession.configuredBalance}
-            realizedPnl={demoSession.realizedPnlUSDC ?? 0}
-            unrealizedPnl={demoSession.unrealizedPnlUSDC ?? 0}
-            partialPnl={demoSession.partialPnlUSDC ?? 0}
-            openRisk={demoSession.openRiskUSDC ?? 0}
-            maxDailyTrades={maxDailyTrades}
-            onReset={() => resetSession(demoSession.configuredBalance)}
-            onBalanceChange={b => {
-              setConfiguredBalance(b);
-              resetSession(b);
-            }}
-          />
-          <DemoHistoryPanel history={demoSession.history} />
+
+          {mobileTab === 'radar' && (
+            <MobileRadarTab
+              analysis={radar.analysis}
+              loading={radar.loading}
+              error={radar.error}
+              agents={demoAgents.agents}
+              selectedSymbol={radar.symbol}
+              onSymbolChange={radar.setSymbol}
+            />
+          )}
+
+          {mobileTab === 'audit' && (
+            <MobileAuditTab entries={mobileAuditEntries} loading={mobileAuditLoading} error={mobileAuditError} />
+          )}
+
+          {mobileTab === 'more' && (
+            <div className="flex flex-col gap-3">
+              <MobileActions
+                canAnalyze={canAnalyze}
+                analyzing={analyzing}
+                loading={market.loading || radar.loading}
+                demoEnabled={demoEnabled}
+                marketError={market.error}
+                onAnalyze={handleManualAnalyze}
+                onRefresh={handleRefreshMobile}
+                onAutomationChange={(enabled) => setAutomationEnabled(enabled, radar.symbol)}
+              />
+              <button
+                onClick={() => setMobileChartOpen(open => !open)}
+                className="flex min-h-11 items-center justify-between border border-border/60 bg-card/40 px-4 py-3"
+              >
+                <span className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-[0.18em] text-muted-foreground">
+                  <BarChart2 className="w-3.5 h-3.5 text-primary" />
+                  Grafico
+                </span>
+                {mobileChartOpen
+                  ? <ChevronUp className="w-4 h-4 text-muted-foreground/60" />
+                  : <ChevronDown className="w-4 h-4 text-muted-foreground/60" />
+                }
+              </button>
+              <section className={`${mobileChartOpen ? 'block' : 'hidden'} bg-card/50 border border-border overflow-hidden`}>
+                <TradingViewChart key={`mobile-${radar.symbol}-${tvInterval}`} symbol={`BINANCE:${radar.symbol}`} interval={tvInterval} height={320} />
+              </section>
+              <NotificationsPanel />
+              <DemoStatsPanel
+                stats={demoSession.dailyStats}
+                currentBalance={demoSession.balance}
+                configuredBalance={demoSession.configuredBalance}
+                realizedPnl={demoSession.realizedPnlUSDC ?? 0}
+                unrealizedPnl={demoSession.unrealizedPnlUSDC ?? 0}
+                partialPnl={demoSession.partialPnlUSDC ?? 0}
+                openRisk={demoSession.openRiskUSDC ?? 0}
+                maxDailyTrades={maxDailyTrades}
+                onReset={() => resetSession(demoSession.configuredBalance)}
+                onBalanceChange={b => {
+                  setConfiguredBalance(b);
+                  resetSession(b);
+                }}
+              />
+              {authUser.role === 'admin' && <ControlledSimulationPanel />}
+              {authUser.role === 'admin' && (
+                <ObservabilityPanel publicHealth={apiHealth.health} publicError={apiHealth.error} />
+              )}
+              {authUser.role === 'admin' && <EngineAuditPanel />}
+              <RobotDiagnosticsPanel user={authUser} />
+            </div>
+          )}
         </div>
+        <MobileBottomNav tab={mobileTab} onChange={setMobileTab} />
 
         <div className="hidden lg:block">
           <NotificationsPanel />
@@ -1580,7 +1870,7 @@ export default function Home() {
                 <div className="flex-1 h-[1px] bg-gradient-to-l from-transparent to-[#00f0ff44]" />
               </div>
 
-              <div className={`${mobileTab === 'operation' ? 'block' : 'hidden'} lg:block`}>
+              <div className="hidden lg:block">
               {/* Active trade panel */}
               {demoSession.activeTrade && (
                 <DemoActivePanel
@@ -1608,7 +1898,7 @@ export default function Home() {
               </div>
 
               {/* Stats + History in two columns on large screens */}
-              <div className={`${mobileTab === 'panel' ? 'grid' : 'hidden'} lg:grid grid-cols-1 lg:grid-cols-2 gap-5`}>
+              <div className="hidden lg:grid grid-cols-1 lg:grid-cols-2 gap-5">
                 <DemoStatsPanel
                   stats={demoSession.dailyStats}
                   currentBalance={demoSession.balance}
