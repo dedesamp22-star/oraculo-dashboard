@@ -4,11 +4,12 @@ import {
   Search, RefreshCw, ChevronDown, ChevronUp,
   CheckCircle2, XCircle, AlertTriangle, Clock,
   BarChart2, Filter, TrendingUp, TrendingDown, Minus,
-  Eye, Cpu,
+  Eye, Cpu, Download,
 } from 'lucide-react';
 import {
   fetchEngineAuditLog,
   fetchEngineAuditSummary,
+  downloadEngineAuditExport,
   type EngineAuditEntry,
   type EngineAuditSummary,
 } from '../lib/demoApi';
@@ -352,8 +353,26 @@ export function EngineAuditPanel() {
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const intervalRef = useRef<number | null>(null);
+
+  const handleExport = useCallback(async (format: 'json' | 'csv') => {
+    try {
+      setExporting(true);
+      setError(null);
+      await downloadEngineAuditExport({
+        symbol: symbolFilter || undefined,
+        decision: decisionFilter !== 'Todos' ? decisionFilter : undefined,
+        format,
+        limit: 1000,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erro ao exportar auditoria.');
+    } finally {
+      setExporting(false);
+    }
+  }, [symbolFilter, decisionFilter]);
 
   const load = useCallback(async (newOffset = 0) => {
     setLoading(true);
@@ -484,16 +503,40 @@ export function EngineAuditPanel() {
                   ))}
                 </div>
 
-                {/* Refresh */}
-                <button
-                  id="audit-refresh-btn"
-                  onClick={() => void load(offset)}
-                  disabled={loading}
-                  className="flex items-center gap-1.5 px-3 py-1.5 border border-border/50 text-[10px] font-mono text-muted-foreground hover:text-foreground disabled:opacity-40 transition-all"
-                >
-                  <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
-                  Atualizar
-                </button>
+                {/* Refresh & Export */}
+                <div className="flex gap-1.5 items-center">
+                  <button
+                    id="audit-refresh-btn"
+                    onClick={() => void load(offset)}
+                    disabled={loading}
+                    className="flex items-center gap-1.5 px-3 py-1.5 border border-border/50 text-[10px] font-mono text-muted-foreground hover:text-foreground disabled:opacity-40 transition-all"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
+                    Atualizar
+                  </button>
+
+                  <button
+                    id="audit-export-json-btn"
+                    onClick={() => void handleExport('json')}
+                    disabled={exporting}
+                    className="flex items-center gap-1 px-2.5 py-1.5 border border-primary/40 bg-primary/10 text-[10px] font-mono text-primary hover:bg-primary/20 disabled:opacity-40 transition-all"
+                    title="Exportar auditoria atual em JSON"
+                  >
+                    <Download className={`w-3 h-3 ${exporting ? 'animate-bounce' : ''}`} />
+                    JSON
+                  </button>
+
+                  <button
+                    id="audit-export-csv-btn"
+                    onClick={() => void handleExport('csv')}
+                    disabled={exporting}
+                    className="flex items-center gap-1 px-2.5 py-1.5 border border-primary/40 bg-primary/10 text-[10px] font-mono text-primary hover:bg-primary/20 disabled:opacity-40 transition-all"
+                    title="Exportar auditoria atual em CSV"
+                  >
+                    <Download className={`w-3 h-3 ${exporting ? 'animate-bounce' : ''}`} />
+                    CSV
+                  </button>
+                </div>
               </div>
 
               {/* Summary */}

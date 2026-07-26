@@ -469,3 +469,57 @@ export async function fetchEngineAuditSummary(symbol?: string): Promise<EngineAu
   return await request<EngineAuditSummary>(`/api/worker/audit/summary${qs}`);
 }
 
+export async function downloadEngineAuditExport(params: {
+  hours?: number;
+  symbol?: string;
+  decision?: string;
+  state?: string;
+  limit?: number;
+  format?: 'json' | 'csv';
+} = {}): Promise<void> {
+  const query = new URLSearchParams();
+  if (params.hours !== undefined) query.set('hours', String(params.hours));
+  if (params.symbol) query.set('symbol', params.symbol);
+  if (params.decision) query.set('decision', params.decision);
+  if (params.state) query.set('state', params.state);
+  if (params.limit !== undefined) query.set('limit', String(params.limit));
+  if (params.format) query.set('format', params.format);
+
+  const qs = query.toString();
+  const url = `/api/worker/audit/export${qs ? `?${qs}` : ''}`;
+
+  const response = await fetch(url, {
+    method: 'GET',
+    credentials: 'include',
+  });
+
+  if (!response.ok) {
+    let msg = 'Erro ao exportar auditoria';
+    try {
+      const errJson = (await response.json()) as { error?: string };
+      if (errJson.error) msg = errJson.error;
+    } catch {
+      /* fallback */
+    }
+    throw new Error(msg);
+  }
+
+  const blob = await response.blob();
+  const filenameHeader = response.headers.get('Content-Disposition');
+  let filename = `audit-export.${params.format === 'csv' ? 'csv' : 'json'}`;
+  if (filenameHeader) {
+    const match = filenameHeader.match(/filename="?([^";]+)"?/);
+    if (match?.[1]) filename = match[1];
+  }
+
+  const blobUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = blobUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(blobUrl);
+}
+
+

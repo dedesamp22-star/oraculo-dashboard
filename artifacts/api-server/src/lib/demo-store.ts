@@ -225,6 +225,32 @@ export interface EngineAuditResponse {
   offset: number;
 }
 
+export interface EngineAuditExportParams {
+  hours?: number;
+  symbol?: string;
+  decision?: string;
+  state?: string;
+  limit?: number;
+}
+
+export interface EngineAuditExportResponse {
+  exportedAt: string;
+  filters: {
+    hours: number | null;
+    symbol: string | null;
+    decision: string | null;
+    state: string | null;
+    limit: number;
+  };
+  summary: {
+    total: number;
+    byDecision: Record<string, number>;
+    byState: Record<string, number>;
+  };
+  total: number;
+  entries: EngineAuditEntry[];
+}
+
 export interface StoreObservabilitySnapshot {
   sqlite: {
     databasePath: string;
@@ -1808,6 +1834,116 @@ export class DemoStore {
     const byState: Record<string, number> = {};
     for (const r of byStateRows) byState[String(r.decision_state)] = Number(r.cnt);
     return { total: Number(totalRow?.cnt ?? 0), byDecision, byState };
+  }
+
+  exportEngineAuditLog(user: AuthUser, params: EngineAuditExportParams = {}): EngineAuditExportResponse {
+    if (user.role !== "admin") throw new HttpError(403, "Admin required");
+
+    const safeLimit = Math.max(1, Math.min(5000, Math.floor(params.limit ?? 1000)));
+    const hours = params.hours && params.hours > 0 ? params.hours : null;
+    const symbol = params.symbol?.trim() || null;
+    const decision = params.decision?.trim() || null;
+    const state = params.state?.trim() || null;
+
+    const whereClauses: string[] = ["user_id = ?"];
+    const sqlArgs: (string | number | null)[] = [user.id];
+
+    if (hours !== null) {
+      const cutoffIso = new Date(Date.now() - hours * 3600 * 1000).toISOString();
+      whereClauses.push("analyzed_at >= ?");
+      sqlArgs.push(cutoffIso);
+    }
+    if (symbol !== null) {
+      whereClauses.push("symbol = ?");
+      sqlArgs.push(symbol);
+    }
+    if (decision !== null) {
+      whereClauses.push("decision = ?");
+      sqlArgs.push(decision);
+    }
+    if (state !== null) {
+      whereClauses.push("decision_state = ?");
+      sqlArgs.push(state);
+    }
+
+    const whereSql = "WHERE " + whereClauses.join(" AND ");
+
+    const rows = this.db.prepare(`
+      SELECT * FROM engine_audit_log
+      ${whereSql}
+      ORDER BY analyzed_at DESC
+      LIMIT ?
+    `).all(...sqlArgs, safeLimit) as Record<string, unknown>[];
+
+    const byDecisionRows = this.db.prepare(
+      `SELECT decision, COUNT(*) as cnt FROM engine_audit_log ${whereSql} GROUP BY decision`
+    ).all(...sqlArgs) as Record<string, unknown>[];
+
+    const byStateRows = this.db.prepare(
+      `SELECT decision_state, COUNT(*) as cnt FROM engine_audit_log ${whereSql} GROUP BY decision_state`
+    ).all(...sqlArgs) as Record<string, unknown>[];
+
+    const totalRow = this.db.prepare(
+      `SELECT COUNT(*) AS cnt FROM engine_audit_log ${whereSql}`
+    ).get(...sqlArgs) as Record<string, unknown>;
+
+    const byDecision: Record<string, number> = {};
+    for (const r of byDecisionRows) byDecision[String(r.decision)] = Number(r.cnt);
+
+    const byState: Record<string, number> = {};
+    for (const r of byStateRows) byState[String(r.decision_state)] = Number(r.cnt);
+
+    const total = Number(totalRow?.cnt ?? 0);
+
+    const entries: EngineAuditEntry[] = rows.map((row) => ({
+      id: String(row.id),
+      userId: String(row.user_id),
+      symbol: String(row.symbol),
+      analyzedAt: String(row.analyzed_at),
+      score: Number(row.score),
+      scoreContextual: Number(row.score_contextual),
+      scoreRaw: Number(row.score_raw),
+      direction: String(row.direction),
+      decision: String(row.decision),
+      decisionState: String(row.decision_state),
+      triggerStage: String(row.trigger_stage),
+      rrStatus: String(row.rr_status),
+      trend1h: String(row.trend_1h),
+      trend15m: String(row.trend_15m),
+      filtersPassed: jsonParse<string[]>(String(row.filters_passed_json), []),
+      filtersBlocked: jsonParse<EngineAuditFilterRecord[]>(String(row.filters_blocked_json), []),
+      filtersPenalty: jsonParse<EngineAuditFilterRecord[]>(String(row.filters_penalty_json), []),
+      blockedReasons: jsonParse<string[]>(String(row.blocked_reasons_json), []),
+      qualityPenalties: jsonParse<string[]>(String(row.quality_penalties_json), []),
+      decisiveReason: String(row.decisive_reason),
+      missingConditions: jsonParse<string[]>(String(row.missing_conditions_json), []),
+      entryPrice: row.entry_price == null ? null : Number(row.entry_price),
+      stopPrice: row.stop_price == null ? null : Number(row.stop_price),
+      target1: row.target1 == null ? null : Number(row.target1),
+      target2: row.target2 == null ? null : Number(row.target2),
+      rr: row.rr == null ? null : Number(row.rr),
+      volumeRelative: row.volume_relative == null ? null : Number(row.volume_relative),
+      engineVersion: String(row.engine_version),
+      createdAt: String(row.created_at),
+    }));
+
+    return {
+      exportedAt: nowIso(),
+      filters: {
+        hours,
+        symbol,
+        decision,
+        state,
+        limit: safeLimit,
+      },
+      summary: {
+        total,
+        byDecision,
+        byState,
+      },
+      total,
+      entries,
+    };
   }
 
   getObservabilitySnapshot(): StoreObservabilitySnapshot {

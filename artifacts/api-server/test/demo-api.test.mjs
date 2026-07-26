@@ -1559,3 +1559,93 @@ test("event priority prevents duplicate partial, stop, target2, trailing and tim
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("audit export endpoint security, limits, CSV escaping and combined filters", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "oraculo-audit-export-"));
+  const dbPath = path.join(dir, "oraculo.sqlite");
+  const port = 5132;
+  const server = await startServer({ port, dbPath });
+  try {
+    // 1. Rejeitar acesso sem autenticação (401)
+    const unauth = await fetch(`${server.base}/api/worker/audit/export`);
+    assert.equal(unauth.status, 401);
+
+    const cookie = await login(server.base);
+
+    // Conecta diretamente ao banco sqlite criado no teste
+    const db = new DatabaseSync(dbPath);
+
+    // Obtém id do usuário admin inserido no startup
+    const adminUser = db.prepare("SELECT id FROM users WHERE username = 'admin'").get();
+    const adminId = String(adminUser.id);
+    const now = new Date().toISOString();
+    const past48h = new Date(Date.now() - 48 * 3600 * 1000).toISOString();
+
+    const insertStmt = db.prepare(`
+      INSERT INTO engine_audit_log (
+        id, user_id, symbol, analyzed_at, score, score_contextual, score_raw,
+        direction, decision, decision_state, trigger_stage, rr_status,
+        trend_1h, trend_15m, filters_passed_json, filters_blocked_json,
+        filters_penalty_json, blocked_reasons_json, quality_penalties_json,
+        decisive_reason, missing_conditions_json, entry_price, stop_price,
+        target1, target2, rr, volume_relative, engine_version, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    // Inserção 1: BTCUSDT (Recente, BUY, ENTRADA_APROVADA) com aspas/vírgulas/quebras de linha
+    insertStmt.run(
+      "audit-1", adminId, "BTCUSDT", now, 85, 80, 85,
+      "LONG", "BUY", "ENTRADA_APROVADA", "TRIGGER_5M", "RR_OK",
+      "ALTA", "ALTA", JSON.stringify(["trend"]), JSON.stringify([{ name: "test", reason: 'motivo com "aspas", vírgula, e \n nova linha' }]),
+      "[]", JSON.stringify(['motivo com "aspas", vírgula, e \n nova linha']), "[]",
+      'motivo decisivo com "aspas", vírgula e \n nova linha', "[]", 100000, 99000,
+      102000, 105000, 2.0, 1.5, "1.0.0", now
+    );
+
+    // Inserção 2: ETHUSDT (Antigo 48h, SEM ENTRADA, BLOQUEADO_RISCO)
+    insertStmt.run(
+      "audit-2", adminId, "ETHUSDT", past48h, 40, 30, 40,
+      "NEUTRAL", "SEM ENTRADA", "BLOQUEADO_RISCO", "NONE", "RR_BAD",
+      "BAIXA", "NEUTRO", "[]", JSON.stringify([{ name: "risk", reason: "alto risco" }]),
+      "[]", JSON.stringify(["alto risco"]), "[]",
+      "alto risco", "[]", null, null,
+      null, null, null, 0.5, "1.0.0", past48h
+    );
+
+    db.close();
+
+    // 2. Filtros combinados no export (JSON)
+    const filteredRes = await fetch(`${server.base}/api/worker/audit/export?hours=24&symbol=BTCUSDT&decision=BUY&state=ENTRADA_APROVADA`, {
+      headers: { Cookie: cookie },
+    });
+    assert.equal(filteredRes.status, 200);
+    const jsonResult = await filteredRes.json();
+    assert.equal(jsonResult.total, 1);
+    assert.equal(jsonResult.entries[0].symbol, "BTCUSDT");
+    assert.equal(jsonResult.entries[0].decision, "BUY");
+    assert.equal(jsonResult.entries[0].decisionState, "ENTRADA_APROVADA");
+
+    // 3. Teto max limit 5000 ao passar 9999
+    const limitRes = await fetch(`${server.base}/api/worker/audit/export?limit=9999`, {
+      headers: { Cookie: cookie },
+    });
+    assert.equal(limitRes.status, 200);
+    const limitJson = await limitRes.json();
+    assert.equal(limitJson.filters.limit, 5000);
+
+    // 4. Formato CSV com escaping correto de aspas, vírgulas e quebras de linha
+    const csvRes = await fetch(`${server.base}/api/worker/audit/export?format=csv&symbol=BTCUSDT`, {
+      headers: { Cookie: cookie },
+    });
+    assert.equal(csvRes.status, 200);
+    assert.equal(csvRes.headers.get("content-type").includes("text/csv"), true);
+    const csvText = await csvRes.text();
+    assert.equal(csvText.includes('""aspas""'), true);
+    assert.equal(csvText.includes('"motivo com ""aspas"", vírgula, e \n nova linha"'), true);
+  } finally {
+    await stopServer(server.child);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
