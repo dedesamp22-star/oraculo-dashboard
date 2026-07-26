@@ -13,6 +13,7 @@ import {
   type EngineAuditEntry,
   type EngineAuditSummary,
 } from '../lib/demoApi';
+import { buildEngineAuditInsight, type EngineAuditInsight } from '../lib/engineAuditInsight';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -306,8 +307,11 @@ function FilterChip({ label, passed, reason, penalty }: {
 // ── Row detail ────────────────────────────────────────────────────────────────
 
 function AuditRowDetail({ entry }: { entry: EngineAuditEntry }) {
+  const insight = buildEngineAuditInsight(entry);
   return (
     <div className="px-4 pb-4 pt-2 bg-background/30 border-t border-border/30 space-y-4">
+      <AuditInsightCard insight={insight} />
+
       {/* Prices */}
       {(entry.entryPrice != null || entry.stopPrice != null) && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -411,6 +415,70 @@ function AuditRowDetail({ entry }: { entry: EngineAuditEntry }) {
               </li>
             ))}
           </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AuditInsightCard({ insight }: { insight: EngineAuditInsight }) {
+  const categoryColor = insight.blockCategory === 'global-risk'
+    ? '#ff6b35'
+    : insight.blockCategory === 'position-limit'
+      ? '#ffaa00'
+      : insight.blockCategory === 'operational-risk'
+        ? '#ff4444'
+        : '#00D8FF';
+  return (
+    <div className="border border-primary/25 bg-primary/[0.035] p-3 space-y-3">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div>
+          <p className="text-[9px] font-mono uppercase tracking-[0.16em] text-primary/80">Auditor Inteligente</p>
+          <p className="mt-1 text-[11px] font-mono text-foreground/80 leading-relaxed">{insight.summary}</p>
+        </div>
+        <div className="min-w-[150px]">
+          <div className="flex items-center justify-between gap-2 text-[9px] font-mono uppercase tracking-[0.12em] text-muted-foreground/70">
+            <span>Progresso do setup</span>
+            <strong className="text-foreground">{insight.progressPct}%</strong>
+          </div>
+          <div className="mt-1 h-1.5 bg-border/50 overflow-hidden">
+            <div className="h-full bg-primary transition-all" style={{ width: `${Math.max(0, Math.min(100, insight.progressPct))}%` }} />
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+        <div className="border border-border/40 bg-background/20 px-3 py-2">
+          <p className="text-[8px] font-mono uppercase tracking-[0.14em] text-muted-foreground">Estagio atual</p>
+          <p className="mt-1 text-[11px] font-mono font-bold" style={{ color: categoryColor }}>{insight.stageLabel}</p>
+        </div>
+        <div className="border border-border/40 bg-background/20 px-3 py-2 md:col-span-2">
+          <p className="text-[8px] font-mono uppercase tracking-[0.14em] text-muted-foreground">Motivo decisivo</p>
+          <p className="mt-1 text-[11px] font-mono text-foreground/75 leading-relaxed">{insight.decisiveReason}</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+        <InsightList title={`Confirmado (${insight.confirmed.length})`} items={insight.confirmed} color="#00ff66" empty="Sem confirmacoes registradas." />
+        <InsightList title={`Pendente (${insight.pending.length})`} items={insight.pending} color="#ffaa00" empty="Sem pendencias registradas." />
+      </div>
+    </div>
+  );
+}
+
+function InsightList({ title, items, color, empty }: { title: string; items: string[]; color: string; empty: string }) {
+  return (
+    <div className="border border-border/30 bg-black/10 px-3 py-2">
+      <p className="text-[8px] font-mono uppercase tracking-[0.14em]" style={{ color }}>{title}</p>
+      {items.length === 0 ? (
+        <p className="mt-1 text-[10px] font-mono text-muted-foreground/45">{empty}</p>
+      ) : (
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
+          {items.map((item) => (
+            <span key={item} className="text-[10px] font-mono px-2 py-0.5 border" style={{ color, borderColor: `${color}33`, background: `${color}0a` }}>
+              {item}
+            </span>
+          ))}
         </div>
       )}
     </div>
