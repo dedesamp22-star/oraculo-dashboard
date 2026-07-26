@@ -25,6 +25,14 @@ export interface DailyStats {
   safetyLimited: boolean;
 }
 
+export type SafetyLimitCode = "DAILY_TRADE_LIMIT" | "CONSECUTIVE_LOSSES" | "DAILY_LOSS" | "NONE";
+
+export interface SafetyLimitState {
+  limited: boolean;
+  code: SafetyLimitCode;
+  reason: string;
+}
+
 export interface DemoTrade {
   id: string;
   pair: string;
@@ -62,6 +70,7 @@ export interface DemoSession {
   activeTrade: DemoTrade | null;
   history: DemoTrade[];
   dailyStats: DailyStats;
+  safetyLimit: SafetyLimitState;
   settings: {
     maxDailyTrades: number;
   };
@@ -606,24 +615,21 @@ function hashSessionToken(token: string): string {
   return createHash("sha256").update(token).digest("base64url");
 }
 
-function dailyTradeLimitReached(stats: DailyStats): boolean {
-  const maxDailyTrades = demoMaxDailyTrades();
-  return maxDailyTrades > 0 && stats.totalTrades >= maxDailyTrades;
-}
-
-function safetyLimitReason(stats: DailyStats): string {
-  if (dailyTradeLimitReached(stats)) return "Limite diário de operações atingido.";
-  if (stats.consecutiveLosses >= 3) return "Sequência de perdas atingida.";
-  if (stats.dailyPnL <= -(stats.startOfDayBalance * 0.03)) return "Perda diária máxima atingida.";
-  if (stats.safetyLimited) return "Limite de risco ativo.";
-  return "Limite de risco ativo.";
+function resolveSafetyLimit(stats: DailyStats, maxDailyTrades = demoMaxDailyTrades()): SafetyLimitState {
+  if (maxDailyTrades > 0 && stats.totalTrades >= maxDailyTrades) {
+    return { limited: true, code: "DAILY_TRADE_LIMIT", reason: "Limite diário de operações atingido." };
+  }
+  if (stats.consecutiveLosses >= 3) {
+    return { limited: true, code: "CONSECUTIVE_LOSSES", reason: "Sequência de perdas atingida." };
+  }
+  if (stats.dailyPnL <= -(stats.startOfDayBalance * 0.03)) {
+    return { limited: true, code: "DAILY_LOSS", reason: "Perda diária máxima atingida." };
+  }
+  return { limited: false, code: "NONE", reason: "Ativo normalmente." };
 }
 
 function isSafetyLimited(stats: DailyStats): boolean {
-  return stats.safetyLimited ||
-    dailyTradeLimitReached(stats) ||
-    stats.consecutiveLosses >= 3 ||
-    stats.dailyPnL <= -(stats.startOfDayBalance * 0.03);
+  return resolveSafetyLimit(stats).limited;
 }
 
 function calcPositionSize(balance: number, entry: number, stop: number): { riskAmount: number; positionSize: number } {
@@ -1603,6 +1609,17 @@ export class DemoStore {
     return accountFromRow(row);
   }
 
+  private accountWithCurrentSafetyLimit(userId: string): { balance: number; configuredBalance: number; dailyStats: DailyStats; safetyLimit: SafetyLimitState } {
+    const account = this.getAccount(userId);
+    const safetyLimit = resolveSafetyLimit(account.dailyStats);
+    if (account.dailyStats.safetyLimited !== safetyLimit.limited) {
+      const dailyStats = { ...account.dailyStats, safetyLimited: safetyLimit.limited };
+      this.putAccount(userId, { balance: account.balance, configuredBalance: account.configuredBalance, dailyStats });
+      return { ...account, dailyStats, safetyLimit };
+    }
+    return { ...account, safetyLimit };
+  }
+
   getSession(userId: string): DemoSession {
     const activeTrade = this.getPositions(userId)[0] ?? null;
     const history = this.getTrades(userId);
@@ -1616,8 +1633,12 @@ export class DemoStore {
       history.reduce((sum, trade) => sum + (trade.partialPnlUSDC ?? 0), 0);
     const realizedPnlUSDC = history.reduce((sum, trade) => sum + (trade.pnlUSDC ?? 0), 0) +
       (activeTrade?.realizedPnlUSDC ?? 0);
+    const account = this.accountWithCurrentSafetyLimit(userId);
     return {
-      ...this.getAccount(userId),
+      balance: account.balance,
+      configuredBalance: account.configuredBalance,
+      dailyStats: account.dailyStats,
+      safetyLimit: account.safetyLimit,
       settings: {
         maxDailyTrades: demoMaxDailyTrades(),
       },
@@ -3129,7 +3150,7 @@ export class DemoStore {
     const pair = nonEmptyString(input.pair, "pair", 32).toUpperCase();
     const decision = input.decision;
     if (decision !== "BUY" && decision !== "SELL") {
-      const account = this.getAccount(userId);
+      const account = this.accountWithCurrentSafetyLimit(userId);
       return {
         session: this.getSession(userId),
         opened: false,
@@ -3147,7 +3168,7 @@ export class DemoStore {
     const target2 = finiteNumber(input.target2Num, "target2Num", 0.00000001, MAX_PRICE);
     const key = `signal:${signalKey({ ...input, pair })}`;
     return this.transaction(() => {
-      const account = this.getAccount(userId);
+      const account = this.accountWithCurrentSafetyLimit(userId);
       const positions = this.getPositions(userId);
       const globalRiskOpenUSDC = positions.reduce((sum, position) => sum + remainingOpenRisk(position), 0);
       const globalRiskLimitUSDC = account.balance * MAX_DEMO_GLOBAL_RISK_PCT;
@@ -3171,9 +3192,9 @@ export class DemoStore {
         this.recordEvent(userId, key, "duplicate_signal_blocked", null);
         return blocked("ja existe posicao aberta para este par.");
       }
-      if (isSafetyLimited(account.dailyStats)) {
+      if (account.safetyLimit.limited) {
         this.recordEvent(userId, key, "risk_limited_signal_blocked", null);
-        return blocked(safetyLimitReason(account.dailyStats), "BLOQUEADO_RISCO");
+        return blocked(account.safetyLimit.reason, "BLOQUEADO_RISCO");
       }
       if (positions.length >= MAX_DEMO_OPEN_POSITIONS) {
         this.recordEvent(userId, key, "global_position_limit_signal_blocked", null);

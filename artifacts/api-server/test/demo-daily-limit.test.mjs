@@ -17,13 +17,34 @@ test("daily operation limit is optional and defaults to unlimited", () => {
   assert.doesNotMatch(storeSource, /Limite de 8/);
 });
 
+test("legacy safetyLimited flag is not used as a blocking input", () => {
+  const resolverMatch = storeSource.match(/function resolveSafetyLimit\(stats: DailyStats[\s\S]*?\n\}/);
+  assert.ok(resolverMatch, "resolveSafetyLimit must exist");
+  assert.doesNotMatch(resolverMatch[0], /stats\.safetyLimited/);
+  const isLimitedMatch = storeSource.match(/function isSafetyLimited\(stats: DailyStats\): boolean \{([\s\S]*?)\n\}/);
+  assert.ok(isLimitedMatch, "isSafetyLimited must exist");
+  assert.doesNotMatch(isLimitedMatch[1], /stats\.safetyLimited/);
+  assert.match(storeSource, /if \(account\.dailyStats\.safetyLimited !== safetyLimit\.limited\)/);
+  assert.match(storeSource, /safetyLimited: safetyLimit\.limited/);
+});
+
 test("daily limit only blocks openings and keeps worker analysis and auditing active", () => {
   const openBody = storeSource.slice(storeSource.indexOf("openFromSignalWithResult"), storeSource.indexOf("updatePrices(userId"));
-  assert.match(openBody, /isSafetyLimited\(account\.dailyStats\)/);
-  assert.match(openBody, /return blocked\(safetyLimitReason\(account\.dailyStats\), "BLOQUEADO_RISCO"\)/);
+  assert.match(openBody, /account\.safetyLimit\.limited/);
+  assert.match(openBody, /return blocked\(account\.safetyLimit\.reason, "BLOQUEADO_RISCO"\)/);
   assert.match(workerSource, /for \(const symbol of DEMO_WORKER_SYMBOLS\)/);
   assert.match(workerSource, /await deps\.analyzeSignal\(symbol\)/);
   assert.match(workerSource, /deps\.store\.recordEngineAudit\(\{/);
+});
+
+test("session exposes structured safety limit code and reason", () => {
+  assert.match(storeSource, /export type SafetyLimitCode = "DAILY_TRADE_LIMIT" \| "CONSECUTIVE_LOSSES" \| "DAILY_LOSS" \| "NONE"/);
+  assert.match(storeSource, /safetyLimit: SafetyLimitState/);
+  assert.match(storeSource, /safetyLimit: account\.safetyLimit/);
+  assert.match(storeSource, /code: "CONSECUTIVE_LOSSES"/);
+  assert.match(storeSource, /code: "DAILY_LOSS"/);
+  assert.match(storeSource, /code: "DAILY_TRADE_LIMIT"/);
+  assert.match(storeSource, /code: "NONE"/);
 });
 
 test("approved signal notifications describe the final opening result", () => {

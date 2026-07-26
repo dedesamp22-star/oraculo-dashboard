@@ -18,7 +18,7 @@ import { useOracleGlobalState } from '../hooks/useOracleGlobalState';
 import { useOnlineStatus }      from '../hooks/useOnlineStatus';
 import { runEngine, type EngineResult, type RuleStep, type StepStatus, type Decision } from '../lib/analysis';
 import { fmtTimeSP, fmtSPNow, isOperational as checkOperational } from '../lib/schedule';
-import { isSafetyLimited, safetyLimitReason, type DemoSession } from '../lib/demo';
+import { type DemoSession } from '../lib/demo';
 import { TradingViewChart, type TVInterval } from '../components/TradingViewChart';
 import { DemoActivePanel }   from '../components/DemoActivePanel';
 import { DemoHistoryPanel }  from '../components/DemoHistoryPanel';
@@ -838,8 +838,8 @@ export default function Home() {
   }, [activeTradeCurrentPrice, activeTradePair, isAuthenticated, updatePrice]);
 
   const maxDailyTrades = demoSession.settings?.maxDailyTrades ?? 0;
-  const safeLimited = isSafetyLimited(demoSession.dailyStats, maxDailyTrades);
-  const safeReason  = safeLimited ? safetyLimitReason(demoSession.dailyStats, maxDailyTrades) : undefined;
+  const safeLimited = demoSession.safetyLimit?.limited ?? false;
+  const safeReason  = safeLimited ? demoSession.safetyLimit?.reason : undefined;
 
   // â”€â”€ Alert emission â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 

@@ -75,12 +75,21 @@ export interface DailyStats {
   safetyLimited: boolean;    // locked by a safety rule
 }
 
+export type SafetyLimitCode = 'DAILY_TRADE_LIMIT' | 'CONSECUTIVE_LOSSES' | 'DAILY_LOSS' | 'NONE';
+
+export interface SafetyLimitState {
+  limited: boolean;
+  code: SafetyLimitCode;
+  reason: string;
+}
+
 export interface DemoSession {
   balance: number;           // current simulated balance
   configuredBalance: number; // user-set value (used on reset)
   activeTrade: DemoTrade | null;
   history: DemoTrade[];      // closed trades, newest first
   dailyStats: DailyStats;
+  safetyLimit?: SafetyLimitState;
   settings?: {
     maxDailyTrades: number;
   };
@@ -119,6 +128,7 @@ export function makeSession(configuredBalance = DEFAULT_BALANCE): DemoSession {
     activeTrade: null,
     history: [],
     dailyStats: makeDailyStats(today, configuredBalance),
+    safetyLimit: { limited: false, code: 'NONE', reason: 'Ativo normalmente.' },
     settings: { maxDailyTrades: 0 },
     realizedPnlUSDC: 0,
     unrealizedPnlUSDC: 0,
@@ -158,7 +168,6 @@ export function fmtEpochSP(ms: number): string {
 
 /** Returns true when no more demo trades can open today. */
 export function isSafetyLimited(stats: DailyStats, maxDailyTrades = 0): boolean {
-  if (stats.safetyLimited) return true;
   if (maxDailyTrades > 0 && stats.totalTrades >= maxDailyTrades) return true;
   if (stats.consecutiveLosses >= 3) return true;
   if (stats.dailyPnL <= -(stats.startOfDayBalance * 0.03)) return true;
