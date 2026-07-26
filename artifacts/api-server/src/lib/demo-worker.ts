@@ -18,7 +18,7 @@ let running = false;
 type AutomationUser = { user: AuthUser; automation: { enabled: boolean; symbol: string } };
 type DemoWorkerStore = Pick<
   typeof demoStore,
-  "getAutomationUsers" | "updatePrices" | "openFromSignal" | "recordWorkerDiagnostic" | "recordEngineAudit"
+  "getAutomationUsers" | "updatePrices" | "openFromSignalWithResult" | "recordWorkerDiagnostic" | "recordEngineAudit"
 >;
 
 interface DemoWorkerDeps {
@@ -83,8 +83,18 @@ async function runSymbolCycle(item: AutomationUser, symbol: DemoWorkerSymbol, ti
     deps.store.updatePrices(user.id, { pair: symbol, price });
 
     const { signal, analysis, filters } = await deps.analyzeSignal(symbol);
+    let auditDecisionState = analysis.decisionState;
+    let auditDecisiveReason = analysis.decisiveReason;
+    let auditBlockedReasons = analysis.blockedReasons;
+    let auditMissingConditions = analysis.missingConditions;
     if (signal.decision !== "SEM ENTRADA") {
-      deps.store.openFromSignal(user.id, signal);
+      const openResult = deps.store.openFromSignalWithResult(user.id, signal);
+      if (!openResult.opened && openResult.decisionState === "BLOQUEADO_RISCO") {
+        auditDecisionState = "BLOQUEADO_RISCO";
+        auditDecisiveReason = openResult.blockedReason ?? "limite global de risco atingido.";
+        auditBlockedReasons = [...analysis.blockedReasons, auditDecisiveReason];
+        auditMissingConditions = [...analysis.missingConditions, auditDecisiveReason];
+      }
     }
     const finishedAt = Date.now();
     const status = diagnosticStatus(signal.decision, analysis, filters);
@@ -112,8 +122,8 @@ async function runSymbolCycle(item: AutomationUser, symbol: DemoWorkerSymbol, ti
         status,
         direction: analysis.suggestedDirection,
         quality: signalQuality(analysis.score),
-        summary: analysis.decisiveReason ?? publicSummary(status, analysis, filters),
-        decisionState: analysis.decisionState,
+        summary: auditDecisiveReason ?? publicSummary(status, analysis, filters),
+        decisionState: auditDecisionState,
         scoreContextual: analysis.scoreContextual,
         scoreOperacional: analysis.scoreOperacional,
       },
@@ -122,7 +132,7 @@ async function runSymbolCycle(item: AutomationUser, symbol: DemoWorkerSymbol, ti
         worker: { active: true, automationActive: automation.enabled, cycleDurationMs: finishedAt - cycleStartedAt, latencyMs, nextCycleAt: nextCycleIso(tickStartedAt), engineVersion: APP_VERSION },
         decision: {
           status,
-          state: analysis.decisionState,
+          state: auditDecisionState,
           rawDecision: signal.decision,
           direction: analysis.suggestedDirection,
           score: analysis.score,
@@ -131,7 +141,7 @@ async function runSymbolCycle(item: AutomationUser, symbol: DemoWorkerSymbol, ti
           triggerStage: analysis.triggerStage,
           rrStatus: analysis.rrStatus,
           missingConditions: analysis.missingConditions,
-          decisiveReason: analysis.decisiveReason,
+          decisiveReason: auditDecisiveReason,
           signalKey: analysis.signalKey,
         },
         trends: { trend1h: analysis.trend1h, trend15m: analysis.trend15m, trigger5m: analysis.trigger5m, details: analysis.diagnostics },
@@ -150,7 +160,7 @@ async function runSymbolCycle(item: AutomationUser, symbol: DemoWorkerSymbol, ti
           all: filters.map((filter) => ({ name: filter.name, passed: filter.passed, reason: filter.reason, penalty: filter.penalty ?? null, severity: filter.severity ?? null, details: filter.details ?? {} })),
         },
         score: { raw: analysis.diagnostics.rawScore, contextual: analysis.scoreContextual, operacional: analysis.scoreOperacional, final: analysis.score, items: analysis.scoreItems },
-        reasons: { confirmations: analysis.confirmations, blocked: analysis.blockedReasons, risks: analysis.risks, steps: signal.steps ?? [] },
+      reasons: { confirmations: analysis.confirmations, blocked: auditBlockedReasons, risks: analysis.risks, steps: signal.steps ?? [] },
         summary: publicSummary(status, analysis, filters),
       },
     });
@@ -164,7 +174,7 @@ async function runSymbolCycle(item: AutomationUser, symbol: DemoWorkerSymbol, ti
         scoreRaw: analysis.diagnostics.rawScore,
         direction: analysis.suggestedDirection,
         decision: signal.decision,
-        decisionState: analysis.decisionState,
+        decisionState: auditDecisionState,
         triggerStage: analysis.triggerStage,
         rrStatus: analysis.rrStatus,
         trend1h: analysis.trend1h,
@@ -176,10 +186,10 @@ async function runSymbolCycle(item: AutomationUser, symbol: DemoWorkerSymbol, ti
         filtersPenalty: filters
           .filter((f) => !f.passed && f.severity === "penalty")
           .map((f) => ({ name: f.name, reason: f.reason, penalty: f.penalty ?? null })),
-        blockedReasons: analysis.blockedReasons,
+        blockedReasons: auditBlockedReasons,
         qualityPenalties: analysis.qualityPenalties,
-        decisiveReason: analysis.decisiveReason,
-        missingConditions: analysis.missingConditions,
+        decisiveReason: auditDecisiveReason ?? publicSummary(status, analysis, filters),
+        missingConditions: auditMissingConditions,
         entryPrice: analysis.conservativeEntry,
         stopPrice: analysis.stop,
         target1: analysis.target1,

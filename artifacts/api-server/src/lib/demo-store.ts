@@ -612,6 +612,25 @@ function calcPositionSize(balance: number, entry: number, stop: number): { riskA
   return { riskAmount, positionSize: dist > 0 ? riskAmount / dist : 0 };
 }
 
+const MAX_DEMO_OPEN_POSITIONS = 3;
+const MAX_DEMO_GLOBAL_RISK_PCT = 0.02;
+const MAX_DEMO_ENTRY_RISK_PCT = 0.01;
+
+function remainingOpenRisk(trade: DemoTrade): number {
+  const size = trade.remainingPositionSize ?? trade.positionSize;
+  if (size <= 0) return 0;
+  const riskPerUnit = trade.direction === "BUY"
+    ? Math.max(0, trade.entry - trade.stopLoss)
+    : Math.max(0, trade.stopLoss - trade.entry);
+  return riskPerUnit * size;
+}
+
+function calcPositionSizeWithRisk(entry: number, stop: number, riskAmount: number): { riskAmount: number; positionSize: number } {
+  const safeRisk = Math.max(0, riskAmount);
+  const dist = Math.abs(entry - stop);
+  return { riskAmount: safeRisk, positionSize: dist > 0 ? safeRisk / dist : 0 };
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -3068,32 +3087,84 @@ export class DemoStore {
   }
 
   openFromSignal(userId: string, body: unknown) {
+    return this.openFromSignalWithResult(userId, body).session;
+  }
+
+  openFromSignalWithResult(userId: string, body: unknown): {
+    session: DemoSession;
+    opened: boolean;
+    blockedReason: string | null;
+    decisionState: "BLOQUEADO_RISCO" | null;
+    riskAmount: number | null;
+    globalRiskOpenUSDC: number;
+    globalRiskLimitUSDC: number;
+    globalRiskRemainingUSDC: number;
+  } {
     const input = body as DemoSignalInput;
     const pair = nonEmptyString(input.pair, "pair", 32).toUpperCase();
     const decision = input.decision;
-    if (decision !== "BUY" && decision !== "SELL") return this.getSession(userId);
+    if (decision !== "BUY" && decision !== "SELL") {
+      const account = this.getAccount(userId);
+      return {
+        session: this.getSession(userId),
+        opened: false,
+        blockedReason: null,
+        decisionState: null,
+        riskAmount: null,
+        globalRiskOpenUSDC: 0,
+        globalRiskLimitUSDC: account.balance * MAX_DEMO_GLOBAL_RISK_PCT,
+        globalRiskRemainingUSDC: account.balance * MAX_DEMO_GLOBAL_RISK_PCT,
+      };
+    }
     const entry = finiteNumber(input.entryNum, "entryNum", 0.00000001, MAX_PRICE);
     const stop = finiteNumber(input.stopLossNum, "stopLossNum", 0.00000001, MAX_PRICE);
     const target1 = finiteNumber(input.target1Num, "target1Num", 0.00000001, MAX_PRICE);
     const target2 = finiteNumber(input.target2Num, "target2Num", 0.00000001, MAX_PRICE);
     const key = `signal:${signalKey({ ...input, pair })}`;
     return this.transaction(() => {
-      const existingEvent = this.db.prepare("SELECT event_key FROM demo_events WHERE event_key = ?").get(`${userId}:${key}`);
-      if (existingEvent) return this.getSession(userId);
-      if (this.getPositions(userId).some((position) => position.pair === pair)) {
-        this.recordEvent(userId, key, "duplicate_signal_blocked", null);
-        return this.getSession(userId);
-      }
       const account = this.getAccount(userId);
+      const positions = this.getPositions(userId);
+      const globalRiskOpenUSDC = positions.reduce((sum, position) => sum + remainingOpenRisk(position), 0);
+      const globalRiskLimitUSDC = account.balance * MAX_DEMO_GLOBAL_RISK_PCT;
+      const globalRiskRemainingUSDC = Math.max(0, globalRiskLimitUSDC - globalRiskOpenUSDC);
+      const blocked = (blockedReason: string, decisionState: "BLOQUEADO_RISCO" | null = null) => ({
+        session: this.getSession(userId),
+        opened: false,
+        blockedReason,
+        decisionState,
+        riskAmount: null,
+        globalRiskOpenUSDC,
+        globalRiskLimitUSDC,
+        globalRiskRemainingUSDC,
+      });
+      const existingEvent = this.db.prepare("SELECT event_key FROM demo_events WHERE event_key = ?").get(`${userId}:${key}`);
+      if (existingEvent) return blocked("sinal duplicado ja processado.");
+      if (positions.some((position) => position.pair === pair)) {
+        this.recordEvent(userId, key, "duplicate_signal_blocked", null);
+        return blocked("ja existe posicao aberta para este par.");
+      }
       if (isSafetyLimited(account.dailyStats)) {
         this.recordEvent(userId, key, "risk_limited_signal_blocked", null);
-        return this.getSession(userId);
+        return blocked("limite de seguranca diario ativo.");
       }
-      const { riskAmount, positionSize } = calcPositionSize(account.balance, entry, stop);
+      if (positions.length >= MAX_DEMO_OPEN_POSITIONS) {
+        this.recordEvent(userId, key, "global_position_limit_signal_blocked", null);
+        return blocked("Limite de posicoes simultaneas atingido.", "BLOQUEADO_RISCO");
+      }
+      const requestedRiskAmount = Math.min(account.balance * MAX_DEMO_ENTRY_RISK_PCT, account.balance * 0.01);
+      const allowedRiskAmount = Math.min(requestedRiskAmount, globalRiskRemainingUSDC);
+      if (allowedRiskAmount <= 0.00000001) {
+        this.recordEvent(userId, key, "global_risk_signal_blocked", null);
+        return blocked("Limite global de risco atingido.", "BLOQUEADO_RISCO");
+      }
+      const { riskAmount, positionSize } = calcPositionSizeWithRisk(entry, stop, allowedRiskAmount);
       const steps = Array.isArray(input.steps) ? input.steps : [];
       const signalReasons = steps.slice(0, 10).map((step) =>
         `[${step.number ?? "?"}] ${step.name ?? "Regra"}: ${step.value ?? "-"} - ${step.reason ?? ""}`,
       );
+      if (riskAmount < requestedRiskAmount) {
+        signalReasons.push(`RISCO GLOBAL: risco reduzido para ${riskAmount.toFixed(8)} USDC por capacidade restante de ${globalRiskRemainingUSDC.toFixed(8)} USDC.`);
+      }
       const trade: DemoTrade = {
         id: newTradeId(),
         pair,
@@ -3121,7 +3192,16 @@ export class DemoStore {
       this.postPosition(userId, trade);
       this.setSetting(userId, `demo.priceHistory.${trade.id}`, [{ price: entry, at: Date.now() }]);
       this.recordEvent(userId, key, "signal_opened", trade.id);
-      return this.getSession(userId);
+      return {
+        session: this.getSession(userId),
+        opened: true,
+        blockedReason: null,
+        decisionState: null,
+        riskAmount,
+        globalRiskOpenUSDC,
+        globalRiskLimitUSDC,
+        globalRiskRemainingUSDC,
+      };
     });
   }
 
