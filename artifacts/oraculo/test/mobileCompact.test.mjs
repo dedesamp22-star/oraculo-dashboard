@@ -101,6 +101,12 @@ test('mobile operations fetch prices per pair without global market contaminatio
   assert.doesNotMatch(mobileOperationsSource, /market\.price/);
 });
 
+test('mobile summary uses backend aggregated open positions with legacy fallback', () => {
+  assert.match(source, /const openPositionsCount = session\.openPositionsCount \?\? globalRisk\.openPositionsCount/);
+  assert.match(source, /value=\{`\$\{openPositionsCount\}\/3`\}/);
+  assert.doesNotMatch(source, /value=\{`\$\{globalRisk\.openPositionsCount\}\/3`\}/);
+});
+
 test('compact chart mode preserves desktop default while hiding mobile chrome', () => {
   assert.match(chartSource, /compact = false/);
   assert.match(chartSource, /hide_side_toolbar:\s+compact \? true : false/);

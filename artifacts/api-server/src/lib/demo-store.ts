@@ -78,6 +78,7 @@ export interface DemoSession {
   unrealizedPnlUSDC: number;
   partialPnlUSDC: number;
   openRiskUSDC: number;
+  openPositionsCount: number;
 }
 
 export type UserRole = "admin" | "user";
@@ -1621,18 +1622,21 @@ export class DemoStore {
   }
 
   getSession(userId: string): DemoSession {
-    const activeTrade = this.getPositions(userId)[0] ?? null;
+    const positions = this.getPositions(userId);
+    const activeTrade = positions[0] ?? null;
     const history = this.getTrades(userId);
-    const lastPrice = activeTrade
-      ? this.getSetting<number | null>(userId, `demo.lastPrice.${activeTrade.pair}`, null)
-      : null;
-    const unrealizedPnlUSDC = activeTrade && lastPrice !== null
-      ? this.unrealizedFor(activeTrade, lastPrice)
-      : 0;
-    const partialPnlUSDC = (activeTrade?.partialPnlUSDC ?? 0) +
+    const unrealizedPnlUSDC = positions.reduce((sum, position) => {
+      const lastPrice = this.getSetting<number | null>(userId, `demo.lastPrice.${position.pair}`, null);
+      if (lastPrice === null || !Number.isFinite(lastPrice) || lastPrice <= 0) return sum;
+      return sum + this.unrealizedFor(position, lastPrice);
+    }, 0);
+    const openPositionsRealizedPnlUSDC = positions.reduce((sum, position) => sum + (position.realizedPnlUSDC ?? 0), 0);
+    const openPositionsPartialPnlUSDC = positions.reduce((sum, position) => sum + (position.partialPnlUSDC ?? 0), 0);
+    const partialPnlUSDC = openPositionsPartialPnlUSDC +
       history.reduce((sum, trade) => sum + (trade.partialPnlUSDC ?? 0), 0);
     const realizedPnlUSDC = history.reduce((sum, trade) => sum + (trade.pnlUSDC ?? 0), 0) +
-      (activeTrade?.realizedPnlUSDC ?? 0);
+      openPositionsRealizedPnlUSDC;
+    const openRiskUSDC = positions.reduce((sum, position) => sum + remainingOpenRisk(position), 0);
     const account = this.accountWithCurrentSafetyLimit(userId);
     return {
       balance: account.balance,
@@ -1647,7 +1651,8 @@ export class DemoStore {
       realizedPnlUSDC,
       unrealizedPnlUSDC,
       partialPnlUSDC,
-      openRiskUSDC: activeTrade ? Math.abs(activeTrade.entry - activeTrade.stopLoss) * (activeTrade.remainingPositionSize ?? activeTrade.positionSize) : 0,
+      openRiskUSDC,
+      openPositionsCount: positions.length,
     };
   }
 

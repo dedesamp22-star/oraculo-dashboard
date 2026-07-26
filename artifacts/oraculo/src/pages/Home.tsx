@@ -748,6 +748,7 @@ function MobileSummaryTab({
   onAnalyze: () => void;
 }) {
   const systemOnline = apiOnline && binanceOnline;
+  const openPositionsCount = session.openPositionsCount ?? globalRisk.openPositionsCount;
   return (
     <div className="flex flex-col gap-3">
       <MobileSection title="Status">
@@ -763,7 +764,7 @@ function MobileSummaryTab({
           <MobileMiniCell label="Saldo" value={fmtCurrency(session.balance)} color="#ffffff" />
           <MobileMiniCell label="P&L dia" value={fmtSignedCurrency(session.dailyStats?.dailyPnL)} color={signedColor(session.dailyStats?.dailyPnL)} />
           <MobileMiniCell label="Risco aberto" value={fmtCurrency(session.openRiskUSDC)} color="#ffaa00" />
-          <MobileMiniCell label="Posicoes" value={`${globalRisk.openPositionsCount}/3`} color={globalRisk.openPositionsCount > 0 ? '#00f0ff' : '#aaaaaa'} />
+          <MobileMiniCell label="Posicoes" value={`${openPositionsCount}/3`} color={openPositionsCount > 0 ? '#00f0ff' : '#aaaaaa'} />
         </div>
       </MobileSection>
 

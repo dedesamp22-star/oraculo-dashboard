@@ -97,6 +97,7 @@ export interface DemoSession {
   unrealizedPnlUSDC?: number;
   partialPnlUSDC?: number;
   openRiskUSDC?: number;
+  openPositionsCount?: number;
 }
 
 // ── Defaults ──────────────────────────────────────────────────────────────────
@@ -134,6 +135,7 @@ export function makeSession(configuredBalance = DEFAULT_BALANCE): DemoSession {
     unrealizedPnlUSDC: 0,
     partialPnlUSDC: 0,
     openRiskUSDC: 0,
+    openPositionsCount: 0,
   };
 }
 
