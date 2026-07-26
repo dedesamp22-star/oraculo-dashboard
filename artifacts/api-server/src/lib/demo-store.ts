@@ -251,6 +251,36 @@ export interface EngineAuditExportResponse {
   entries: EngineAuditEntry[];
 }
 
+export interface EngineAuditRankItem {
+  name: string;
+  count: number;
+  pct: number;
+}
+
+export interface EngineAuditSymbolSummary {
+  symbol: string;
+  total: number;
+  avgScore: number | null;
+  maxScore: number | null;
+  byDecision: Record<string, { count: number; pct: number }>;
+  byState: Record<string, { count: number; pct: number }>;
+}
+
+export interface EngineAuditSummaryResponse {
+  period: string;
+  symbol: string | null;
+  total: number;
+  avgScore: number | null;
+  maxScore: number | null;
+  byDecision: Record<string, { count: number; pct: number }>;
+  byState: Record<string, { count: number; pct: number }>;
+  topDecisiveReasons: EngineAuditRankItem[];
+  topBlockedReasons: EngineAuditRankItem[];
+  topMissingConditions: EngineAuditRankItem[];
+  topBlockCombinations: EngineAuditRankItem[];
+  bySymbol: Record<string, EngineAuditSymbolSummary>;
+}
+
 export interface StoreObservabilitySnapshot {
   sqlite: {
     databasePath: string;
@@ -1816,25 +1846,179 @@ export class DemoStore {
     return { entries, total, limit: safeLimit, offset: safeOffset };
   }
 
-  getEngineAuditSummary(user: AuthUser, symbol?: string): Record<string, unknown> {
+  getEngineAuditSummary(user: AuthUser, params: { symbol?: string; period?: string } = {}): EngineAuditSummaryResponse {
     if (user.role !== "admin") throw new HttpError(403, "Admin required");
-    const baseWhere = symbol ? "WHERE user_id = ? AND symbol = ?" : "WHERE user_id = ?";
-    const args = symbol ? [user.id, symbol] : [user.id];
-    const byDecisionRows = this.db.prepare(
-      `SELECT decision, COUNT(*) as cnt FROM engine_audit_log ${baseWhere} GROUP BY decision`
-    ).all(...args) as Record<string, unknown>[];
-    const byStateRows = this.db.prepare(
-      `SELECT decision_state, COUNT(*) as cnt FROM engine_audit_log ${baseWhere} GROUP BY decision_state`
-    ).all(...args) as Record<string, unknown>[];
-    const totalRow = this.db.prepare(
-      `SELECT COUNT(*) AS cnt FROM engine_audit_log ${baseWhere}`
-    ).get(...args) as Record<string, unknown>;
-    const byDecision: Record<string, number> = {};
-    for (const r of byDecisionRows) byDecision[String(r.decision)] = Number(r.cnt);
-    const byState: Record<string, number> = {};
-    for (const r of byStateRows) byState[String(r.decision_state)] = Number(r.cnt);
-    return { total: Number(totalRow?.cnt ?? 0), byDecision, byState };
+
+    const validPeriods: Record<string, number> = {
+      "1h": 1,
+      "6h": 6,
+      "24h": 24,
+      "7d": 168,
+    };
+
+    const periodKey = params.period && validPeriods[params.period] ? params.period : "24h";
+    const hours = validPeriods[periodKey]!;
+    const cutoffIso = new Date(Date.now() - hours * 3600 * 1000).toISOString();
+    const symbol = params.symbol?.trim() || null;
+
+    const whereClauses: string[] = ["user_id = ?", "analyzed_at >= ?"];
+    const sqlArgs: (string | number | null)[] = [user.id, cutoffIso];
+
+    if (symbol !== null) {
+      whereClauses.push("symbol = ?");
+      sqlArgs.push(symbol);
+    }
+
+    const whereSql = "WHERE " + whereClauses.join(" AND ");
+
+    // Max 10,000 safety limit to protect VPS memory & CPU
+    const rows = this.db.prepare(`
+      SELECT score, decision, decision_state, decisive_reason, blocked_reasons_json, missing_conditions_json, symbol
+      FROM engine_audit_log
+      ${whereSql}
+      ORDER BY analyzed_at DESC
+      LIMIT 10000
+    `).all(...sqlArgs) as Record<string, unknown>[];
+
+    const total = rows.length;
+
+    if (total === 0) {
+      return {
+        period: periodKey,
+        symbol,
+        total: 0,
+        avgScore: null,
+        maxScore: null,
+        byDecision: {},
+        byState: {},
+        topDecisiveReasons: [],
+        topBlockedReasons: [],
+        topMissingConditions: [],
+        topBlockCombinations: [],
+        bySymbol: {},
+      };
+    }
+
+    let scoreSum = 0;
+    let maxScore = -Infinity;
+
+    const decisionCounts: Record<string, number> = {};
+    const stateCounts: Record<string, number> = {};
+    const decisiveReasonCounts: Record<string, number> = {};
+    const blockedReasonCounts: Record<string, number> = {};
+    const missingConditionCounts: Record<string, number> = {};
+    const blockCombinationCounts: Record<string, number> = {};
+
+    const symbolMap: Record<string, {
+      total: number;
+      scoreSum: number;
+      maxScore: number;
+      decisionCounts: Record<string, number>;
+      stateCounts: Record<string, number>;
+    }> = {};
+
+    for (const r of rows) {
+      const score = Number(r.score ?? 0);
+      scoreSum += score;
+      if (score > maxScore) maxScore = score;
+
+      const dec = String(r.decision ?? "SEM ENTRADA");
+      decisionCounts[dec] = (decisionCounts[dec] ?? 0) + 1;
+
+      const st = String(r.decision_state ?? "DESCONHECIDO");
+      stateCounts[st] = (stateCounts[st] ?? 0) + 1;
+
+      const decReason = String(r.decisive_reason ?? "").trim();
+      if (decReason) {
+        decisiveReasonCounts[decReason] = (decisiveReasonCounts[decReason] ?? 0) + 1;
+      }
+
+      const blockedList = jsonParse<string[]>(String(r.blocked_reasons_json ?? "[]"), []);
+      for (const br of blockedList) {
+        if (br) blockedReasonCounts[br] = (blockedReasonCounts[br] ?? 0) + 1;
+      }
+
+      const missingList = jsonParse<string[]>(String(r.missing_conditions_json ?? "[]"), []);
+      for (const mc of missingList) {
+        if (mc) missingConditionCounts[mc] = (missingConditionCounts[mc] ?? 0) + 1;
+      }
+
+      if (blockedList.length > 0) {
+        const sortedCombo = [...blockedList].sort().join(" + ");
+        blockCombinationCounts[sortedCombo] = (blockCombinationCounts[sortedCombo] ?? 0) + 1;
+      }
+
+      const sym = String(r.symbol);
+      if (!symbolMap[sym]) {
+        symbolMap[sym] = { total: 0, scoreSum: 0, maxScore: -Infinity, decisionCounts: {}, stateCounts: {} };
+      }
+      const sObj = symbolMap[sym];
+      sObj.total += 1;
+      sObj.scoreSum += score;
+      if (score > sObj.maxScore) sObj.maxScore = score;
+      sObj.decisionCounts[dec] = (sObj.decisionCounts[dec] ?? 0) + 1;
+      sObj.stateCounts[st] = (sObj.stateCounts[st] ?? 0) + 1;
+    }
+
+    const avgScore = Number((scoreSum / total).toFixed(1));
+
+    const calcMap = (map: Record<string, number>, baseTotal: number) => {
+      const res: Record<string, { count: number; pct: number }> = {};
+      for (const [k, count] of Object.entries(map)) {
+        res[k] = {
+          count,
+          pct: Number(((count / baseTotal) * 100).toFixed(1)),
+        };
+      }
+      return res;
+    };
+
+    const calcRank = (map: Record<string, number>, baseTotal: number, maxItems = 5): EngineAuditRankItem[] => {
+      return Object.entries(map)
+        .map(([name, count]) => ({
+          name,
+          count,
+          pct: Number(((count / baseTotal) * 100).toFixed(1)),
+        }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, maxItems);
+    };
+
+    const byDecision = calcMap(decisionCounts, total);
+    const byState = calcMap(stateCounts, total);
+    const topDecisiveReasons = calcRank(decisiveReasonCounts, total, 5);
+    const topBlockedReasons = calcRank(blockedReasonCounts, total, 5);
+    const topMissingConditions = calcRank(missingConditionCounts, total, 5);
+    const topBlockCombinations = calcRank(blockCombinationCounts, total, 5);
+
+    const bySymbol: Record<string, EngineAuditSymbolSummary> = {};
+    for (const [sym, sObj] of Object.entries(symbolMap)) {
+      bySymbol[sym] = {
+        symbol: sym,
+        total: sObj.total,
+        avgScore: Number((sObj.scoreSum / sObj.total).toFixed(1)),
+        maxScore: sObj.maxScore === -Infinity ? null : sObj.maxScore,
+        byDecision: calcMap(sObj.decisionCounts, sObj.total),
+        byState: calcMap(sObj.stateCounts, sObj.total),
+      };
+    }
+
+    return {
+      period: periodKey,
+      symbol,
+      total,
+      avgScore,
+      maxScore: maxScore === -Infinity ? null : maxScore,
+      byDecision,
+      byState,
+      topDecisiveReasons,
+      topBlockedReasons,
+      topMissingConditions,
+      topBlockCombinations,
+      bySymbol,
+    };
   }
+
 
   exportEngineAuditLog(user: AuthUser, params: EngineAuditExportParams = {}): EngineAuditExportResponse {
     if (user.role !== "admin") throw new HttpError(403, "Admin required");

@@ -56,34 +56,208 @@ function decisionCfg(decision: string) {
 
 // ── Summary bar ───────────────────────────────────────────────────────────────
 
-function SummaryBar({ summary }: { summary: EngineAuditSummary | null }) {
-  if (!summary || summary.total === 0) return null;
-  const buy = summary.byDecision['BUY'] ?? 0;
-  const sell = summary.byDecision['SELL'] ?? 0;
-  const wait = summary.byDecision['SEM ENTRADA'] ?? 0;
-  const blocked = summary.byState['BLOQUEADO_RISCO'] ?? 0;
-  const approved = summary.byState['ENTRADA_APROVADA'] ?? 0;
-  const total = summary.total;
-  const pct = (n: number) => total > 0 ? ((n / total) * 100).toFixed(1) : '0.0';
+// ── Summary bar & Intelligent Statistics ─────────────────────────────────────
 
+const PERIODS = ['1h', '6h', '24h', '7d'] as const;
+
+function IntelligentStats({
+  summary,
+  period,
+  onPeriodChange,
+}: {
+  summary: EngineAuditSummary | null;
+  period: string;
+  onPeriodChange: (p: string) => void;
+}) {
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-      {[
-        { label: 'Total', value: total, color: '#aaaaaa' },
-        { label: 'Compra', value: buy, color: '#00ff66', sub: `${pct(buy)}%` },
-        { label: 'Venda', value: sell, color: '#ff4444', sub: `${pct(sell)}%` },
-        { label: 'Aguardar', value: wait, color: '#ffaa00', sub: `${pct(wait)}%` },
-        { label: 'Bloqueados', value: blocked, color: '#ff4444', sub: approved > 0 ? `${approved} aprovados` : '0 aprovados' },
-      ].map(({ label, value, color, sub }) => (
-        <div key={label} className="border border-border/50 bg-card/30 px-3 py-2 flex flex-col gap-0.5">
-          <span className="text-[9px] font-mono uppercase tracking-[0.16em] text-muted-foreground">{label}</span>
-          <span className="text-lg font-mono font-bold tabular-nums" style={{ color }}>{value}</span>
-          {sub && <span className="text-[9px] font-mono text-muted-foreground/60">{sub}</span>}
+    <div className="space-y-4">
+      {/* Header & Period Selector */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border/30 pb-3">
+        <div className="flex items-center gap-2">
+          <BarChart2 className="w-4 h-4 text-primary" />
+          <h4 className="text-xs font-mono font-bold uppercase tracking-[0.14em] text-foreground">
+            Estatísticas Inteligentes dos Bloqueios
+          </h4>
         </div>
-      ))}
+        <div className="flex items-center gap-1">
+          <span className="text-[9px] font-mono text-muted-foreground/60 mr-1">Período:</span>
+          {PERIODS.map((p) => (
+            <button
+              key={p}
+              id={`audit-period-${p}`}
+              onClick={() => onPeriodChange(p)}
+              className={`px-2.5 py-1 text-[9px] font-mono uppercase tracking-[0.1em] border transition-all ${
+                period === p
+                  ? 'bg-primary text-primary-foreground border-primary'
+                  : 'border-border/40 text-muted-foreground/70 hover:text-foreground'
+              }`}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {!summary || summary.total === 0 ? (
+        <div className="border border-border/40 bg-card/20 py-8 px-4 text-center">
+          <Clock className="w-6 h-6 mx-auto mb-2 text-muted-foreground/40" />
+          <p className="text-xs font-mono text-muted-foreground">Sem dados de auditoria para o período selecionado ({period}).</p>
+          <p className="text-[10px] font-mono text-muted-foreground/50 mt-1">Aguarde a execução dos ciclos do motor.</p>
+        </div>
+      ) : (
+        <>
+          {/* Main Key Metrics Grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-6 gap-2">
+            {[
+              { label: 'Total Análises', val: summary.total, color: '#aaaaaa' },
+              { label: 'Score Médio', val: summary.avgScore ?? '—', color: '#00D8FF' },
+              { label: 'Maior Score', val: summary.maxScore ?? '—', color: '#00ff66' },
+              {
+                label: 'Aprovado',
+                val: summary.byState['ENTRADA_APROVADA']?.count ?? 0,
+                color: '#00ff66',
+                sub: `${summary.byState['ENTRADA_APROVADA']?.pct ?? 0}%`,
+              },
+              {
+                label: 'Quase Pronto',
+                val: summary.byState['SETUP_QUASE_PRONTO']?.count ?? 0,
+                color: '#ffaa00',
+                sub: `${summary.byState['SETUP_QUASE_PRONTO']?.pct ?? 0}%`,
+              },
+              {
+                label: 'Contexto Formando',
+                val: summary.byState['CONTEXTO_FORMANDO']?.count ?? 0,
+                color: '#888888',
+                sub: `${summary.byState['CONTEXTO_FORMANDO']?.pct ?? 0}%`,
+              },
+            ].map(({ label, val, color, sub }) => (
+              <div key={label} className="border border-border/50 bg-card/30 px-3 py-2 flex flex-col gap-0.5">
+                <span className="text-[9px] font-mono uppercase tracking-[0.12em] text-muted-foreground/70 truncate">{label}</span>
+                <span className="text-lg font-mono font-bold tabular-nums" style={{ color }}>{val}</span>
+                {sub && <span className="text-[9px] font-mono text-muted-foreground/60">{sub}</span>}
+              </div>
+            ))}
+          </div>
+
+          {/* Rankings Section */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+            {/* Top Blocked Reasons */}
+            <div className="border border-border/40 bg-card/20 p-3 space-y-2">
+              <div className="flex items-center justify-between border-b border-border/30 pb-1.5">
+                <span className="text-[10px] font-mono uppercase tracking-[0.12em] font-bold text-foreground">
+                  Top 5 Motivos de Bloqueio
+                </span>
+                <span className="text-[9px] font-mono text-muted-foreground/60">Ocorrências / %</span>
+              </div>
+              {summary.topBlockedReasons.length === 0 ? (
+                <p className="text-[10px] font-mono text-muted-foreground/40 py-2">Nenhum bloqueio registrado.</p>
+              ) : (
+                <div className="space-y-2">
+                  {summary.topBlockedReasons.map((item) => (
+                    <div key={item.name} className="space-y-1">
+                      <div className="flex justify-between text-[10px] font-mono">
+                        <span className="text-muted-foreground truncate max-w-[200px]" title={item.name}>{item.name}</span>
+                        <span className="font-bold text-foreground tabular-nums">{item.count} <span className="text-muted-foreground/60 font-normal">({item.pct}%)</span></span>
+                      </div>
+                      <div className="h-1 bg-border/40 overflow-hidden">
+                        <div className="h-full bg-[#ff4444]" style={{ width: `${Math.min(100, item.pct)}%` }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Top Missing Conditions */}
+            <div className="border border-border/40 bg-card/20 p-3 space-y-2">
+              <div className="flex items-center justify-between border-b border-border/30 pb-1.5">
+                <span className="text-[10px] font-mono uppercase tracking-[0.12em] font-bold text-foreground">
+                  Top 5 Condições Ausentes
+                </span>
+                <span className="text-[9px] font-mono text-muted-foreground/60">Ocorrências / %</span>
+              </div>
+              {summary.topMissingConditions.length === 0 ? (
+                <p className="text-[10px] font-mono text-muted-foreground/40 py-2">Nenhuma condição ausente registrada.</p>
+              ) : (
+                <div className="space-y-2">
+                  {summary.topMissingConditions.map((item) => (
+                    <div key={item.name} className="space-y-1">
+                      <div className="flex justify-between text-[10px] font-mono">
+                        <span className="text-muted-foreground truncate max-w-[200px]" title={item.name}>{item.name}</span>
+                        <span className="font-bold text-foreground tabular-nums">{item.count} <span className="text-muted-foreground/60 font-normal">({item.pct}%)</span></span>
+                      </div>
+                      <div className="h-1 bg-border/40 overflow-hidden">
+                        <div className="h-full bg-[#ffaa00]" style={{ width: `${Math.min(100, item.pct)}%` }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Combinations & Symbol Breakdown */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+            {/* Top Block Combinations */}
+            <div className="border border-border/40 bg-card/20 p-3 space-y-2">
+              <div className="flex items-center justify-between border-b border-border/30 pb-1.5">
+                <span className="text-[10px] font-mono uppercase tracking-[0.12em] font-bold text-foreground">
+                  Combinações de Bloqueio Mais Frequentes
+                </span>
+                <span className="text-[9px] font-mono text-muted-foreground/60">Ocorrências / %</span>
+              </div>
+              {summary.topBlockCombinations.length === 0 ? (
+                <p className="text-[10px] font-mono text-muted-foreground/40 py-2">Nenhuma combinação registrada.</p>
+              ) : (
+                <div className="space-y-2">
+                  {summary.topBlockCombinations.map((item) => (
+                    <div key={item.name} className="space-y-1">
+                      <div className="flex justify-between text-[10px] font-mono">
+                        <span className="text-muted-foreground truncate max-w-[220px]" title={item.name}>{item.name}</span>
+                        <span className="font-bold text-foreground tabular-nums">{item.count} <span className="text-muted-foreground/60 font-normal">({item.pct}%)</span></span>
+                      </div>
+                      <div className="h-1 bg-border/40 overflow-hidden">
+                        <div className="h-full bg-primary/70" style={{ width: `${Math.min(100, item.pct)}%` }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Asset Breakdown */}
+            <div className="border border-border/40 bg-card/20 p-3 space-y-2">
+              <div className="flex items-center justify-between border-b border-border/30 pb-1.5">
+                <span className="text-[10px] font-mono uppercase tracking-[0.12em] font-bold text-foreground">
+                  Visão por Ativo (BTC / ETH / SOL)
+                </span>
+                <span className="text-[9px] font-mono text-muted-foreground/60">Total / Score Médio</span>
+              </div>
+              {Object.keys(summary.bySymbol).length === 0 ? (
+                <p className="text-[10px] font-mono text-muted-foreground/40 py-2">Sem dados por ativo.</p>
+              ) : (
+                <div className="grid grid-cols-3 gap-2 py-1">
+                  {['BTCUSDT', 'ETHUSDT', 'SOLUSDT'].map((sym) => {
+                    const sData = summary.bySymbol[sym];
+                    const label = sym.replace('USDT', '');
+                    return (
+                      <div key={sym} className="border border-border/30 bg-black/20 p-2 text-center flex flex-col gap-1">
+                        <span className="text-[10px] font-mono font-bold text-primary">{label}</span>
+                        <span className="text-xs font-mono font-bold text-foreground">{sData ? sData.total : 0} <span className="text-[9px] text-muted-foreground/60 font-normal">análises</span></span>
+                        <span className="text-[9px] font-mono text-muted-foreground">Score Média: <strong className="text-foreground">{sData?.avgScore ?? '—'}</strong></span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
+
 
 // ── Filter chips ──────────────────────────────────────────────────────────────
 
@@ -355,7 +529,12 @@ export function EngineAuditPanel() {
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+  const [period, setPeriod] = useState<string>('24h');
   const intervalRef = useRef<number | null>(null);
+
+  const handlePeriodChange = useCallback((p: string) => {
+    setPeriod(p);
+  }, []);
 
   const handleExport = useCallback(async (format: 'json' | 'csv') => {
     try {
@@ -381,7 +560,7 @@ export function EngineAuditPanel() {
       const symbol = symbolFilter || undefined;
       const [log, sum] = await Promise.all([
         fetchEngineAuditLog({ symbol, limit: PAGE_SIZE, offset: newOffset }),
-        fetchEngineAuditSummary(symbol),
+        fetchEngineAuditSummary({ symbol, period }),
       ]);
       setEntries(log.entries);
       setTotal(log.total);
@@ -393,7 +572,8 @@ export function EngineAuditPanel() {
     } finally {
       setLoading(false);
     }
-  }, [symbolFilter]);
+  }, [symbolFilter, period]);
+
 
   // Auto-refresh when panel is open
   useEffect(() => {
@@ -539,8 +719,9 @@ export function EngineAuditPanel() {
                 </div>
               </div>
 
-              {/* Summary */}
-              <SummaryBar summary={summary} />
+              {/* Summary & Intelligent Statistics */}
+              <IntelligentStats summary={summary} period={period} onPeriodChange={handlePeriodChange} />
+
 
               {/* Error */}
               {error && (

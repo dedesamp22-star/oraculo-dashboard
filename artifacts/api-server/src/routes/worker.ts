@@ -68,8 +68,10 @@ function escapeCsvCell(val: unknown): string {
 router.get("/worker/audit/summary", requireAuth, requireAdmin, ((req, res) => {
   const user = (req as AuthenticatedRequest).user;
   const symbol = typeof req.query.symbol === "string" ? req.query.symbol : undefined;
-  handle(res, () => store.getEngineAuditSummary(user, symbol));
+  const period = typeof req.query.period === "string" ? req.query.period : undefined;
+  handle(res, () => store.getEngineAuditSummary(user, { symbol, period }));
 }) as RequestHandler);
+
 
 router.get("/worker/audit/export", requireAuth, requireAdmin, ((req, res) => {
   const user = (req as AuthenticatedRequest).user;

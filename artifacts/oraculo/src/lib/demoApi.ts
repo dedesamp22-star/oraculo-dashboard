@@ -209,11 +209,36 @@ export interface EngineAuditResponse {
   offset: number;
 }
 
-export interface EngineAuditSummary {
-  total: number;
-  byDecision: Record<string, number>;
-  byState: Record<string, number>;
+export interface EngineAuditRankItem {
+  name: string;
+  count: number;
+  pct: number;
 }
+
+export interface EngineAuditSymbolSummary {
+  symbol: string;
+  total: number;
+  avgScore: number | null;
+  maxScore: number | null;
+  byDecision: Record<string, { count: number; pct: number }>;
+  byState: Record<string, { count: number; pct: number }>;
+}
+
+export interface EngineAuditSummary {
+  period: string;
+  symbol: string | null;
+  total: number;
+  avgScore: number | null;
+  maxScore: number | null;
+  byDecision: Record<string, { count: number; pct: number }>;
+  byState: Record<string, { count: number; pct: number }>;
+  topDecisiveReasons: EngineAuditRankItem[];
+  topBlockedReasons: EngineAuditRankItem[];
+  topMissingConditions: EngineAuditRankItem[];
+  topBlockCombinations: EngineAuditRankItem[];
+  bySymbol: Record<string, EngineAuditSymbolSummary>;
+}
+
 
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -464,10 +489,14 @@ export async function fetchEngineAuditLog(params: {
   return await request<EngineAuditResponse>(`/api/worker/audit${qs ? `?${qs}` : ''}`);
 }
 
-export async function fetchEngineAuditSummary(symbol?: string): Promise<EngineAuditSummary> {
-  const qs = symbol ? `?symbol=${encodeURIComponent(symbol)}` : '';
-  return await request<EngineAuditSummary>(`/api/worker/audit/summary${qs}`);
+export async function fetchEngineAuditSummary(params: { symbol?: string; period?: string } = {}): Promise<EngineAuditSummary> {
+  const query = new URLSearchParams();
+  if (params.symbol) query.set('symbol', params.symbol);
+  if (params.period) query.set('period', params.period);
+  const qs = query.toString();
+  return await request<EngineAuditSummary>(`/api/worker/audit/summary${qs ? `?${qs}` : ''}`);
 }
+
 
 export async function downloadEngineAuditExport(params: {
   hours?: number;

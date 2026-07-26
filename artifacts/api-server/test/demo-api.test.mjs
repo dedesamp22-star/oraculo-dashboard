@@ -1648,4 +1648,136 @@ test("audit export endpoint security, limits, CSV escaping and combined filters"
   }
 });
 
+test("audit intelligent summary statistics, periods, rankings and symbol breakdown", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "oraculo-audit-summary-"));
+  const dbPath = path.join(dir, "oraculo.sqlite");
+  const port = 5133;
+  const server = await startServer({ port, dbPath });
+  try {
+    // 1. Acesso não-admin retorna 401
+    const unauth = await fetch(`${server.base}/api/worker/audit/summary`);
+    assert.equal(unauth.status, 401);
+
+    const cookie = await login(server.base);
+    const db = new DatabaseSync(dbPath);
+
+    const adminUser = db.prepare("SELECT id FROM users WHERE username = 'admin'").get();
+    const adminId = String(adminUser.id);
+
+    const now = new Date().toISOString();
+    const ago3h = new Date(Date.now() - 3 * 3600 * 1000).toISOString();
+    const ago12h = new Date(Date.now() - 12 * 3600 * 1000).toISOString();
+    const ago3d = new Date(Date.now() - 3 * 86400 * 1000).toISOString();
+
+    const insertStmt = db.prepare(`
+      INSERT INTO engine_audit_log (
+        id, user_id, symbol, analyzed_at, score, score_contextual, score_raw,
+        direction, decision, decision_state, trigger_stage, rr_status,
+        trend_1h, trend_15m, filters_passed_json, filters_blocked_json,
+        filters_penalty_json, blocked_reasons_json, quality_penalties_json,
+        decisive_reason, missing_conditions_json, entry_price, stop_price,
+        target1, target2, rr, volume_relative, engine_version, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    // Inserção 1: BTCUSDT (3h atrás) - BUY / ENTRADA_APROVADA / Score 90
+    insertStmt.run(
+      "sum-1", adminId, "BTCUSDT", ago3h, 90, 85, 90,
+      "LONG", "BUY", "ENTRADA_APROVADA", "TRIGGER_5M", "RR_OK",
+      "ALTA", "ALTA", "[]", "[]", "[]", "[]", "[]",
+      "Entrada aprovada por volume", "[]", 100000, 99000,
+      102000, 105000, 2.0, 1.5, "1.0.0", ago3h
+    );
+
+    // Inserção 2: ETHUSDT (12h atrás) - SEM ENTRADA / BLOQUEADO_RISCO / Score 40 / Bloqueio: EMA_DISTANCE / Missing: VOLUME_CONFIRMATION
+    insertStmt.run(
+      "sum-2", adminId, "ETHUSDT", ago12h, 40, 30, 40,
+      "NEUTRAL", "SEM ENTRADA", "BLOQUEADO_RISCO", "NONE", "RR_BAD",
+      "BAIXA", "NEUTRO", "[]", "[]", "[]",
+      JSON.stringify(["EMA_DISTANCE", "EXHAUSTION_RISK"]), "[]",
+      "Bloqueado por risco de exaustao", JSON.stringify(["VOLUME_CONFIRMATION"]),
+      null, null, null, null, null, 0.5, "1.0.0", ago12h
+    );
+
+    // Inserção 3: SOLUSDT (3 dias atrás) - SEM ENTRADA / CONTEXTO_FORMANDO / Score 60 / Bloqueio: EMA_DISTANCE
+    insertStmt.run(
+      "sum-3", adminId, "SOLUSDT", ago3d, 60, 50, 60,
+      "LONG", "SEM ENTRADA", "CONTEXTO_FORMANDO", "NONE", "RR_OK",
+      "ALTA", "NEUTRO", "[]", "[]", "[]",
+      JSON.stringify(["EMA_DISTANCE"]), "[]",
+      "Aguardando confirmacao 15m", JSON.stringify(["TRIGGER_BREAKOUT"]),
+      null, null, null, null, null, 1.0, "1.0.0", ago3d
+    );
+
+    db.close();
+
+    // 2. Período sem dados (1h) -> estado vazio sem erro
+    const emptyRes = await fetch(`${server.base}/api/worker/audit/summary?period=1h`, {
+      headers: { Cookie: cookie },
+    });
+    assert.equal(emptyRes.status, 200);
+    const emptyJson = await emptyRes.json();
+    assert.equal(emptyJson.total, 0);
+    assert.equal(emptyJson.avgScore, null);
+    assert.equal(emptyJson.topBlockedReasons.length, 0);
+
+    // 3. Período 24h (deve trazer sum-1 e sum-2 -> total 2)
+    const p24Res = await fetch(`${server.base}/api/worker/audit/summary?period=24h`, {
+      headers: { Cookie: cookie },
+    });
+    assert.equal(p24Res.status, 200);
+    const p24 = await p24Res.json();
+    assert.equal(p24.total, 2);
+    assert.equal(p24.avgScore, 65); // (90 + 40) / 2 = 65
+    assert.equal(p24.maxScore, 90);
+    assert.equal(p24.byDecision["BUY"].count, 1);
+    assert.equal(p24.byDecision["BUY"].pct, 50);
+    assert.equal(p24.byDecision["SEM ENTRADA"].count, 1);
+    assert.equal(p24.byDecision["SEM ENTRADA"].pct, 50);
+
+    // Rankings em 24h
+    assert.equal(p24.topBlockedReasons[0].name, "EMA_DISTANCE");
+    assert.equal(p24.topBlockedReasons[0].count, 1);
+    assert.equal(p24.topMissingConditions[0].name, "VOLUME_CONFIRMATION");
+
+    // 4. Período 7d (deve trazer sum-1, sum-2, sum-3 -> total 3)
+    const p7dRes = await fetch(`${server.base}/api/worker/audit/summary?period=7d`, {
+      headers: { Cookie: cookie },
+    });
+    assert.equal(p7dRes.status, 200);
+    const p7d = await p7dRes.json();
+    assert.equal(p7d.total, 3);
+    assert.equal(p7d.topBlockedReasons[0].name, "EMA_DISTANCE");
+    assert.equal(p7d.topBlockedReasons[0].count, 2); // presente em sum-2 e sum-3
+    assert.equal(p7d.topBlockedReasons[0].pct, 66.7); // 2/3 = 66.7%
+
+    // 5. Visão por Ativo (BTCUSDT, ETHUSDT, SOLUSDT em 7d)
+    assert.ok(p7d.bySymbol["BTCUSDT"]);
+    assert.equal(p7d.bySymbol["BTCUSDT"].total, 1);
+    assert.equal(p7d.bySymbol["BTCUSDT"].avgScore, 90);
+
+    assert.ok(p7d.bySymbol["ETHUSDT"]);
+    assert.equal(p7d.bySymbol["ETHUSDT"].total, 1);
+    assert.equal(p7d.bySymbol["ETHUSDT"].avgScore, 40);
+
+    assert.ok(p7d.bySymbol["SOLUSDT"]);
+    assert.equal(p7d.bySymbol["SOLUSDT"].total, 1);
+
+    // 6. Filtro por símbolo (symbol=BTCUSDT em 7d)
+    const btcRes = await fetch(`${server.base}/api/worker/audit/summary?period=7d&symbol=BTCUSDT`, {
+      headers: { Cookie: cookie },
+    });
+    assert.equal(btcRes.status, 200);
+    const btcJson = await btcRes.json();
+    assert.equal(btcJson.total, 1);
+    assert.equal(btcJson.symbol, "BTCUSDT");
+    assert.equal(btcJson.byDecision["BUY"].count, 1);
+    assert.equal(btcJson.byDecision["BUY"].pct, 100);
+  } finally {
+    await stopServer(server.child);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
 
