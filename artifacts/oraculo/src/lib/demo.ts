@@ -14,10 +14,35 @@ export type TradeExitReason =
   | 'BREAKEVEN'
   | 'TARGET_1'
   | 'TARGET_2'
+  | 'TIMEOUT'
   | 'TIME_EXIT'
   | 'TRAILING_STOP'
   | 'LOSS_OF_STRENGTH'
   | 'SESSION_END';
+
+export type ManagementTimelineEventType =
+  | 'OPENED'
+  | 'NEW_MFE'
+  | 'NEW_MAE'
+  | 'TARGET_1'
+  | 'PARTIAL_EXECUTED'
+  | 'BREAKEVEN_ACTIVATED'
+  | 'TRAILING_ACTIVATED'
+  | 'TRAILING_UPDATED'
+  | 'LOSS_OF_STRENGTH_DETECTED'
+  | 'TIMEOUT'
+  | 'STOP'
+  | 'TARGET_2'
+  | 'CLOSED';
+
+export interface ManagementTimelineEvent {
+  type: ManagementTimelineEventType;
+  at: string;
+  price: number | null;
+  unrealizedPnlUSDC: number | null;
+  note?: string;
+  data?: Record<string, unknown>;
+}
 
 export interface DemoTrade {
   id: string;
@@ -54,6 +79,23 @@ export interface DemoTrade {
   partialPnlUSDC?: number;
   target1ClosePrice?: number;
   maxDurationMs?: number;
+  initialRiskAmount?: number;
+  maxPriceSinceEntry?: number | null;
+  minPriceSinceEntry?: number | null;
+  maxUnrealizedPnlUSDC?: number | null;
+  minUnrealizedPnlUSDC?: number | null;
+  maxUnrealizedPnlBeforePartial?: number | null;
+  maxUnrealizedPnlAfterPartial?: number | null;
+  mfeUSDC?: number | null;
+  maeUSDC?: number | null;
+  mfeR?: number | null;
+  maeR?: number | null;
+  peakGivebackUSDC?: number | null;
+  openGivebackUSDC?: number | null;
+  totalGivebackUSDC?: number | null;
+  peakGivebackPct?: number | null;
+  lastManagementUpdateAt?: string | null;
+  managementTimeline?: ManagementTimelineEvent[];
 
   // Signal context
   signalReasons: string[];   // rule-engine step reasons

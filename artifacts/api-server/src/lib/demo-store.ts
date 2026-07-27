@@ -9,6 +9,29 @@ export type TradeStatus = "OPEN" | "WIN" | "LOSS" | "BREAKEVEN";
 export type TradeExitReason = "STOP_LOSS" | "BREAKEVEN" | "TARGET_1" | "TARGET_2";
 export type ManagedTradeExitReason = TradeExitReason | "TIMEOUT" | "TIME_EXIT" | "TRAILING_STOP" | "LOSS_OF_STRENGTH" | "SESSION_END";
 export type DemoDecision = "BUY" | "SELL" | "SEM ENTRADA";
+export type ManagementTimelineEventType =
+  | "OPENED"
+  | "NEW_MFE"
+  | "NEW_MAE"
+  | "TARGET_1"
+  | "PARTIAL_EXECUTED"
+  | "BREAKEVEN_ACTIVATED"
+  | "TRAILING_ACTIVATED"
+  | "TRAILING_UPDATED"
+  | "LOSS_OF_STRENGTH_DETECTED"
+  | "TIMEOUT"
+  | "STOP"
+  | "TARGET_2"
+  | "CLOSED";
+
+export interface ManagementTimelineEvent {
+  type: ManagementTimelineEventType;
+  at: string;
+  price: number | null;
+  unrealizedPnlUSDC: number | null;
+  note?: string;
+  data?: Record<string, unknown>;
+}
 
 export interface DailyStats {
   date: string;
@@ -60,6 +83,23 @@ export interface DemoTrade {
   partialPnlUSDC?: number;
   target1ClosePrice?: number;
   maxDurationMs?: number;
+  initialRiskAmount?: number;
+  maxPriceSinceEntry?: number | null;
+  minPriceSinceEntry?: number | null;
+  maxUnrealizedPnlUSDC?: number | null;
+  minUnrealizedPnlUSDC?: number | null;
+  maxUnrealizedPnlBeforePartial?: number | null;
+  maxUnrealizedPnlAfterPartial?: number | null;
+  mfeUSDC?: number | null;
+  maeUSDC?: number | null;
+  mfeR?: number | null;
+  maeR?: number | null;
+  peakGivebackUSDC?: number | null;
+  openGivebackUSDC?: number | null;
+  totalGivebackUSDC?: number | null;
+  peakGivebackPct?: number | null;
+  lastManagementUpdateAt?: string | null;
+  managementTimeline?: ManagementTimelineEvent[];
   signalReasons: string[];
   marketConditions: string;
 }
@@ -264,6 +304,64 @@ export interface EngineAuditExportResponse {
   entries: EngineAuditEntry[];
 }
 
+export interface DemoTradeExportParams {
+  from?: string;
+  to?: string;
+  symbol?: string;
+  exitReason?: string;
+  limit?: number;
+}
+
+export interface DemoTradeExportEntry {
+  id: string;
+  pair: string;
+  direction: TradeDirection;
+  entryPrice: number;
+  exitPrice: number | null;
+  openTime: number;
+  closeTime: number | null;
+  durationMs: number | null;
+  stopLoss: number;
+  stopLossOriginal: number;
+  target1: number;
+  target2: number;
+  exitReason: ManagedTradeExitReason | null;
+  status: TradeStatus;
+  pnlUSDC: number | null;
+  realizedPnlUSDC: number | null;
+  partialPnlUSDC: number | null;
+  mfeUSDC: number | null;
+  maeUSDC: number | null;
+  mfeR: number | null;
+  maeR: number | null;
+  peakGivebackUSDC: number | null;
+  openGivebackUSDC: number | null;
+  totalGivebackUSDC: number | null;
+  peakGivebackPct: number | null;
+  maxPriceSinceEntry: number | null;
+  minPriceSinceEntry: number | null;
+  maxUnrealizedPnlUSDC: number | null;
+  minUnrealizedPnlUSDC: number | null;
+  target1Hit: boolean;
+  breakeven: boolean;
+  trailing: boolean;
+  signalReasons: string[];
+  managementTimeline: ManagementTimelineEvent[];
+}
+
+export interface DemoTradeExportResponse {
+  exportedAt: string;
+  filters: {
+    from: string | null;
+    to: string | null;
+    symbol: string | null;
+    exitReason: string | null;
+    limit: number;
+  };
+  total: number;
+  entries: DemoTradeExportEntry[];
+}
+
 export interface EngineAuditRankItem {
   name: string;
   count: number;
@@ -456,6 +554,9 @@ const DEFAULT_BREAKEVEN_BUFFER_PCT = 0.0002;
 const DEFAULT_TRAILING_STOP_PCT = 0.002;
 const DEFAULT_LOSS_OF_STRENGTH_PCT = 0.004;
 const PRICE_HISTORY_LIMIT = 20;
+const MANAGEMENT_TIMELINE_LIMIT = 200;
+const MANAGEMENT_MFE_MAE_TOLERANCE_R = 0.05;
+const MANAGEMENT_TRAILING_TOLERANCE_R = 0.03;
 const AUTH_COOKIE_NAME = "oraculo_session";
 const DEFAULT_SESSION_TTL_SECONDS = 12 * 60 * 60;
 const DEFAULT_SCRYPT_N = 16384;
@@ -527,6 +628,92 @@ function jsonParse<T>(value: unknown, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function optionalFiniteNumber(value: unknown): number | null {
+  if (value == null) return null;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function optionalNonNegativeNumber(value: unknown): number | null {
+  const num = optionalFiniteNumber(value);
+  return num === null ? null : Math.max(0, num);
+}
+
+function safeTimelineEvent(value: unknown): ManagementTimelineEvent | null {
+  if (!value || typeof value !== "object") return null;
+  const input = value as Record<string, unknown>;
+  if (typeof input.type !== "string" || typeof input.at !== "string") return null;
+  return {
+    type: input.type as ManagementTimelineEventType,
+    at: input.at,
+    price: optionalFiniteNumber(input.price),
+    unrealizedPnlUSDC: optionalFiniteNumber(input.unrealizedPnlUSDC),
+    ...(typeof input.note === "string" ? { note: input.note.slice(0, 500) } : {}),
+    ...(input.data && typeof input.data === "object" ? { data: input.data as Record<string, unknown> } : {}),
+  };
+}
+
+function safeManagementTimeline(value: unknown): ManagementTimelineEvent[] {
+  const parsed = typeof value === "string" ? jsonParse<unknown>(value, []) : value;
+  if (!Array.isArray(parsed)) return [];
+  return parsed.map(safeTimelineEvent).filter((event): event is ManagementTimelineEvent => event !== null).slice(-MANAGEMENT_TIMELINE_LIMIT);
+}
+
+function openedTimelineEvent(trade: Pick<DemoTrade, "entry" | "openTime">): ManagementTimelineEvent {
+  return {
+    type: "OPENED",
+    at: new Date(trade.openTime).toISOString(),
+    price: trade.entry,
+    unrealizedPnlUSDC: 0,
+    note: "Posicao aberta.",
+  };
+}
+
+function appendTimelineEvent(timeline: ManagementTimelineEvent[] | undefined, event: ManagementTimelineEvent): ManagementTimelineEvent[] {
+  const events = safeManagementTimeline(timeline ?? []);
+  const next = events.length === 0 && event.type !== "OPENED"
+    ? [openedTimelineEvent({ entry: event.price ?? 0, openTime: Date.now() }), event]
+    : [...events, event];
+  if (next.length <= MANAGEMENT_TIMELINE_LIMIT) return next;
+  const opened = next.find((item) => item.type === "OPENED");
+  let closed: ManagementTimelineEvent | undefined;
+  for (let index = next.length - 1; index >= 0; index -= 1) {
+    const item: ManagementTimelineEvent = next[index];
+    if (item.type === "CLOSED") {
+      closed = item;
+      break;
+    }
+  }
+  const protectedIds = new Set<ManagementTimelineEvent>();
+  if (opened) protectedIds.add(opened);
+  if (closed) protectedIds.add(closed);
+  const middle = next.filter((item) => !protectedIds.has(item));
+  const keepMiddle = middle.slice(-(MANAGEMENT_TIMELINE_LIMIT - protectedIds.size));
+  return [
+    ...(opened ? [opened] : []),
+    ...keepMiddle,
+    ...(closed && closed !== opened ? [closed] : []),
+  ].slice(-MANAGEMENT_TIMELINE_LIMIT);
+}
+
+function openPnlFor(trade: Pick<DemoTrade, "direction" | "entry" | "positionSize" | "remainingPositionSize">, price: number): number {
+  const size = trade.remainingPositionSize ?? trade.positionSize;
+  return trade.direction === "BUY"
+    ? (price - trade.entry) * size
+    : (trade.entry - price) * size;
+}
+
+function fullSizePnlFor(trade: Pick<DemoTrade, "direction" | "entry" | "positionSize">, price: number): number {
+  return trade.direction === "BUY"
+    ? (price - trade.entry) * trade.positionSize
+    : (trade.entry - price) * trade.positionSize;
+}
+
+function managementToleranceUSDC(trade: DemoTrade, fractionR = MANAGEMENT_MFE_MAE_TOLERANCE_R): number {
+  const initialRisk = trade.initialRiskAmount ?? trade.riskAmount;
+  return Number.isFinite(initialRisk) && initialRisk > 0 ? initialRisk * fractionR : 0.01;
 }
 
 function canonical(value: unknown): string {
@@ -722,6 +909,23 @@ function tradeFromRow(row: Record<string, unknown>): DemoTrade {
     partialPnlUSDC: row.partial_pnl_usdc == null ? undefined : Number(row.partial_pnl_usdc),
     target1ClosePrice: row.target1_close_price == null ? undefined : Number(row.target1_close_price),
     maxDurationMs: row.max_duration_ms == null ? undefined : Number(row.max_duration_ms),
+    initialRiskAmount: row.initial_risk_amount == null ? Number(row.risk_amount) : Number(row.initial_risk_amount),
+    maxPriceSinceEntry: optionalFiniteNumber(row.max_price_since_entry),
+    minPriceSinceEntry: optionalFiniteNumber(row.min_price_since_entry),
+    maxUnrealizedPnlUSDC: optionalFiniteNumber(row.max_unrealized_pnl_usdc),
+    minUnrealizedPnlUSDC: optionalFiniteNumber(row.min_unrealized_pnl_usdc),
+    maxUnrealizedPnlBeforePartial: optionalFiniteNumber(row.max_unrealized_pnl_before_partial),
+    maxUnrealizedPnlAfterPartial: optionalFiniteNumber(row.max_unrealized_pnl_after_partial),
+    mfeUSDC: optionalNonNegativeNumber(row.mfe_usdc),
+    maeUSDC: optionalNonNegativeNumber(row.mae_usdc),
+    mfeR: optionalNonNegativeNumber(row.mfe_r),
+    maeR: optionalNonNegativeNumber(row.mae_r),
+    peakGivebackUSDC: optionalNonNegativeNumber(row.peak_giveback_usdc),
+    openGivebackUSDC: optionalNonNegativeNumber(row.open_giveback_usdc),
+    totalGivebackUSDC: optionalNonNegativeNumber(row.total_giveback_usdc),
+    peakGivebackPct: optionalNonNegativeNumber(row.peak_giveback_pct),
+    lastManagementUpdateAt: row.last_management_update_at == null ? null : String(row.last_management_update_at),
+    managementTimeline: safeManagementTimeline(row.management_timeline_json),
     signalReasons: jsonParse(String(row.signal_reasons_json), []),
     marketConditions: String(row.market_conditions),
   };
@@ -973,6 +1177,23 @@ export class DemoStore {
             partial_pnl_usdc REAL NOT NULL DEFAULT 0,
             target1_close_price REAL,
             max_duration_ms INTEGER NOT NULL DEFAULT 5400000,
+            initial_risk_amount REAL,
+            max_price_since_entry REAL,
+            min_price_since_entry REAL,
+            max_unrealized_pnl_usdc REAL,
+            min_unrealized_pnl_usdc REAL,
+            max_unrealized_pnl_before_partial REAL,
+            max_unrealized_pnl_after_partial REAL,
+            mfe_usdc REAL,
+            mae_usdc REAL,
+            mfe_r REAL,
+            mae_r REAL,
+            peak_giveback_usdc REAL,
+            open_giveback_usdc REAL,
+            total_giveback_usdc REAL,
+            peak_giveback_pct REAL,
+            last_management_update_at TEXT,
+            management_timeline_json TEXT,
             signal_reasons_json TEXT NOT NULL,
             market_conditions TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -1003,6 +1224,23 @@ export class DemoStore {
             partial_pnl_usdc REAL,
             target1_close_price REAL,
             max_duration_ms INTEGER,
+            initial_risk_amount REAL,
+            max_price_since_entry REAL,
+            min_price_since_entry REAL,
+            max_unrealized_pnl_usdc REAL,
+            min_unrealized_pnl_usdc REAL,
+            max_unrealized_pnl_before_partial REAL,
+            max_unrealized_pnl_after_partial REAL,
+            mfe_usdc REAL,
+            mae_usdc REAL,
+            mfe_r REAL,
+            mae_r REAL,
+            peak_giveback_usdc REAL,
+            open_giveback_usdc REAL,
+            total_giveback_usdc REAL,
+            peak_giveback_pct REAL,
+            last_management_update_at TEXT,
+            management_timeline_json TEXT,
             exit_reason TEXT,
             target1_hit INTEGER NOT NULL DEFAULT 0,
             is_breakeven_stop INTEGER NOT NULL DEFAULT 0,
@@ -1417,6 +1655,39 @@ export class DemoStore {
             ON engine_audit_log(user_id, symbol, analyzed_at);
         `);
         this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (9, 'engine_audit_log', ?)").run(nowIso());
+      });
+    }
+    const v10 = this.db.prepare("SELECT version FROM schema_migrations WHERE version = 10").get();
+    if (!v10) {
+      this.transaction(() => {
+        const addColumn = (table: string, column: string, definition: string) => {
+          const exists = (this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((row) => row.name === column);
+          if (!exists) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+        };
+        const columns: Array<[string, string]> = [
+          ["initial_risk_amount", "initial_risk_amount REAL"],
+          ["max_price_since_entry", "max_price_since_entry REAL"],
+          ["min_price_since_entry", "min_price_since_entry REAL"],
+          ["max_unrealized_pnl_usdc", "max_unrealized_pnl_usdc REAL"],
+          ["min_unrealized_pnl_usdc", "min_unrealized_pnl_usdc REAL"],
+          ["max_unrealized_pnl_before_partial", "max_unrealized_pnl_before_partial REAL"],
+          ["max_unrealized_pnl_after_partial", "max_unrealized_pnl_after_partial REAL"],
+          ["mfe_usdc", "mfe_usdc REAL"],
+          ["mae_usdc", "mae_usdc REAL"],
+          ["mfe_r", "mfe_r REAL"],
+          ["mae_r", "mae_r REAL"],
+          ["peak_giveback_usdc", "peak_giveback_usdc REAL"],
+          ["open_giveback_usdc", "open_giveback_usdc REAL"],
+          ["total_giveback_usdc", "total_giveback_usdc REAL"],
+          ["peak_giveback_pct", "peak_giveback_pct REAL"],
+          ["last_management_update_at", "last_management_update_at TEXT"],
+          ["management_timeline_json", "management_timeline_json TEXT"],
+        ];
+        for (const [column, definition] of columns) {
+          addColumn("demo_positions", column, definition);
+          addColumn("demo_trades", column, definition);
+        }
+        this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (10, 'demo_trade_observability', ?)").run(nowIso());
       });
     }
   }
@@ -2182,6 +2453,97 @@ export class DemoStore {
         byState,
       },
       total,
+      entries,
+    };
+  }
+
+  exportDemoTradeHistory(user: AuthUser, params: DemoTradeExportParams = {}): DemoTradeExportResponse {
+    if (user.role !== "admin") throw new HttpError(403, "Admin required");
+    const safeLimit = Math.max(1, Math.min(5000, Math.floor(params.limit ?? 1000)));
+    const symbol = params.symbol?.trim().toUpperCase() || null;
+    const exitReason = params.exitReason?.trim().toUpperCase() || null;
+    const from = params.from?.trim() || null;
+    const to = params.to?.trim() || null;
+    const fromMs = from ? Date.parse(from) : null;
+    const toMs = to ? Date.parse(to) : null;
+    if (from !== null && !Number.isFinite(fromMs)) throw new HttpError(400, "invalid from filter");
+    if (to !== null && !Number.isFinite(toMs)) throw new HttpError(400, "invalid to filter");
+
+    const whereClauses: string[] = ["user_id = ?"];
+    const sqlArgs: (string | number | null)[] = [user.id];
+    if (symbol !== null) {
+      whereClauses.push("pair = ?");
+      sqlArgs.push(symbol);
+    }
+    if (exitReason !== null) {
+      whereClauses.push("exit_reason = ?");
+      sqlArgs.push(exitReason);
+    }
+    if (fromMs !== null) {
+      whereClauses.push("COALESCE(close_time, open_time) >= ?");
+      sqlArgs.push(fromMs);
+    }
+    if (toMs !== null) {
+      whereClauses.push("COALESCE(close_time, open_time) <= ?");
+      sqlArgs.push(toMs);
+    }
+    const whereSql = "WHERE " + whereClauses.join(" AND ");
+    const rows = this.db.prepare(`
+      SELECT * FROM demo_trades
+      ${whereSql}
+      ORDER BY COALESCE(close_time, open_time) DESC
+      LIMIT ?
+    `).all(...sqlArgs, safeLimit) as Record<string, unknown>[];
+    const totalRow = this.db.prepare(`SELECT COUNT(*) AS cnt FROM demo_trades ${whereSql}`).get(...sqlArgs) as Record<string, unknown>;
+    const entries: DemoTradeExportEntry[] = rows.map((row) => {
+      const trade = tradeFromRow(row);
+      return {
+        id: trade.id,
+        pair: trade.pair,
+        direction: trade.direction,
+        entryPrice: trade.entry,
+        exitPrice: trade.closePrice ?? null,
+        openTime: trade.openTime,
+        closeTime: trade.closeTime ?? null,
+        durationMs: trade.closeTime === undefined ? null : tradeAgeMs(trade, trade.closeTime),
+        stopLoss: trade.stopLoss,
+        stopLossOriginal: trade.stopLossOriginal,
+        target1: trade.target1,
+        target2: trade.target2,
+        exitReason: trade.exitReason ?? null,
+        status: trade.status,
+        pnlUSDC: trade.pnlUSDC ?? null,
+        realizedPnlUSDC: trade.realizedPnlUSDC ?? null,
+        partialPnlUSDC: trade.partialPnlUSDC ?? null,
+        mfeUSDC: trade.mfeUSDC ?? 0,
+        maeUSDC: trade.maeUSDC ?? 0,
+        mfeR: trade.mfeR ?? null,
+        maeR: trade.maeR ?? null,
+        peakGivebackUSDC: trade.peakGivebackUSDC ?? 0,
+        openGivebackUSDC: trade.openGivebackUSDC ?? 0,
+        totalGivebackUSDC: trade.totalGivebackUSDC ?? 0,
+        peakGivebackPct: trade.peakGivebackPct ?? 0,
+        maxPriceSinceEntry: trade.maxPriceSinceEntry ?? null,
+        minPriceSinceEntry: trade.minPriceSinceEntry ?? null,
+        maxUnrealizedPnlUSDC: trade.maxUnrealizedPnlUSDC ?? 0,
+        minUnrealizedPnlUSDC: trade.minUnrealizedPnlUSDC ?? 0,
+        target1Hit: trade.target1Hit,
+        breakeven: trade.isBreakevenStop,
+        trailing: (trade.managementTimeline ?? []).some((event) => event.type === "TRAILING_ACTIVATED" || event.type === "TRAILING_UPDATED"),
+        signalReasons: trade.signalReasons,
+        managementTimeline: trade.managementTimeline ?? [],
+      };
+    });
+    return {
+      exportedAt: nowIso(),
+      filters: {
+        from,
+        to,
+        symbol,
+        exitReason,
+        limit: safeLimit,
+      },
+      total: Number(totalRow?.cnt ?? 0),
       entries,
     };
   }
@@ -3059,18 +3421,22 @@ export class DemoStore {
     const input = body as Record<string, unknown>;
     const direction = nonEmptyString(input.direction, "direction");
     if (direction !== "BUY" && direction !== "SELL") throw new HttpError(400, "direction must be BUY or SELL");
+    const openTime = finiteNumber(input.openTime, "openTime", 1);
+    const entry = finiteNumber(input.entry, "entry", 0.00000001, MAX_PRICE);
+    const riskAmount = finiteNumber(input.riskAmount, "riskAmount", 0, MAX_BALANCE);
+    const timeline = safeManagementTimeline(input.managementTimeline ?? input.management_timeline_json);
     return {
       id: nonEmptyString(input.id, "id", 128),
       pair: nonEmptyString(input.pair, "pair", 32).toUpperCase(),
       direction,
-      openTime: finiteNumber(input.openTime, "openTime", 1),
-      entry: finiteNumber(input.entry, "entry", 0.00000001, MAX_PRICE),
+      openTime,
+      entry,
       stopLoss: finiteNumber(input.stopLoss, "stopLoss", 0.00000001, MAX_PRICE),
       stopLossOriginal: finiteNumber(input.stopLossOriginal ?? input.stopLoss, "stopLossOriginal", 0.00000001, MAX_PRICE),
       target1: finiteNumber(input.target1, "target1", 0.00000001, MAX_PRICE),
       target2: finiteNumber(input.target2, "target2", 0.00000001, MAX_PRICE),
       balanceAtOpen: finiteNumber(input.balanceAtOpen, "balanceAtOpen", 0, MAX_BALANCE),
-      riskAmount: finiteNumber(input.riskAmount, "riskAmount", 0, MAX_BALANCE),
+      riskAmount,
       positionSize: finiteNumber(input.positionSize, "positionSize", 0, MAX_POSITION_SIZE),
       remainingPositionSize: finiteNumber(input.remainingPositionSize ?? input.positionSize, "remainingPositionSize", 0, MAX_POSITION_SIZE),
       riskReward: nonEmptyString(input.riskReward, "riskReward", 32),
@@ -3081,6 +3447,23 @@ export class DemoStore {
       partialPnlUSDC: finiteNumber(input.partialPnlUSDC ?? 0, "partialPnlUSDC", -MAX_BALANCE, MAX_BALANCE),
       target1ClosePrice: input.target1ClosePrice === undefined ? undefined : finiteNumber(input.target1ClosePrice, "target1ClosePrice", 0.00000001, MAX_PRICE),
       maxDurationMs: finiteNumber(input.maxDurationMs ?? DEFAULT_MAX_DURATION_MS, "maxDurationMs", 60_000, 24 * 60 * 60 * 1000),
+      initialRiskAmount: finiteNumber(input.initialRiskAmount ?? input.initial_risk_amount ?? riskAmount, "initialRiskAmount", 0, MAX_BALANCE),
+      maxPriceSinceEntry: optionalFiniteNumber(input.maxPriceSinceEntry ?? input.max_price_since_entry) ?? entry,
+      minPriceSinceEntry: optionalFiniteNumber(input.minPriceSinceEntry ?? input.min_price_since_entry) ?? entry,
+      maxUnrealizedPnlUSDC: optionalFiniteNumber(input.maxUnrealizedPnlUSDC ?? input.max_unrealized_pnl_usdc) ?? 0,
+      minUnrealizedPnlUSDC: optionalFiniteNumber(input.minUnrealizedPnlUSDC ?? input.min_unrealized_pnl_usdc) ?? 0,
+      maxUnrealizedPnlBeforePartial: optionalFiniteNumber(input.maxUnrealizedPnlBeforePartial ?? input.max_unrealized_pnl_before_partial) ?? 0,
+      maxUnrealizedPnlAfterPartial: optionalFiniteNumber(input.maxUnrealizedPnlAfterPartial ?? input.max_unrealized_pnl_after_partial),
+      mfeUSDC: optionalNonNegativeNumber(input.mfeUSDC ?? input.mfe_usdc) ?? 0,
+      maeUSDC: optionalNonNegativeNumber(input.maeUSDC ?? input.mae_usdc) ?? 0,
+      mfeR: optionalNonNegativeNumber(input.mfeR ?? input.mfe_r) ?? (riskAmount > 0 ? 0 : null),
+      maeR: optionalNonNegativeNumber(input.maeR ?? input.mae_r) ?? (riskAmount > 0 ? 0 : null),
+      peakGivebackUSDC: optionalNonNegativeNumber(input.peakGivebackUSDC ?? input.peak_giveback_usdc) ?? 0,
+      openGivebackUSDC: optionalNonNegativeNumber(input.openGivebackUSDC ?? input.open_giveback_usdc) ?? 0,
+      totalGivebackUSDC: optionalNonNegativeNumber(input.totalGivebackUSDC ?? input.total_giveback_usdc) ?? 0,
+      peakGivebackPct: optionalNonNegativeNumber(input.peakGivebackPct ?? input.peak_giveback_pct) ?? 0,
+      lastManagementUpdateAt: typeof input.lastManagementUpdateAt === "string" ? input.lastManagementUpdateAt : typeof input.last_management_update_at === "string" ? input.last_management_update_at : null,
+      managementTimeline: timeline.length > 0 ? timeline : [openedTimelineEvent({ entry, openTime })],
       signalReasons: stringArray(input.signalReasons ?? [], "signalReasons"),
       marketConditions: nonEmptyString(input.marketConditions, "marketConditions", 5000),
     };
@@ -3095,13 +3478,36 @@ export class DemoStore {
           (id, user_id, pair, direction, status, open_time, entry, stop_loss, stop_loss_original, target1, target2,
            balance_at_open, risk_amount, position_size, remaining_position_size, risk_reward, target1_hit, is_breakeven_stop,
            realized_pnl_usdc, partial_pnl_usdc, target1_close_price, max_duration_ms,
+           initial_risk_amount, max_price_since_entry, min_price_since_entry,
+           max_unrealized_pnl_usdc, min_unrealized_pnl_usdc,
+           max_unrealized_pnl_before_partial, max_unrealized_pnl_after_partial,
+           mfe_usdc, mae_usdc, mfe_r, mae_r,
+           peak_giveback_usdc, open_giveback_usdc, total_giveback_usdc, peak_giveback_pct,
+           last_management_update_at, management_timeline_json,
            signal_reasons_json, market_conditions, updated_at)
-        VALUES (?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         position.id, userId, position.pair, position.direction, position.openTime, position.entry, position.stopLoss,
         position.stopLossOriginal, position.target1, position.target2, position.balanceAtOpen, position.riskAmount,
         position.positionSize, position.remainingPositionSize, position.riskReward, Number(position.target1Hit), Number(position.isBreakevenStop),
         position.realizedPnlUSDC ?? 0, position.partialPnlUSDC ?? 0, position.target1ClosePrice ?? null, position.maxDurationMs ?? DEFAULT_MAX_DURATION_MS,
+        position.initialRiskAmount ?? position.riskAmount,
+        position.maxPriceSinceEntry ?? position.entry,
+        position.minPriceSinceEntry ?? position.entry,
+        position.maxUnrealizedPnlUSDC ?? 0,
+        position.minUnrealizedPnlUSDC ?? 0,
+        position.maxUnrealizedPnlBeforePartial ?? 0,
+        position.maxUnrealizedPnlAfterPartial ?? null,
+        position.mfeUSDC ?? 0,
+        position.maeUSDC ?? 0,
+        position.mfeR ?? null,
+        position.maeR ?? null,
+        position.peakGivebackUSDC ?? 0,
+        position.openGivebackUSDC ?? 0,
+        position.totalGivebackUSDC ?? 0,
+        position.peakGivebackPct ?? 0,
+        position.lastManagementUpdateAt ?? now,
+        JSON.stringify(position.managementTimeline ?? [openedTimelineEvent(position)]),
         JSON.stringify(position.signalReasons), position.marketConditions, now,
       );
     } catch (err) {
@@ -3327,6 +3733,126 @@ export class DemoStore {
     return next;
   }
 
+  private timelineEvent(type: ManagementTimelineEventType, trade: DemoTrade, price: number | null, note: string, data: Record<string, unknown> = {}): ManagementTimelineEvent {
+    return {
+      type,
+      at: nowIso(),
+      price,
+      unrealizedPnlUSDC: price !== null && Number.isFinite(price) && price > 0 ? openPnlFor(trade, price) : null,
+      note,
+      data,
+    };
+  }
+
+  private updatePositionObservability(userId: string, trade: DemoTrade, price: number): DemoTrade {
+    if (!Number.isFinite(price) || price <= 0) return trade;
+    const currentOpenPnl = openPnlFor(trade, price);
+    const initialRisk = trade.initialRiskAmount ?? trade.riskAmount;
+    const previousMaxPnl = trade.maxUnrealizedPnlUSDC ?? 0;
+    const previousMinPnl = trade.minUnrealizedPnlUSDC ?? 0;
+    const maxUnrealizedPnlUSDC = Math.max(previousMaxPnl, currentOpenPnl);
+    const minUnrealizedPnlUSDC = Math.min(previousMinPnl, currentOpenPnl);
+    const maxPriceSinceEntry = trade.maxPriceSinceEntry == null ? price : Math.max(trade.maxPriceSinceEntry, price);
+    const minPriceSinceEntry = trade.minPriceSinceEntry == null ? price : Math.min(trade.minPriceSinceEntry, price);
+    const maxUnrealizedPnlBeforePartial = trade.target1Hit
+      ? (trade.maxUnrealizedPnlBeforePartial ?? previousMaxPnl)
+      : Math.max(trade.maxUnrealizedPnlBeforePartial ?? 0, currentOpenPnl);
+    const maxUnrealizedPnlAfterPartial = trade.target1Hit
+      ? Math.max(trade.maxUnrealizedPnlAfterPartial ?? currentOpenPnl, currentOpenPnl)
+      : trade.maxUnrealizedPnlAfterPartial ?? null;
+    const mfeUSDC = Math.max(0, maxUnrealizedPnlUSDC);
+    const maeUSDC = Math.max(0, -minUnrealizedPnlUSDC);
+    const mfeR = Number.isFinite(initialRisk) && initialRisk > 0 ? mfeUSDC / initialRisk : null;
+    const maeR = Number.isFinite(initialRisk) && initialRisk > 0 ? maeUSDC / initialRisk : null;
+    const openPeak = trade.target1Hit && maxUnrealizedPnlAfterPartial !== null ? maxUnrealizedPnlAfterPartial : maxUnrealizedPnlUSDC;
+    const openGivebackUSDC = Math.max(0, openPeak - currentOpenPnl);
+    const totalCurrentPnl = (trade.realizedPnlUSDC ?? 0) + currentOpenPnl;
+    const totalGivebackUSDC = Math.max(0, maxUnrealizedPnlUSDC - totalCurrentPnl);
+    const peakGivebackUSDC = openGivebackUSDC;
+    const peakGivebackPct = openPeak > 0 ? peakGivebackUSDC / openPeak : 0;
+    let timeline = safeManagementTimeline(trade.managementTimeline ?? []);
+    if (timeline.length === 0) timeline = [openedTimelineEvent(trade)];
+    const tolerance = managementToleranceUSDC(trade);
+    const mfeImproved = maxUnrealizedPnlUSDC > previousMaxPnl + tolerance;
+    const maeWorsened = minUnrealizedPnlUSDC < previousMinPnl - tolerance;
+    if (mfeImproved) {
+      timeline = appendTimelineEvent(timeline, this.timelineEvent("NEW_MFE", trade, price, "Novo MFE registrado.", { mfeUSDC, mfeR }));
+    }
+    if (maeWorsened) {
+      timeline = appendTimelineEvent(timeline, this.timelineEvent("NEW_MAE", trade, price, "Novo MAE registrado.", { maeUSDC, maeR }));
+    }
+    const changed = [
+      trade.maxPriceSinceEntry !== maxPriceSinceEntry,
+      trade.minPriceSinceEntry !== minPriceSinceEntry,
+      trade.maxUnrealizedPnlUSDC !== maxUnrealizedPnlUSDC,
+      trade.minUnrealizedPnlUSDC !== minUnrealizedPnlUSDC,
+      trade.maxUnrealizedPnlBeforePartial !== maxUnrealizedPnlBeforePartial,
+      trade.maxUnrealizedPnlAfterPartial !== maxUnrealizedPnlAfterPartial,
+      trade.mfeUSDC !== mfeUSDC,
+      trade.maeUSDC !== maeUSDC,
+      trade.mfeR !== mfeR,
+      trade.maeR !== maeR,
+      trade.openGivebackUSDC !== openGivebackUSDC,
+      trade.totalGivebackUSDC !== totalGivebackUSDC,
+      trade.peakGivebackUSDC !== peakGivebackUSDC,
+      trade.peakGivebackPct !== peakGivebackPct,
+      JSON.stringify(safeManagementTimeline(trade.managementTimeline ?? [])) !== JSON.stringify(timeline),
+    ].some(Boolean);
+    if (!changed) return trade;
+    const updatedAt = nowIso();
+    this.db.prepare(`
+      UPDATE demo_positions
+      SET initial_risk_amount = ?, max_price_since_entry = ?, min_price_since_entry = ?,
+          max_unrealized_pnl_usdc = ?, min_unrealized_pnl_usdc = ?,
+          max_unrealized_pnl_before_partial = ?, max_unrealized_pnl_after_partial = ?,
+          mfe_usdc = ?, mae_usdc = ?, mfe_r = ?, mae_r = ?,
+          peak_giveback_usdc = ?, open_giveback_usdc = ?, total_giveback_usdc = ?, peak_giveback_pct = ?,
+          last_management_update_at = ?, management_timeline_json = ?, updated_at = ?
+      WHERE user_id = ? AND id = ? AND status = 'OPEN'
+    `).run(
+      initialRisk,
+      maxPriceSinceEntry,
+      minPriceSinceEntry,
+      maxUnrealizedPnlUSDC,
+      minUnrealizedPnlUSDC,
+      maxUnrealizedPnlBeforePartial,
+      maxUnrealizedPnlAfterPartial,
+      mfeUSDC,
+      maeUSDC,
+      mfeR,
+      maeR,
+      peakGivebackUSDC,
+      openGivebackUSDC,
+      totalGivebackUSDC,
+      peakGivebackPct,
+      updatedAt,
+      JSON.stringify(timeline),
+      updatedAt,
+      userId,
+      trade.id,
+    );
+    return {
+      ...trade,
+      initialRiskAmount: initialRisk,
+      maxPriceSinceEntry,
+      minPriceSinceEntry,
+      maxUnrealizedPnlUSDC,
+      minUnrealizedPnlUSDC,
+      maxUnrealizedPnlBeforePartial,
+      maxUnrealizedPnlAfterPartial,
+      mfeUSDC,
+      maeUSDC,
+      mfeR,
+      maeR,
+      peakGivebackUSDC,
+      openGivebackUSDC,
+      totalGivebackUSDC,
+      peakGivebackPct,
+      lastManagementUpdateAt: updatedAt,
+      managementTimeline: timeline,
+    };
+  }
+
   private appendPositionReason(userId: string, trade: DemoTrade, reason: string): DemoTrade {
     const signalReasons = [...trade.signalReasons, reason].slice(-40);
     const marketConditions = signalReasons.join(" | ");
@@ -3346,6 +3872,7 @@ export class DemoStore {
     const isBuy = trade.direction === "BUY";
     const settings = this.tradeManagementSettings(userId);
     const history = this.pushPriceHistory(userId, trade, price);
+    trade = this.updatePositionObservability(userId, trade, price);
 
     if (isBuy ? price <= trade.stopLoss : price >= trade.stopLoss) {
       const reason: ManagedTradeExitReason = trade.isBreakevenStop ? "BREAKEVEN" : "STOP_LOSS";
@@ -3399,6 +3926,13 @@ export class DemoStore {
       ? Math.max(latest.stopLoss, rawBreakevenStop)
       : Math.min(latest.stopLoss, rawBreakevenStop);
     const realizedPnlUSDC = (latest.realizedPnlUSDC ?? 0) + partialPnlUSDC;
+    let timeline = safeManagementTimeline(latest.managementTimeline ?? []);
+    if (timeline.length === 0) timeline = [openedTimelineEvent(latest)];
+    const baseAtTarget = { ...latest, remainingPositionSize: currentRemaining };
+    timeline = appendTimelineEvent(timeline, this.timelineEvent("TARGET_1", baseAtTarget, latest.target1, "Alvo 1 atingido.", { target1: latest.target1 }));
+    timeline = appendTimelineEvent(timeline, this.timelineEvent("PARTIAL_EXECUTED", baseAtTarget, latest.target1, "Parcial de 50% executada.", { closedSize, remainingPositionSize, partialPnlUSDC }));
+    timeline = appendTimelineEvent(timeline, this.timelineEvent("BREAKEVEN_ACTIVATED", baseAtTarget, stopLoss, "Stop movido para breakeven.", { stopLoss, bufferPct }));
+    const managementUpdatedAt = nowIso();
     const next = {
       ...latest,
       target1Hit: true,
@@ -3408,14 +3942,33 @@ export class DemoStore {
       realizedPnlUSDC,
       partialPnlUSDC,
       target1ClosePrice: latest.target1,
+      maxUnrealizedPnlBeforePartial: latest.maxUnrealizedPnlBeforePartial ?? latest.maxUnrealizedPnlUSDC ?? 0,
+      maxUnrealizedPnlAfterPartial: latest.maxUnrealizedPnlAfterPartial ?? 0,
+      lastManagementUpdateAt: managementUpdatedAt,
+      managementTimeline: timeline,
     };
     this.db.prepare(`
       UPDATE demo_positions
       SET stop_loss = ?, target1_hit = 1, is_breakeven_stop = 1,
           remaining_position_size = ?, realized_pnl_usdc = ?, partial_pnl_usdc = ?,
-          target1_close_price = ?, updated_at = ?
+          target1_close_price = ?, max_unrealized_pnl_before_partial = ?,
+          max_unrealized_pnl_after_partial = ?, last_management_update_at = ?,
+          management_timeline_json = ?, updated_at = ?
       WHERE user_id = ? AND id = ? AND status = 'OPEN'
-    `).run(stopLoss, remainingPositionSize, realizedPnlUSDC, partialPnlUSDC, latest.target1, nowIso(), userId, latest.id);
+    `).run(
+      stopLoss,
+      remainingPositionSize,
+      realizedPnlUSDC,
+      partialPnlUSDC,
+      latest.target1,
+      next.maxUnrealizedPnlBeforePartial,
+      next.maxUnrealizedPnlAfterPartial,
+      managementUpdatedAt,
+      JSON.stringify(timeline),
+      managementUpdatedAt,
+      userId,
+      latest.id,
+    );
     const withReason = this.appendPositionReason(userId, next, `TARGET_1 parcial: realizou ${closedSize.toFixed(8)} em ${latest.target1}; PnL parcial ${partialPnlUSDC.toFixed(8)}; stop movido para breakeven ${stopLoss.toFixed(8)} com buffer ${(bufferPct * 100).toFixed(4)}%.`);
 
     const account = this.getAccount(userId);
@@ -3480,9 +4033,21 @@ export class DemoStore {
       ? Math.max(trade.stopLoss, price * (1 - adaptivePct))
       : Math.min(trade.stopLoss, price * (1 + adaptivePct));
     if (nextStop === trade.stopLoss) return trade;
-    this.db.prepare("UPDATE demo_positions SET stop_loss = ?, updated_at = ? WHERE user_id = ? AND id = ? AND status = 'OPEN'")
-      .run(nextStop, nowIso(), userId, trade.id);
-    const next = { ...trade, stopLoss: nextStop };
+    let timeline = safeManagementTimeline(trade.managementTimeline ?? []);
+    if (timeline.length === 0) timeline = [openedTimelineEvent(trade)];
+    const trailingSeen = timeline.some((event) => event.type === "TRAILING_ACTIVATED" || event.type === "TRAILING_UPDATED");
+    const stopMoveUSDC = Math.abs(nextStop - trade.stopLoss) * (trade.remainingPositionSize ?? trade.positionSize);
+    const shouldRecordTrailing = !trailingSeen || stopMoveUSDC >= managementToleranceUSDC(trade, MANAGEMENT_TRAILING_TOLERANCE_R);
+    if (shouldRecordTrailing) {
+      timeline = appendTimelineEvent(
+        timeline,
+        this.timelineEvent(trailingSeen ? "TRAILING_UPDATED" : "TRAILING_ACTIVATED", trade, price, trailingSeen ? "Trailing atualizado." : "Trailing ativado.", { previousStop: trade.stopLoss, nextStop, adaptivePct }),
+      );
+    }
+    const updatedAt = nowIso();
+    this.db.prepare("UPDATE demo_positions SET stop_loss = ?, last_management_update_at = ?, management_timeline_json = ?, updated_at = ? WHERE user_id = ? AND id = ? AND status = 'OPEN'")
+      .run(nextStop, updatedAt, JSON.stringify(timeline), updatedAt, userId, trade.id);
+    const next = { ...trade, stopLoss: nextStop, lastManagementUpdateAt: updatedAt, managementTimeline: timeline };
     const bucket = Math.floor(Date.now() / envInt("ORACULO_TRAILING_ALERT_COOLDOWN_MS", 300_000, 60_000, 3_600_000));
     this.createNotification(userId, {
       type: "trailing_updated",
@@ -3517,7 +4082,12 @@ export class DemoStore {
       : price >= trade.entry * (1 - DEFAULT_BREAKEVEN_BUFFER_PCT);
     const signals = [contraryClose, failedContinuation, shortStructureReversal, lostBreakevenBuffer].filter(Boolean).length;
     if (signals >= 2) {
-      this.appendPositionReason(userId, trade, `LOSS_OF_STRENGTH: ${signals}/4 sinais ativos; fechamento contrario=${contraryClose}; falha continuacao=${failedContinuation}; reversao curta=${shortStructureReversal}; perda breakeven=${lostBreakevenBuffer}.`);
+      let timeline = safeManagementTimeline(trade.managementTimeline ?? []);
+      if (timeline.length === 0) timeline = [openedTimelineEvent(trade)];
+      timeline = appendTimelineEvent(timeline, this.timelineEvent("LOSS_OF_STRENGTH_DETECTED", trade, price, "Perda de forca detectada.", { signals, contraryClose, failedContinuation, shortStructureReversal, lostBreakevenBuffer }));
+      this.db.prepare("UPDATE demo_positions SET last_management_update_at = ?, management_timeline_json = ?, updated_at = ? WHERE user_id = ? AND id = ? AND status = 'OPEN'")
+        .run(nowIso(), JSON.stringify(timeline), nowIso(), userId, trade.id);
+      this.appendPositionReason(userId, { ...trade, managementTimeline: timeline }, `LOSS_OF_STRENGTH: ${signals}/4 sinais ativos; fechamento contrario=${contraryClose}; falha continuacao=${failedContinuation}; reversao curta=${shortStructureReversal}; perda breakeven=${lostBreakevenBuffer}.`);
       return true;
     }
     if (signals === 1) {
@@ -3542,6 +4112,24 @@ export class DemoStore {
     const status = closedStatus(pnlUSDC);
     const closeTime = Date.now();
     const durationMs = tradeAgeMs(position, closeTime);
+    let timeline = safeManagementTimeline(position.managementTimeline ?? []);
+    if (timeline.length === 0) timeline = [openedTimelineEvent(position)];
+    const exitType: ManagementTimelineEventType = exitReason === "TARGET_2"
+      ? "TARGET_2"
+      : exitReason === "TIMEOUT"
+        ? "TIMEOUT"
+        : exitReason === "LOSS_OF_STRENGTH"
+          ? "LOSS_OF_STRENGTH_DETECTED"
+          : "STOP";
+    timeline = appendTimelineEvent(timeline, this.timelineEvent(exitType, position, closePrice, `Saida por ${exitReason}.`, { exitReason, status, pnlUSDC }));
+    timeline = appendTimelineEvent(timeline, {
+      type: "CLOSED",
+      at: new Date(closeTime).toISOString(),
+      price: closePrice,
+      unrealizedPnlUSDC: remainingPnl,
+      note: "Posicao encerrada.",
+      data: { exitReason, status, pnlUSDC, durationMs },
+    });
     const signalReasons = [...position.signalReasons, `FECHAMENTO ${exitReason}: preco ${closePrice}; duracao ${durationMs}ms; PnL ${pnlUSDC.toFixed(8)}.`].slice(-40);
     const closed: DemoTrade = {
       ...position,
@@ -3555,6 +4143,8 @@ export class DemoStore {
       marketConditions: signalReasons.join(" | "),
       pnlUSDC,
       pnlPct,
+      lastManagementUpdateAt: new Date(closeTime).toISOString(),
+      managementTimeline: timeline,
     };
     this.upsertTrade(userId, closed);
     this.db.prepare("DELETE FROM demo_positions WHERE user_id = ? AND id = ?").run(userId, position.id);
@@ -3622,14 +4212,37 @@ export class DemoStore {
         (id, user_id, pair, direction, status, open_time, close_time, entry, close_price, stop_loss, stop_loss_original,
          target1, target2, balance_at_open, risk_amount, position_size, remaining_position_size, risk_reward, pnl_usdc, pnl_pct,
          realized_pnl_usdc, partial_pnl_usdc, target1_close_price, max_duration_ms,
+         initial_risk_amount, max_price_since_entry, min_price_since_entry,
+         max_unrealized_pnl_usdc, min_unrealized_pnl_usdc,
+         max_unrealized_pnl_before_partial, max_unrealized_pnl_after_partial,
+         mfe_usdc, mae_usdc, mfe_r, mae_r,
+         peak_giveback_usdc, open_giveback_usdc, total_giveback_usdc, peak_giveback_pct,
+         last_management_update_at, management_timeline_json,
          exit_reason, target1_hit, is_breakeven_stop, signal_reasons_json, market_conditions, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         status = excluded.status, close_time = excluded.close_time, close_price = excluded.close_price,
         pnl_usdc = excluded.pnl_usdc, pnl_pct = excluded.pnl_pct, exit_reason = excluded.exit_reason,
         remaining_position_size = excluded.remaining_position_size,
         realized_pnl_usdc = excluded.realized_pnl_usdc, partial_pnl_usdc = excluded.partial_pnl_usdc,
         target1_close_price = excluded.target1_close_price, max_duration_ms = excluded.max_duration_ms,
+        initial_risk_amount = excluded.initial_risk_amount,
+        max_price_since_entry = excluded.max_price_since_entry,
+        min_price_since_entry = excluded.min_price_since_entry,
+        max_unrealized_pnl_usdc = excluded.max_unrealized_pnl_usdc,
+        min_unrealized_pnl_usdc = excluded.min_unrealized_pnl_usdc,
+        max_unrealized_pnl_before_partial = excluded.max_unrealized_pnl_before_partial,
+        max_unrealized_pnl_after_partial = excluded.max_unrealized_pnl_after_partial,
+        mfe_usdc = excluded.mfe_usdc,
+        mae_usdc = excluded.mae_usdc,
+        mfe_r = excluded.mfe_r,
+        mae_r = excluded.mae_r,
+        peak_giveback_usdc = excluded.peak_giveback_usdc,
+        open_giveback_usdc = excluded.open_giveback_usdc,
+        total_giveback_usdc = excluded.total_giveback_usdc,
+        peak_giveback_pct = excluded.peak_giveback_pct,
+        last_management_update_at = excluded.last_management_update_at,
+        management_timeline_json = excluded.management_timeline_json,
         stop_loss = excluded.stop_loss, target1_hit = excluded.target1_hit,
         is_breakeven_stop = excluded.is_breakeven_stop, updated_at = excluded.updated_at
     `).run(
@@ -3638,6 +4251,23 @@ export class DemoStore {
       trade.balanceAtOpen, trade.riskAmount, trade.positionSize, trade.remainingPositionSize ?? trade.positionSize,
       trade.riskReward, trade.pnlUSDC ?? null, trade.pnlPct ?? null,
       trade.realizedPnlUSDC ?? null, trade.partialPnlUSDC ?? null, trade.target1ClosePrice ?? null, trade.maxDurationMs ?? null,
+      trade.initialRiskAmount ?? trade.riskAmount,
+      trade.maxPriceSinceEntry ?? null,
+      trade.minPriceSinceEntry ?? null,
+      trade.maxUnrealizedPnlUSDC ?? null,
+      trade.minUnrealizedPnlUSDC ?? null,
+      trade.maxUnrealizedPnlBeforePartial ?? null,
+      trade.maxUnrealizedPnlAfterPartial ?? null,
+      trade.mfeUSDC ?? null,
+      trade.maeUSDC ?? null,
+      trade.mfeR ?? null,
+      trade.maeR ?? null,
+      trade.peakGivebackUSDC ?? null,
+      trade.openGivebackUSDC ?? null,
+      trade.totalGivebackUSDC ?? null,
+      trade.peakGivebackPct ?? null,
+      trade.lastManagementUpdateAt ?? null,
+      trade.managementTimeline ? JSON.stringify(trade.managementTimeline) : null,
       trade.exitReason ?? null, Number(trade.target1Hit), Number(trade.isBreakevenStop),
       JSON.stringify(trade.signalReasons), trade.marketConditions, now, now,
     );
