@@ -23,6 +23,7 @@ writeFileSync(outFile, output.outputText);
 const {
   formatTelegramDailySummary,
   formatTelegramNotification,
+  shouldQueueTelegramDelivery,
   telegramRuntimeStatus,
 } = await import("./.tmp/telegram-notifications.mjs");
 
@@ -49,6 +50,9 @@ function notification(overrides = {}) {
         stopLoss: 95,
         target1: 105,
         target2: 110,
+        riskAmount: 10,
+        partialPnlUSDC: 5,
+        remainingPositionSize: 1,
         signalReasons: ["tendencia alinhada", "reteste confirmado"],
       },
       score: 82,
@@ -66,22 +70,35 @@ test("formats operational entry messages without exposing secrets", () => {
   assert.match(text, /Stop: 95\.0000/);
   assert.match(text, /Alvo 1: 105\.0000/);
   assert.match(text, /Alvo 2: 110\.0000/);
+  assert.match(text, /Risco: \+\$10\.00/);
   assert.match(text, /Score: 82/);
   assert.match(text, /ID: trade_1/);
   assert.match(text, /tendencia alinhada/);
   assert.doesNotMatch(text, /123456:test-bot-token-not-real/);
 });
 
-test("formats management and exit messages from existing trade metadata", () => {
-  const management = formatTelegramNotification(notification({
-    type: "partial_executed",
-    title: "Parcial executada",
-    message: "BTCUSDT: parcial de 50% realizada.",
-    metadata: { partialPnlUSDC: 10.5, remainingPositionSize: 0.25 },
+test("formats consolidated target1 and exit messages from existing trade metadata", () => {
+  const target1 = formatTelegramNotification(notification({
+    type: "target1_hit",
+    title: "Alvo 1 atingido",
+    message: "BTCUSDT: alvo 1 atingido.",
+    metadata: {
+      trade: {
+        id: "trade_1",
+        pair: "BTCUSDT",
+        stopLoss: 100.02,
+        partialPnlUSDC: 10.5,
+        remainingPositionSize: 0.25,
+      },
+    },
   }), "admin");
-  assert.match(management, /Tipo: gestao/);
-  assert.match(management, /PnL parcial: \+\$10\.50/);
-  assert.match(management, /Qtd restante: 0\.25000000/);
+  assert.match(target1, /Tipo: alvo 1 consolidado/);
+  assert.match(target1, /Alvo 1 atingido/);
+  assert.match(target1, /Parcial de 50% executada/);
+  assert.match(target1, /PnL parcial: \+\$10\.50/);
+  assert.match(target1, /Qtd restante: 0\.25000000/);
+  assert.match(target1, /Stop movido para breakeven/);
+  assert.match(target1, /Novo stop: 100\.0200/);
 
   const exit = formatTelegramNotification(notification({
     type: "stop_loss",
@@ -106,6 +123,20 @@ test("formats management and exit messages from existing trade metadata", () => 
   assert.match(exit, /MAE: \+\$7\.00/);
   assert.match(exit, /Giveback: \+\$3\.00/);
   assert.match(exit, /Tempo: 1h 30m/);
+});
+
+test("queues only approved operational Telegram events when the feature flag is enabled", () => {
+  for (const type of ["demo_entry_opened", "target1_hit", "target2_hit", "stop_loss", "loss_of_strength", "timeout"]) {
+    assert.equal(shouldQueueTelegramDelivery(type, "DEMO", false), false);
+    assert.equal(shouldQueueTelegramDelivery(type, "DEMO", true), true);
+  }
+
+  for (const type of ["partial_executed", "breakeven_moved", "trailing_updated"]) {
+    assert.equal(shouldQueueTelegramDelivery(type, "DEMO", false), false);
+    assert.equal(shouldQueueTelegramDelivery(type, "DEMO", true), false);
+  }
+
+  assert.equal(shouldQueueTelegramDelivery("test", "SYSTEM", false), true);
 });
 
 test("reports disabled Telegram runtime and prepares daily summary without scheduling", () => {

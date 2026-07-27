@@ -18,6 +18,27 @@ export interface TelegramDailySummaryInput {
   biggestLoserUSDC: number | null;
 }
 
+const operationalEventTypes = new Set([
+  "demo_entry_opened",
+  "target1_hit",
+  "partial_executed",
+  "breakeven_moved",
+  "trailing_updated",
+  "target2_hit",
+  "stop_loss",
+  "loss_of_strength",
+  "timeout",
+]);
+
+const telegramDeliveryTypes = new Set([
+  "demo_entry_opened",
+  "target1_hit",
+  "target2_hit",
+  "stop_loss",
+  "loss_of_strength",
+  "timeout",
+]);
+
 function finiteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
@@ -71,6 +92,12 @@ export function sanitizeTelegramText(value: unknown): string {
     .slice(0, 3500);
 }
 
+export function shouldQueueTelegramDelivery(type: string, source: string, operationalEnabled: boolean): boolean {
+  if (source !== "DEMO" || !operationalEventTypes.has(type)) return true;
+  if (!operationalEnabled) return false;
+  return telegramDeliveryTypes.has(type);
+}
+
 function operationalEntryLines(notification: NotificationDto): string[] {
   const metadata = metadataObject(notification.metadata);
   const trade = tradeMetadata(notification);
@@ -83,24 +110,27 @@ function operationalEntryLines(notification: NotificationDto): string[] {
     `Stop: ${fmtNumber(trade.stopLoss)}`,
     `Alvo 1: ${fmtNumber(trade.target1)}`,
     `Alvo 2: ${fmtNumber(trade.target2)}`,
+    `Risco: ${fmtMoney(trade.riskAmount ?? metadata.riskAmount)}`,
     `Score: ${fmtNumber(metadata.score ?? metadata.scoreOperacional ?? metadata.scoreContextual, 0)}`,
     `ID: ${notification.relatedEventId ?? trade.id ?? "nao registrado"}`,
     reasons.length > 0 ? `Motivos: ${reasons.join(" | ")}` : "Motivos: nao registrados",
   ];
 }
 
-function operationalManagementLines(notification: NotificationDto): string[] {
+function target1ConsolidatedLines(notification: NotificationDto): string[] {
   const metadata = metadataObject(notification.metadata);
+  const trade = tradeMetadata(notification);
   return [
-    "Tipo: gestao",
-    `Evento: ${notification.title}`,
-    notification.symbol ? `Ativo: ${notification.symbol}` : "Ativo: nao registrado",
-    `Status: ${notification.message}`,
-    metadata.stopLoss !== undefined ? `Stop: ${fmtNumber(metadata.stopLoss)}` : null,
-    metadata.nextStop !== undefined ? `Novo stop: ${fmtNumber(metadata.nextStop)}` : null,
-    metadata.partialPnlUSDC !== undefined ? `PnL parcial: ${fmtMoney(metadata.partialPnlUSDC)}` : null,
-    metadata.remainingPositionSize !== undefined ? `Qtd restante: ${fmtNumber(metadata.remainingPositionSize, 8)}` : null,
-  ].filter(Boolean) as string[];
+    "Tipo: alvo 1 consolidado",
+    "Alvo 1 atingido",
+    "Parcial de 50% executada",
+    `Ativo: ${notification.symbol ?? trade.pair ?? "nao registrado"}`,
+    `ID: ${notification.relatedEventId ?? trade.id ?? metadata.tradeId ?? "nao registrado"}`,
+    `PnL parcial: ${fmtMoney(trade.partialPnlUSDC ?? metadata.partialPnlUSDC)}`,
+    `Qtd restante: ${fmtNumber(trade.remainingPositionSize ?? metadata.remainingPositionSize, 8)}`,
+    "Stop movido para breakeven",
+    `Novo stop: ${fmtNumber(trade.stopLoss ?? metadata.stopLoss)}`,
+  ];
 }
 
 function operationalExitLines(notification: NotificationDto): string[] {
@@ -142,22 +172,9 @@ export function formatTelegramNotification(notification: NotificationDto, role: 
     `${prefix}ORACULO - ${notification.title.toUpperCase()}`,
     "",
   ];
-  const operationalTypes = new Set([
-    "demo_entry_opened",
-    "target1_hit",
-    "partial_executed",
-    "breakeven_moved",
-    "trailing_updated",
-    "target2_hit",
-    "stop_loss",
-    "loss_of_strength",
-    "timeout",
-  ]);
-  if (!operationalTypes.has(notification.type)) return sanitizeTelegramText([...base, ...defaultLines(notification, role)].join("\n"));
+  if (!operationalEventTypes.has(notification.type)) return sanitizeTelegramText([...base, ...defaultLines(notification, role)].join("\n"));
   if (notification.type === "demo_entry_opened") return sanitizeTelegramText([...base, ...operationalEntryLines(notification)].join("\n"));
-  if (["target1_hit", "partial_executed", "breakeven_moved", "trailing_updated"].includes(notification.type)) {
-    return sanitizeTelegramText([...base, ...operationalManagementLines(notification)].join("\n"));
-  }
+  if (notification.type === "target1_hit") return sanitizeTelegramText([...base, ...target1ConsolidatedLines(notification)].join("\n"));
   return sanitizeTelegramText([...base, ...operationalExitLines(notification)].join("\n"));
 }
 
