@@ -13,7 +13,36 @@ export type TradeExitReason =
   | 'STOP_LOSS'
   | 'BREAKEVEN'
   | 'TARGET_1'
-  | 'TARGET_2';
+  | 'TARGET_2'
+  | 'TIMEOUT'
+  | 'TIME_EXIT'
+  | 'TRAILING_STOP'
+  | 'LOSS_OF_STRENGTH'
+  | 'SESSION_END';
+
+export type ManagementTimelineEventType =
+  | 'OPENED'
+  | 'NEW_MFE'
+  | 'NEW_MAE'
+  | 'TARGET_1'
+  | 'PARTIAL_EXECUTED'
+  | 'BREAKEVEN_ACTIVATED'
+  | 'TRAILING_ACTIVATED'
+  | 'TRAILING_UPDATED'
+  | 'LOSS_OF_STRENGTH_DETECTED'
+  | 'TIMEOUT'
+  | 'STOP'
+  | 'TARGET_2'
+  | 'CLOSED';
+
+export interface ManagementTimelineEvent {
+  type: ManagementTimelineEventType;
+  at: string;
+  price: number | null;
+  unrealizedPnlUSDC: number | null;
+  note?: string;
+  data?: Record<string, unknown>;
+}
 
 export interface DemoTrade {
   id: string;
@@ -33,6 +62,7 @@ export interface DemoTrade {
   balanceAtOpen: number;     // snapshot of balance when trade opened
   riskAmount: number;        // USDC at risk (1% of balance)
   positionSize: number;      // base-asset units (e.g. BTC)
+  remainingPositionSize?: number;
   riskReward: string;        // e.g. "1:2.14"
 
   // State flags
@@ -45,6 +75,27 @@ export interface DemoTrade {
   exitReason?: TradeExitReason;
   pnlUSDC?: number;
   pnlPct?: number;           // % of balance at open
+  realizedPnlUSDC?: number;
+  partialPnlUSDC?: number;
+  target1ClosePrice?: number;
+  maxDurationMs?: number;
+  initialRiskAmount?: number;
+  maxPriceSinceEntry?: number | null;
+  minPriceSinceEntry?: number | null;
+  maxUnrealizedPnlUSDC?: number | null;
+  minUnrealizedPnlUSDC?: number | null;
+  maxUnrealizedPnlBeforePartial?: number | null;
+  maxUnrealizedPnlAfterPartial?: number | null;
+  mfeUSDC?: number | null;
+  maeUSDC?: number | null;
+  mfeR?: number | null;
+  maeR?: number | null;
+  peakGivebackUSDC?: number | null;
+  openGivebackUSDC?: number | null;
+  totalGivebackUSDC?: number | null;
+  peakGivebackPct?: number | null;
+  lastManagementUpdateAt?: string | null;
+  managementTimeline?: ManagementTimelineEvent[];
 
   // Signal context
   signalReasons: string[];   // rule-engine step reasons
@@ -66,12 +117,33 @@ export interface DailyStats {
   safetyLimited: boolean;    // locked by a safety rule
 }
 
+export type SafetyLimitCode = 'DAILY_TRADE_LIMIT' | 'LOSS_STREAK_COOLDOWN' | 'DAILY_LOSS' | 'NONE';
+
+export interface SafetyLimitState {
+  limited: boolean;
+  code: SafetyLimitCode;
+  reason: string;
+  cooldownEndsAt?: string | null;
+  cooldownRemainingMs?: number | null;
+  analysisContinues?: boolean;
+}
+
 export interface DemoSession {
   balance: number;           // current simulated balance
   configuredBalance: number; // user-set value (used on reset)
   activeTrade: DemoTrade | null;
   history: DemoTrade[];      // closed trades, newest first
   dailyStats: DailyStats;
+  safetyLimit?: SafetyLimitState;
+  settings?: {
+    maxDailyTrades: number;
+    lossStreakCooldownMinutes?: number;
+  };
+  realizedPnlUSDC?: number;
+  unrealizedPnlUSDC?: number;
+  partialPnlUSDC?: number;
+  openRiskUSDC?: number;
+  openPositionsCount?: number;
 }
 
 // ── Defaults ──────────────────────────────────────────────────────────────────
@@ -103,6 +175,13 @@ export function makeSession(configuredBalance = DEFAULT_BALANCE): DemoSession {
     activeTrade: null,
     history: [],
     dailyStats: makeDailyStats(today, configuredBalance),
+    safetyLimit: { limited: false, code: 'NONE', reason: 'Ativo normalmente.' },
+    settings: { maxDailyTrades: 0, lossStreakCooldownMinutes: 60 },
+    realizedPnlUSDC: 0,
+    unrealizedPnlUSDC: 0,
+    partialPnlUSDC: 0,
+    openRiskUSDC: 0,
+    openPositionsCount: 0,
   };
 }
 
@@ -136,20 +215,17 @@ export function fmtEpochSP(ms: number): string {
 // ── Safety rule evaluation ────────────────────────────────────────────────────
 
 /** Returns true when no more demo trades can open today. */
-export function isSafetyLimited(stats: DailyStats): boolean {
-  if (stats.safetyLimited) return true;
-  if (stats.totalTrades >= 8) return true;
-  if (stats.consecutiveLosses >= 3) return true;
+export function isSafetyLimited(stats: DailyStats, maxDailyTrades = 0): boolean {
+  if (maxDailyTrades > 0 && stats.totalTrades >= maxDailyTrades) return true;
   if (stats.dailyPnL <= -(stats.startOfDayBalance * 0.03)) return true;
   return false;
 }
 
 /** Human-readable reason for safety limit (first applicable rule). */
-export function safetyLimitReason(stats: DailyStats): string {
-  if (stats.totalTrades >= 8) return 'Limite de 8 operações por dia atingido.';
-  if (stats.consecutiveLosses >= 3) return '3 perdas consecutivas — operações pausadas.';
-  if (stats.dailyPnL <= -(stats.startOfDayBalance * 0.03)) return 'Drawdown diário de 3% atingido.';
-  return 'Limite de risco ativado.';
+export function safetyLimitReason(stats: DailyStats, maxDailyTrades = 0): string {
+  if (maxDailyTrades > 0 && stats.totalTrades >= maxDailyTrades) return 'Limite diário opcional de operações atingido.';
+  if (stats.dailyPnL <= -(stats.startOfDayBalance * 0.03)) return 'Perda diária máxima atingida.';
+  return 'Ativo normalmente.';
 }
 
 // ── localStorage ─────────────────────────────────────────────────────────────

@@ -15,11 +15,12 @@ async function buildAll() {
   await rm(distDir, { recursive: true, force: true });
 
   await esbuild({
-    entryPoints: [path.resolve(artifactDir, "src/index.ts")],
+    absWorkingDir: artifactDir,
+    entryPoints: ["src/index.ts"],
     platform: "node",
     bundle: true,
     format: "esm",
-    outdir: distDir,
+    outdir: "dist",
     outExtension: { ".js": ".mjs" },
     logLevel: "info",
     // Some packages may not be bundleable, so we externalize them, we can add more here as needed.
