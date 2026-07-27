@@ -1,7 +1,7 @@
 import { Router, type IRouter, type RequestHandler, type Response } from "express";
 import { HttpError } from "../lib/demo-store";
 import { demoStore as store } from "../lib/demo-store-instance";
-import { requireAuth, requiresHttpsError, type AuthenticatedRequest } from "./auth";
+import { requireAdmin, requireAuth, requiresHttpsError, type AuthenticatedRequest } from "./auth";
 
 const router: IRouter = Router();
 
@@ -40,8 +40,16 @@ router.get("/integrations/telegram/status", requireAuth, ((req, res) => {
   handle(res, () => store.getTelegramStatus(user(req).id));
 }) as RequestHandler);
 
+router.get("/integrations/telegram/admin/status", requireAuth, requireAdmin, ((req, res) => {
+  handle(res, () => store.getTelegramAdminStatus(user(req)));
+}) as RequestHandler);
+
 router.post("/integrations/telegram/test", requireWritableAuth, ((req, res) => {
   handle(res, () => store.createTelegramTestNotification(user(req)));
+}) as RequestHandler);
+
+router.post("/integrations/telegram/admin/test", requireWritableAuth, requireAdmin, ((req, res) => {
+  handle(res, () => store.createTelegramAdminTestNotification(user(req)));
 }) as RequestHandler);
 
 router.delete("/integrations/telegram", requireWritableAuth, ((req, res) => {

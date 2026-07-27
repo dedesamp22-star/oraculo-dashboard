@@ -837,6 +837,17 @@ test("Telegram integration links private chats, protects secrets and delivers id
     assert.equal(JSON.stringify(status).includes("chat_id"), false);
     assert.equal(JSON.stringify(status).includes("test-bot-token"), false);
 
+    let adminStatus = await authedJson(server.base, adminCookie, "/api/integrations/telegram/admin/status");
+    assert.equal(adminStatus.configured, true);
+    assert.equal(adminStatus.mock, true);
+    assert.equal(adminStatus.botUsername, "OraculoTestBot");
+    assert.equal(adminStatus.chatIdConfigured, false);
+    assert.equal(adminStatus.operationalNotificationsEnabled, false);
+    assert.equal(adminStatus.activeConnections, 0);
+    assert.equal(JSON.stringify(adminStatus).includes("chat_id"), false);
+    assert.equal(JSON.stringify(adminStatus).includes("test-bot-token"), false);
+    assert.equal((await fetch(`${server.base}/api/integrations/telegram/admin/status`, { headers: { Cookie: userCookie } })).status, 403);
+
     const linkRes = await fetch(`${server.base}/api/integrations/telegram/link-code`, {
       method: "POST",
       headers: { Cookie: adminCookie },
@@ -888,13 +899,17 @@ test("Telegram integration links private chats, protects secrets and delivers id
     assert.equal(status.connected, true);
     assert.equal(status.telegramUsername, "denilson");
     assert.equal(JSON.stringify(status).includes("987654"), false);
+    adminStatus = await authedJson(server.base, adminCookie, "/api/integrations/telegram/admin/status");
+    assert.equal(adminStatus.activeConnections, 1);
 
     await setNotificationPrefs(server.base, adminCookie, { telegram: true, includeSimulation: true });
     const testRes = await fetch(`${server.base}/api/integrations/telegram/test`, { method: "POST", headers: { Cookie: adminCookie } });
     assert.equal(testRes.status, 200);
-    await waitFor(() => Number(db.prepare("SELECT COUNT(*) AS count FROM notification_deliveries WHERE provider = 'telegram' AND status = 'delivered'").get().count) === 1, "telegram test delivery was not flushed");
+    const adminTestRes = await fetch(`${server.base}/api/integrations/telegram/admin/test`, { method: "POST", headers: { Cookie: adminCookie } });
+    assert.equal(adminTestRes.status, 200);
+    await waitFor(() => Number(db.prepare("SELECT COUNT(*) AS count FROM notification_deliveries WHERE provider = 'telegram' AND status = 'delivered'").get().count) >= 1, "telegram test delivery was not flushed");
     let deliveryCount = db.prepare("SELECT COUNT(*) AS count FROM notification_deliveries WHERE provider = 'telegram' AND status = 'delivered'").get().count;
-    assert.equal(Number(deliveryCount), 1);
+    assert.ok(Number(deliveryCount) >= 1);
 
     const trade = sampleTrade({ id: "telegram_btc", pair: "BTCUSDT", positionSize: 2, remainingPositionSize: 2 });
     await postPosition(server.base, adminCookie, trade);
@@ -910,6 +925,21 @@ test("Telegram integration links private chats, protects secrets and delivers id
     assert.equal(types.filter((type) => type === "breakeven_moved").length, 1);
     assert.equal(types.filter((type) => type === "trailing_updated").length <= 1, true);
     assert.equal(types.some((type) => type === "stop_loss" || type === "target2_hit" || type === "loss_of_strength" || type === "timeout"), true);
+    const openedAlert = adminAlerts.items.find((item) => item.type === "demo_entry_opened");
+    assert.equal(openedAlert.metadata.trade.pair, "BTCUSDT");
+    assert.equal(openedAlert.metadata.trade.stopLoss, 95);
+    assert.equal(openedAlert.metadata.trade.target1, 105);
+    const exitAlert = adminAlerts.items.find((item) => ["stop_loss", "target2_hit", "loss_of_strength", "timeout"].includes(item.type));
+    assert.ok("mfeUSDC" in exitAlert.metadata);
+    assert.ok("maeUSDC" in exitAlert.metadata);
+    const operationalTelegramDeliveries = db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM notification_deliveries d
+      JOIN notifications n ON n.id = d.notification_id
+      WHERE d.provider = 'telegram'
+        AND n.type IN ('demo_entry_opened','target1_hit','partial_executed','breakeven_moved','trailing_updated','target2_hit','stop_loss','loss_of_strength','timeout')
+    `).get();
+    assert.equal(Number(operationalTelegramDeliveries.count), 0);
 
     const simulation = await startSimulation(server.base, adminCookie, { symbol: "ETHUSDT" });
     await stepSimulation(server.base, adminCookie, simulation.id, "OPEN");

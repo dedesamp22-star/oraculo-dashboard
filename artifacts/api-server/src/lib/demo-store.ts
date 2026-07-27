@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, chmodSync, statSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { resolveOracleVisualState, type OracleVisualState } from "@shared/oracleVisualState";
+import { formatTelegramNotification, telegramRuntimeStatus } from "./telegram-notifications";
 
 export type TradeDirection = "BUY" | "SELL";
 export type TradeStatus = "OPEN" | "WIN" | "LOSS" | "BREAKEVEN";
@@ -1160,36 +1161,38 @@ function telegramBotUsername(): string | null {
   return username || null;
 }
 
+function telegramChatId(): string | null {
+  const chatId = process.env["ORACULO_TELEGRAM_CHAT_ID"]?.trim() ?? "";
+  return chatId || null;
+}
+
+function telegramOperationalNotificationsEnabled(): boolean {
+  return process.env["ORACULO_TELEGRAM_OPERATIONAL_NOTIFICATIONS"] === "true";
+}
+
+function isTelegramOperationalNotification(type: string, source: NotificationSource): boolean {
+  if (source !== "DEMO") return false;
+  return [
+    "demo_entry_opened",
+    "target1_hit",
+    "partial_executed",
+    "breakeven_moved",
+    "trailing_updated",
+    "target2_hit",
+    "stop_loss",
+    "loss_of_strength",
+    "timeout",
+  ].includes(type);
+}
+
 function telegramApiUrl(pathname: string): string {
   const token = process.env["ORACULO_TELEGRAM_BOT_TOKEN"];
   if (!token) throw new HttpError(503, "Telegram is not configured");
   return `https://api.telegram.org/bot${token}/${pathname}`;
 }
 
-function sanitizeTelegramText(value: unknown): string {
-  return String(value ?? "")
-    .replace(/[A-Za-z0-9_-]{24,}/g, "[redacted]")
-    .replace(/[<>]/g, "")
-    .slice(0, 3500);
-}
-
 function notificationTelegramMessage(notification: NotificationDto, role: UserRole): string {
-  const prefix = notification.source === "HOMOLOGATION" ? "[HOMOLOGACAO]\n" : "";
-  const lines = [
-    `${prefix}ORACULO — ${notification.title.toUpperCase()}`,
-    "",
-    notification.symbol ? `Ativo: ${notification.symbol}` : null,
-    `Status: ${notification.message}`,
-    `Ambiente: ${notification.source}`,
-  ].filter(Boolean) as string[];
-  const metadata = notification.metadata ?? {};
-  if (role === "admin") {
-    for (const key of ["scoreContextual", "scoreOperacional", "decisionState", "decisiveReason", "exitReason", "status"]) {
-      const value = metadata[key];
-      if (value !== undefined && value !== null) lines.push(`${key}: ${String(value).slice(0, 180)}`);
-    }
-  }
-  return sanitizeTelegramText(lines.join("\n"));
+  return formatTelegramNotification(notification, role);
 }
 
 export class DemoStore {
@@ -3413,6 +3416,12 @@ export class DemoStore {
   private queueTelegramDeliveries(userId: string, notificationId: string): void {
     const prefs = this.getNotificationPreferences(userId);
     if (!prefs.telegram) return;
+    const notificationRow = this.db.prepare("SELECT type, source FROM notifications WHERE id = ? AND user_id = ?")
+      .get(notificationId, userId) as Record<string, unknown> | undefined;
+    if (!notificationRow) return;
+    const type = String(notificationRow.type ?? "");
+    const source = String(notificationRow.source ?? "DEMO") as NotificationSource;
+    if (isTelegramOperationalNotification(type, source) && !telegramOperationalNotificationsEnabled()) return;
     const connection = this.db.prepare("SELECT * FROM telegram_connections WHERE user_id = ? AND status = 'ACTIVE' ORDER BY linked_at DESC LIMIT 1")
       .get(userId) as Record<string, unknown> | undefined;
     if (!connection) return;
@@ -3485,24 +3494,32 @@ export class DemoStore {
   private async sendTelegramMessage(chatId: string, text: string): Promise<void> {
     if (process.env["ORACULO_TELEGRAM_MOCK"] === "true") return;
     if (!telegramConfigured()) throw new Error("Telegram provider is not configured");
-    const response = await fetch(telegramApiUrl("sendMessage"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text,
-        disable_web_page_preview: true,
-      }),
-    });
-    if (!response.ok) {
-      let description = `telegram ${response.status}`;
-      try {
-        const payload = await response.json() as { description?: string };
-        if (payload.description) description = payload.description;
-      } catch {
-        // Telegram failures must not break the worker.
+    const timeoutMs = envInt("ORACULO_TELEGRAM_TIMEOUT_MS", 7000, 1000, 30_000);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(telegramApiUrl("sendMessage"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          chat_id: chatId,
+          text,
+          disable_web_page_preview: true,
+        }),
+      });
+      if (!response.ok) {
+        let description = `telegram ${response.status}`;
+        try {
+          const payload = await response.json() as { description?: string };
+          if (payload.description) description = payload.description;
+        } catch {
+          // Telegram failures must not break the worker.
+        }
+        throw new Error(description);
       }
-      throw new Error(description);
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
@@ -3562,6 +3579,26 @@ export class DemoStore {
       telegramUsername: row?.telegram_username == null ? null : String(row.telegram_username),
       linkedAt: row?.linked_at == null ? null : String(row.linked_at),
       lastDeliveryAt: row?.last_delivery_at == null ? null : String(row.last_delivery_at),
+    };
+  }
+
+  getTelegramAdminStatus(user: AuthUser) {
+    if (user.role !== "admin") throw new HttpError(403, "Admin required");
+    const runtime = telegramRuntimeStatus();
+    const activeConnections = this.db.prepare("SELECT COUNT(*) AS count FROM telegram_connections WHERE status = 'ACTIVE'").get() as Record<string, unknown>;
+    const queuedDeliveries = this.db.prepare("SELECT COUNT(*) AS count FROM notification_deliveries WHERE provider = 'telegram' AND status = 'queued'").get() as Record<string, unknown>;
+    const failedDeliveries = this.db.prepare("SELECT COUNT(*) AS count FROM notification_deliveries WHERE provider = 'telegram' AND status = 'failed'").get() as Record<string, unknown>;
+    const deliveredDeliveries = this.db.prepare("SELECT COUNT(*) AS count FROM notification_deliveries WHERE provider = 'telegram' AND status = 'delivered'").get() as Record<string, unknown>;
+    return {
+      configured: runtime.configured,
+      mock: runtime.mock,
+      botUsername: runtime.botUsername,
+      chatIdConfigured: runtime.chatIdConfigured,
+      operationalNotificationsEnabled: telegramOperationalNotificationsEnabled(),
+      activeConnections: Number(activeConnections.count ?? 0),
+      queuedDeliveries: Number(queuedDeliveries.count ?? 0),
+      failedDeliveries: Number(failedDeliveries.count ?? 0),
+      deliveredDeliveries: Number(deliveredDeliveries.count ?? 0),
     };
   }
 
@@ -3648,6 +3685,30 @@ export class DemoStore {
       adminMetadata: user.role === "admin" ? { provider: "telegram" } : {},
     });
     if (notification) void this.flushTelegramDeliveries(user.id, notification.id);
+    return notification;
+  }
+
+  createTelegramAdminTestNotification(user: AuthUser): NotificationDto | null {
+    if (user.role !== "admin") throw new HttpError(403, "Admin required");
+    const status = this.getTelegramStatus(user.id);
+    const envChatId = telegramChatId();
+    if (!status.connected && !envChatId) throw new HttpError(409, "Telegram is not connected and ORACULO_TELEGRAM_CHAT_ID is not configured");
+    const prefs = this.getNotificationPreferences(user.id);
+    if (!prefs.telegram) this.putNotificationPreferences(user.id, { telegram: true });
+    const notification = this.createNotification(user.id, {
+      type: "test",
+      title: "Teste Telegram",
+      message: "Mensagem de teste enviada pelo Oraculo.",
+      severity: "info",
+      source: "SYSTEM",
+      idempotencyKey: `${user.id}:telegram_admin_test:${Math.floor(Date.now() / 60_000)}`,
+      adminMetadata: user.role === "admin" ? { provider: "telegram", destination: envChatId ? "env-chat-id" : "linked-chat" } : {},
+    });
+    if (notification && envChatId && !status.connected) {
+      void this.sendTelegramMessage(envChatId, notificationTelegramMessage(notification, user.role)).catch(() => undefined);
+    } else if (notification) {
+      void this.flushTelegramDeliveries(user.id, notification.id);
+    }
     return notification;
   }
 
@@ -3834,7 +3895,7 @@ export class DemoStore {
       source: "DEMO",
       relatedEventId: position.id,
       idempotencyKey: `${userId}:demo_entry_opened:${position.id}:${position.pair}`,
-      adminMetadata: { trade: position },
+      adminMetadata: { trade: position, score: null, signalReasons: position.signalReasons },
     });
     return position;
   }
@@ -4298,7 +4359,7 @@ export class DemoStore {
       source: "DEMO",
       relatedEventId: latest.id,
       idempotencyKey: `${userId}:target1_hit:${latest.id}:${latest.pair}`,
-      adminMetadata: { tradeId: latest.id, target1: latest.target1 },
+      adminMetadata: { trade: withReason, tradeId: latest.id, target1: latest.target1 },
     });
     this.createNotification(userId, {
       type: "partial_executed",
@@ -4309,7 +4370,7 @@ export class DemoStore {
       source: "DEMO",
       relatedEventId: latest.id,
       idempotencyKey: `${userId}:partial_executed:${latest.id}:${latest.pair}`,
-      adminMetadata: { closedSize, remainingPositionSize, partialPnlUSDC },
+      adminMetadata: { trade: withReason, closedSize, remainingPositionSize, partialPnlUSDC },
     });
     this.createNotification(userId, {
       type: "breakeven_moved",
@@ -4320,7 +4381,7 @@ export class DemoStore {
       source: "DEMO",
       relatedEventId: latest.id,
       idempotencyKey: `${userId}:breakeven_moved:${latest.id}:${latest.pair}`,
-      adminMetadata: { stopLoss, bufferPct },
+      adminMetadata: { trade: withReason, stopLoss, bufferPct },
     });
     return withReason;
   }
@@ -4368,7 +4429,7 @@ export class DemoStore {
       source: "DEMO",
       relatedEventId: trade.id,
       idempotencyKey: `${userId}:trailing_updated:${trade.id}:${bucket}`,
-      adminMetadata: { nextStop, adaptivePct, price },
+      adminMetadata: { trade: next, nextStop, adaptivePct, price },
     });
     return this.appendPositionReason(userId, next, `TRAILING: stop ajustado para ${nextStop.toFixed(8)} usando ${(adaptivePct * 100).toFixed(3)}% adaptativo pela volatilidade recente.`);
   }
@@ -4490,7 +4551,17 @@ export class DemoStore {
       source: "DEMO",
       relatedEventId: position.id,
       idempotencyKey: `${userId}:${alertType}:${position.id}:${position.pair}`,
-      adminMetadata: { exitReason, pnlUSDC, status, closePrice },
+      adminMetadata: {
+        trade: closed,
+        exitReason,
+        pnlUSDC,
+        status,
+        closePrice,
+        durationMs,
+        mfeUSDC: closed.mfeUSDC ?? null,
+        maeUSDC: closed.maeUSDC ?? null,
+        peakGivebackUSDC: closed.peakGivebackUSDC ?? null,
+      },
     });
     return closed;
   }
