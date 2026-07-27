@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, chmodSync, statSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { resolveOracleVisualState, type OracleVisualState } from "@shared/oracleVisualState";
-import { formatTelegramNotification, telegramRuntimeStatus } from "./telegram-notifications";
+import { formatTelegramNotification, shouldQueueTelegramDelivery, telegramRuntimeStatus } from "./telegram-notifications";
 
 export type TradeDirection = "BUY" | "SELL";
 export type TradeStatus = "OPEN" | "WIN" | "LOSS" | "BREAKEVEN";
@@ -1168,21 +1168,6 @@ function telegramChatId(): string | null {
 
 function telegramOperationalNotificationsEnabled(): boolean {
   return process.env["ORACULO_TELEGRAM_OPERATIONAL_NOTIFICATIONS"] === "true";
-}
-
-function isTelegramOperationalNotification(type: string, source: NotificationSource): boolean {
-  if (source !== "DEMO") return false;
-  return [
-    "demo_entry_opened",
-    "target1_hit",
-    "partial_executed",
-    "breakeven_moved",
-    "trailing_updated",
-    "target2_hit",
-    "stop_loss",
-    "loss_of_strength",
-    "timeout",
-  ].includes(type);
 }
 
 function telegramApiUrl(pathname: string): string {
@@ -3421,7 +3406,7 @@ export class DemoStore {
     if (!notificationRow) return;
     const type = String(notificationRow.type ?? "");
     const source = String(notificationRow.source ?? "DEMO") as NotificationSource;
-    if (isTelegramOperationalNotification(type, source) && !telegramOperationalNotificationsEnabled()) return;
+    if (!shouldQueueTelegramDelivery(type, source, telegramOperationalNotificationsEnabled())) return;
     const connection = this.db.prepare("SELECT * FROM telegram_connections WHERE user_id = ? AND status = 'ACTIVE' ORDER BY linked_at DESC LIMIT 1")
       .get(userId) as Record<string, unknown> | undefined;
     if (!connection) return;
