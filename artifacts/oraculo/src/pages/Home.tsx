@@ -564,6 +564,21 @@ function MobileMiniCell({ label, value, color }: { label: string; value: string;
   );
 }
 
+function safetyLimitDisplay(limit: DemoSession['safetyLimit'] | undefined): string | undefined {
+  if (!limit?.limited) return undefined;
+  if (limit.code !== 'LOSS_STREAK_COOLDOWN') return limit.reason;
+  const returnAt = limit.cooldownEndsAt ? fmtTimeSP(new Date(limit.cooldownEndsAt)) : null;
+  const minutes = isFiniteNumber(limit.cooldownRemainingMs)
+    ? Math.max(1, Math.ceil(limit.cooldownRemainingMs / 60_000))
+    : null;
+  return [
+    'Pausa temporária após 3 perdas consecutivas.',
+    minutes !== null ? `Retorno em ${minutes} min.` : null,
+    returnAt ? `Retorno previsto: ${returnAt}.` : null,
+    'Análise e auditoria continuam ativas.',
+  ].filter(Boolean).join(' ');
+}
+
 function MobileEmptyOperation({ safeLimited, safeReason, countdown }: { safeLimited: boolean; safeReason?: string; countdown: string }) {
   return (
     <section className="lg:hidden border border-[#00f0ff]/20 bg-[#00f0ff]/[0.04] p-3">
@@ -1326,7 +1341,7 @@ export default function Home() {
 
   const maxDailyTrades = demoSession.settings?.maxDailyTrades ?? 0;
   const safeLimited = demoSession.safetyLimit?.limited ?? false;
-  const safeReason  = safeLimited ? demoSession.safetyLimit?.reason : undefined;
+  const safeReason  = safeLimited ? safetyLimitDisplay(demoSession.safetyLimit) : undefined;
 
   // â”€â”€ Alert emission â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 

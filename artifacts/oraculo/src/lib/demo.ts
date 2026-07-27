@@ -117,12 +117,15 @@ export interface DailyStats {
   safetyLimited: boolean;    // locked by a safety rule
 }
 
-export type SafetyLimitCode = 'DAILY_TRADE_LIMIT' | 'CONSECUTIVE_LOSSES' | 'DAILY_LOSS' | 'NONE';
+export type SafetyLimitCode = 'DAILY_TRADE_LIMIT' | 'LOSS_STREAK_COOLDOWN' | 'DAILY_LOSS' | 'NONE';
 
 export interface SafetyLimitState {
   limited: boolean;
   code: SafetyLimitCode;
   reason: string;
+  cooldownEndsAt?: string | null;
+  cooldownRemainingMs?: number | null;
+  analysisContinues?: boolean;
 }
 
 export interface DemoSession {
@@ -134,6 +137,7 @@ export interface DemoSession {
   safetyLimit?: SafetyLimitState;
   settings?: {
     maxDailyTrades: number;
+    lossStreakCooldownMinutes?: number;
   };
   realizedPnlUSDC?: number;
   unrealizedPnlUSDC?: number;
@@ -172,7 +176,7 @@ export function makeSession(configuredBalance = DEFAULT_BALANCE): DemoSession {
     history: [],
     dailyStats: makeDailyStats(today, configuredBalance),
     safetyLimit: { limited: false, code: 'NONE', reason: 'Ativo normalmente.' },
-    settings: { maxDailyTrades: 0 },
+    settings: { maxDailyTrades: 0, lossStreakCooldownMinutes: 60 },
     realizedPnlUSDC: 0,
     unrealizedPnlUSDC: 0,
     partialPnlUSDC: 0,
@@ -213,7 +217,6 @@ export function fmtEpochSP(ms: number): string {
 /** Returns true when no more demo trades can open today. */
 export function isSafetyLimited(stats: DailyStats, maxDailyTrades = 0): boolean {
   if (maxDailyTrades > 0 && stats.totalTrades >= maxDailyTrades) return true;
-  if (stats.consecutiveLosses >= 3) return true;
   if (stats.dailyPnL <= -(stats.startOfDayBalance * 0.03)) return true;
   return false;
 }
@@ -221,9 +224,8 @@ export function isSafetyLimited(stats: DailyStats, maxDailyTrades = 0): boolean 
 /** Human-readable reason for safety limit (first applicable rule). */
 export function safetyLimitReason(stats: DailyStats, maxDailyTrades = 0): string {
   if (maxDailyTrades > 0 && stats.totalTrades >= maxDailyTrades) return 'Limite diário opcional de operações atingido.';
-  if (stats.consecutiveLosses >= 3) return 'Sequência de perdas atingida — novas entradas pausadas.';
   if (stats.dailyPnL <= -(stats.startOfDayBalance * 0.03)) return 'Perda diária máxima atingida.';
-  return 'Limite de risco ativado.';
+  return 'Ativo normalmente.';
 }
 
 // ── localStorage ─────────────────────────────────────────────────────────────

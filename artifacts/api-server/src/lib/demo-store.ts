@@ -48,12 +48,15 @@ export interface DailyStats {
   safetyLimited: boolean;
 }
 
-export type SafetyLimitCode = "DAILY_TRADE_LIMIT" | "CONSECUTIVE_LOSSES" | "DAILY_LOSS" | "NONE";
+export type SafetyLimitCode = "DAILY_TRADE_LIMIT" | "LOSS_STREAK_COOLDOWN" | "DAILY_LOSS" | "NONE";
 
 export interface SafetyLimitState {
   limited: boolean;
   code: SafetyLimitCode;
   reason: string;
+  cooldownEndsAt?: string | null;
+  cooldownRemainingMs?: number | null;
+  analysisContinues?: boolean;
 }
 
 export interface DemoTrade {
@@ -113,6 +116,7 @@ export interface DemoSession {
   safetyLimit: SafetyLimitState;
   settings: {
     maxDailyTrades: number;
+    lossStreakCooldownMinutes: number;
   };
   realizedPnlUSDC: number;
   unrealizedPnlUSDC: number;
@@ -360,6 +364,53 @@ export interface DemoTradeExportResponse {
   };
   total: number;
   entries: DemoTradeExportEntry[];
+}
+
+export type LossStreakDiagnosticStatus = "ACTIVE" | "COMPLETED";
+
+export interface LossStreakDiagnosticTrade {
+  id: string;
+  pair: string;
+  direction: TradeDirection;
+  exitReason: ManagedTradeExitReason | null;
+  durationMs: number | null;
+  pnlUSDC: number | null;
+  mfeUSDC: number | null;
+  maeUSDC: number | null;
+  mfeR: number | null;
+  maeR: number | null;
+  peakGivebackUSDC: number | null;
+  peakGivebackPct: number | null;
+  target1Hit: boolean;
+  breakeven: boolean;
+  trailing: boolean;
+  wasPositiveBeforeLoss: boolean | null;
+  score: number | null;
+  volumeRelative: number | null;
+  trend1h: string | null;
+  trend15m: string | null;
+  decisiveReason: string | null;
+}
+
+export interface LossStreakDiagnosticPattern {
+  name: string;
+  value: number | string;
+}
+
+export interface LossStreakDiagnostic {
+  id: string;
+  userId: string;
+  createdAt: string;
+  lossCount: number;
+  cooldownStartedAt: string | null;
+  cooldownEndsAt: string | null;
+  cooldownMinutes: number;
+  triggerTradeId: string;
+  trades: LossStreakDiagnosticTrade[];
+  patterns: LossStreakDiagnosticPattern[];
+  summary: string;
+  status: LossStreakDiagnosticStatus;
+  updatedAt: string;
 }
 
 export interface EngineAuditRankItem {
@@ -741,6 +792,10 @@ function demoMaxDailyTrades(): number {
   return envInt("ORACULO_DEMO_MAX_DAILY_TRADES", 0, 0, 10_000);
 }
 
+function demoLossStreakCooldownMinutes(): number {
+  return envInt("ORACULO_DEMO_LOSS_STREAK_COOLDOWN_MINUTES", 60, 0, 24 * 60);
+}
+
 function sessionTtlSeconds(): number {
   return envInt("ORACULO_SESSION_TTL_SECONDS", DEFAULT_SESSION_TTL_SECONDS, 300, 30 * 24 * 60 * 60);
 }
@@ -803,13 +858,11 @@ function hashSessionToken(token: string): string {
   return createHash("sha256").update(token).digest("base64url");
 }
 
-function resolveSafetyLimit(stats: DailyStats, maxDailyTrades = demoMaxDailyTrades()): SafetyLimitState {
+function resolveSafetyLimit(stats: DailyStats, maxDailyTrades = demoMaxDailyTrades(), cooldown: SafetyLimitState | null = null): SafetyLimitState {
   if (maxDailyTrades > 0 && stats.totalTrades >= maxDailyTrades) {
     return { limited: true, code: "DAILY_TRADE_LIMIT", reason: "Limite diário de operações atingido." };
   }
-  if (stats.consecutiveLosses >= 3) {
-    return { limited: true, code: "CONSECUTIVE_LOSSES", reason: "Sequência de perdas atingida." };
-  }
+  if (cooldown?.limited) return cooldown;
   if (stats.dailyPnL <= -(stats.startOfDayBalance * 0.03)) {
     return { limited: true, code: "DAILY_LOSS", reason: "Perda diária máxima atingida." };
   }
@@ -928,6 +981,24 @@ function tradeFromRow(row: Record<string, unknown>): DemoTrade {
     managementTimeline: safeManagementTimeline(row.management_timeline_json),
     signalReasons: jsonParse(String(row.signal_reasons_json), []),
     marketConditions: String(row.market_conditions),
+  };
+}
+
+function lossStreakDiagnosticFromRow(row: Record<string, unknown>): LossStreakDiagnostic {
+  return {
+    id: String(row.id),
+    userId: String(row.user_id),
+    createdAt: String(row.created_at),
+    lossCount: Number(row.loss_count),
+    cooldownStartedAt: row.cooldown_started_at == null ? null : String(row.cooldown_started_at),
+    cooldownEndsAt: row.cooldown_ends_at == null ? null : String(row.cooldown_ends_at),
+    cooldownMinutes: Number(row.cooldown_minutes),
+    triggerTradeId: String(row.trigger_trade_id),
+    trades: jsonParse<LossStreakDiagnosticTrade[]>(String(row.trades_json), []),
+    patterns: jsonParse<LossStreakDiagnosticPattern[]>(String(row.patterns_json), []),
+    summary: String(row.summary),
+    status: String(row.status) === "ACTIVE" ? "ACTIVE" : "COMPLETED",
+    updatedAt: String(row.updated_at),
   };
 }
 
@@ -1690,6 +1761,33 @@ export class DemoStore {
         this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (10, 'demo_trade_observability', ?)").run(nowIso());
       });
     }
+    const v11 = this.db.prepare("SELECT version FROM schema_migrations WHERE version = 11").get();
+    if (!v11) {
+      this.transaction(() => {
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS demo_loss_streak_diagnostics (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at TEXT NOT NULL,
+            loss_count INTEGER NOT NULL,
+            cooldown_started_at TEXT,
+            cooldown_ends_at TEXT,
+            cooldown_minutes INTEGER NOT NULL,
+            trigger_trade_id TEXT NOT NULL,
+            trades_json TEXT NOT NULL,
+            patterns_json TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('ACTIVE','COMPLETED')),
+            updated_at TEXT NOT NULL
+          );
+          CREATE UNIQUE INDEX IF NOT EXISTS demo_loss_streak_trigger_idx
+            ON demo_loss_streak_diagnostics(user_id, trigger_trade_id);
+          CREATE INDEX IF NOT EXISTS demo_loss_streak_user_status_idx
+            ON demo_loss_streak_diagnostics(user_id, status, cooldown_ends_at);
+        `);
+        this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (11, 'demo_loss_streak_diagnostics', ?)").run(nowIso());
+      });
+    }
   }
 
   private applyInitialAdminEnv(): void {
@@ -1883,7 +1981,7 @@ export class DemoStore {
 
   private accountWithCurrentSafetyLimit(userId: string): { balance: number; configuredBalance: number; dailyStats: DailyStats; safetyLimit: SafetyLimitState } {
     const account = this.getAccount(userId);
-    const safetyLimit = resolveSafetyLimit(account.dailyStats);
+    const safetyLimit = resolveSafetyLimit(account.dailyStats, demoMaxDailyTrades(), this.resolveActiveLossStreakCooldown(userId));
     if (account.dailyStats.safetyLimited !== safetyLimit.limited) {
       const dailyStats = { ...account.dailyStats, safetyLimited: safetyLimit.limited };
       this.putAccount(userId, { balance: account.balance, configuredBalance: account.configuredBalance, dailyStats });
@@ -1916,6 +2014,7 @@ export class DemoStore {
       safetyLimit: account.safetyLimit,
       settings: {
         maxDailyTrades: demoMaxDailyTrades(),
+        lossStreakCooldownMinutes: demoLossStreakCooldownMinutes(),
       },
       activeTrade,
       history,
@@ -2115,6 +2214,192 @@ export class DemoStore {
           )
       `).run(input.userId, input.userId, maxAudit);
     });
+  }
+
+  private completeExpiredLossStreakCooldowns(userId: string, nowMs = Date.now()): void {
+    const rows = this.db.prepare(`
+      SELECT id, cooldown_ends_at
+      FROM demo_loss_streak_diagnostics
+      WHERE user_id = ? AND status = 'ACTIVE' AND cooldown_ends_at IS NOT NULL
+    `).all(userId) as Record<string, unknown>[];
+    const expired = rows
+      .filter((row) => {
+        const endsAt = Date.parse(String(row.cooldown_ends_at));
+        return Number.isFinite(endsAt) && endsAt <= nowMs;
+      })
+      .map((row) => String(row.id));
+    if (expired.length === 0) return;
+    const now = nowIso();
+    for (const id of expired) {
+      this.db.prepare("UPDATE demo_loss_streak_diagnostics SET status = 'COMPLETED', updated_at = ? WHERE user_id = ? AND id = ?")
+        .run(now, userId, id);
+    }
+  }
+
+  private resolveActiveLossStreakCooldown(userId: string, nowMs = Date.now()): SafetyLimitState | null {
+    const effectiveMinutes = demoLossStreakCooldownMinutes();
+    if (effectiveMinutes <= 0) return null;
+    this.completeExpiredLossStreakCooldowns(userId, nowMs);
+    const row = this.db.prepare(`
+      SELECT * FROM demo_loss_streak_diagnostics
+      WHERE user_id = ? AND status = 'ACTIVE' AND cooldown_ends_at IS NOT NULL
+      ORDER BY created_at DESC
+      LIMIT 1
+    `).get(userId) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    const diagnostic = lossStreakDiagnosticFromRow(row);
+    const endsMs = diagnostic.cooldownEndsAt ? Date.parse(diagnostic.cooldownEndsAt) : NaN;
+    if (!Number.isFinite(endsMs) || endsMs <= nowMs) {
+      this.completeExpiredLossStreakCooldowns(userId, nowMs);
+      return null;
+    }
+    const remainingMs = Number.isFinite(endsMs) ? Math.max(0, endsMs - nowMs) : null;
+    const remainingMinutes = remainingMs === null ? null : Math.max(1, Math.ceil(remainingMs / 60_000));
+    return {
+      limited: true,
+      code: "LOSS_STREAK_COOLDOWN",
+      reason: `Pausa temporaria apos 3 perdas consecutivas. Retorno automatico em ${remainingMinutes ?? diagnostic.cooldownMinutes} minutos.`,
+      cooldownEndsAt: diagnostic.cooldownEndsAt,
+      cooldownRemainingMs: remainingMs,
+      analysisContinues: true,
+    };
+  }
+
+  getLossStreakDiagnostics(userId: string, limit = 10): LossStreakDiagnostic[] {
+    this.completeExpiredLossStreakCooldowns(userId);
+    const safeLimit = Math.max(1, Math.min(50, Math.floor(limit)));
+    return (this.db.prepare(`
+      SELECT * FROM demo_loss_streak_diagnostics
+      WHERE user_id = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(userId, safeLimit) as Record<string, unknown>[]).map(lossStreakDiagnosticFromRow);
+  }
+
+  private uniqueEngineAuditForTrade(userId: string, trade: DemoTrade): Record<string, unknown> | null {
+    const openAt = Number.isFinite(trade.openTime) ? trade.openTime : 0;
+    if (openAt <= 0) return null;
+    const from = new Date(openAt - 15 * 60_000).toISOString();
+    const to = new Date(openAt + 15 * 60_000).toISOString();
+    const rows = this.db.prepare(`
+      SELECT * FROM engine_audit_log
+      WHERE user_id = ? AND symbol = ? AND analyzed_at BETWEEN ? AND ?
+      ORDER BY ABS(strftime('%s', analyzed_at) - ?) ASC
+      LIMIT 2
+    `).all(userId, trade.pair, from, to, Math.floor(openAt / 1000)) as Record<string, unknown>[];
+    return rows.length === 1 ? rows[0] : null;
+  }
+
+  private lossStreakTradeSnapshot(userId: string, trade: DemoTrade): LossStreakDiagnosticTrade {
+    const audit = this.uniqueEngineAuditForTrade(userId, trade);
+    const durationMs = trade.closeTime === undefined ? null : tradeAgeMs(trade, trade.closeTime);
+    return {
+      id: trade.id,
+      pair: trade.pair,
+      direction: trade.direction,
+      exitReason: trade.exitReason ?? null,
+      durationMs,
+      pnlUSDC: trade.pnlUSDC ?? null,
+      mfeUSDC: trade.mfeUSDC ?? null,
+      maeUSDC: trade.maeUSDC ?? null,
+      mfeR: trade.mfeR ?? null,
+      maeR: trade.maeR ?? null,
+      peakGivebackUSDC: trade.peakGivebackUSDC ?? null,
+      peakGivebackPct: trade.peakGivebackPct ?? null,
+      target1Hit: trade.target1Hit,
+      breakeven: trade.isBreakevenStop,
+      trailing: safeManagementTimeline(trade.managementTimeline ?? []).some((event) => event.type === "TRAILING_ACTIVATED" || event.type === "TRAILING_UPDATED"),
+      wasPositiveBeforeLoss: trade.mfeUSDC == null ? null : trade.mfeUSDC > 0,
+      score: audit ? Number(audit.score) : null,
+      volumeRelative: audit && audit.volume_relative != null ? Number(audit.volume_relative) : null,
+      trend1h: audit ? String(audit.trend_1h) : null,
+      trend15m: audit ? String(audit.trend_15m) : null,
+      decisiveReason: audit ? String(audit.decisive_reason) : null,
+    };
+  }
+
+  private buildLossStreakPatterns(trades: LossStreakDiagnosticTrade[]): LossStreakDiagnosticPattern[] {
+    const countBy = (values: Array<string | null>): Record<string, number> => {
+      const out: Record<string, number> = {};
+      for (const value of values) {
+        const key = value ?? "DESCONHECIDO";
+        out[key] = (out[key] ?? 0) + 1;
+      }
+      return out;
+    };
+    const avg = (values: Array<number | null>): number => {
+      const nums = values.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+      if (nums.length === 0) return 0;
+      return nums.reduce((sum, value) => sum + value, 0) / nums.length;
+    };
+    const patterns: LossStreakDiagnosticPattern[] = [
+      { name: "BUY", value: trades.filter((trade) => trade.direction === "BUY").length },
+      { name: "SELL", value: trades.filter((trade) => trade.direction === "SELL").length },
+      { name: "MFE_POSITIVO", value: trades.filter((trade) => (trade.mfeUSDC ?? 0) > 0).length },
+      { name: "GIVEBACK_ACIMA_50_PCT", value: trades.filter((trade) => (trade.peakGivebackPct ?? 0) >= 50).length },
+      { name: "GIVEBACK_ACIMA_70_PCT", value: trades.filter((trade) => (trade.peakGivebackPct ?? 0) >= 70).length },
+      { name: "SEM_ALVO_1", value: trades.filter((trade) => !trade.target1Hit).length },
+      { name: "MEDIA_MFE_USDC", value: Number(avg(trades.map((trade) => trade.mfeUSDC)).toFixed(4)) },
+      { name: "MEDIA_MAE_USDC", value: Number(avg(trades.map((trade) => trade.maeUSDC)).toFixed(4)) },
+      { name: "MEDIA_DURACAO_MS", value: Math.round(avg(trades.map((trade) => trade.durationMs))) },
+      { name: "MEDIA_GIVEBACK_USDC", value: Number(avg(trades.map((trade) => trade.peakGivebackUSDC)).toFixed(4)) },
+    ];
+    const bySymbol = countBy(trades.map((trade) => trade.pair));
+    const byExit = countBy(trades.map((trade) => trade.exitReason));
+    for (const [symbol, count] of Object.entries(bySymbol)) patterns.push({ name: `ATIVO_${symbol}`, value: count });
+    for (const [reason, count] of Object.entries(byExit)) patterns.push({ name: `SAIDA_${reason}`, value: count });
+    return patterns;
+  }
+
+  private lossStreakSummary(trades: LossStreakDiagnosticTrade[], patterns: LossStreakDiagnosticPattern[]): string {
+    const get = (name: string): number => {
+      const value = patterns.find((pattern) => pattern.name === name)?.value;
+      return typeof value === "number" ? value : 0;
+    };
+    const parts = [
+      `${trades.length} perdas consecutivas`,
+      `${get("BUY")} BUY`,
+      `${get("SELL")} SELL`,
+      `${get("MFE_POSITIVO")} ficaram positivas antes de perder`,
+      `${get("GIVEBACK_ACIMA_70_PCT")} tiveram giveback acima de 70%`,
+      `${get("SEM_ALVO_1")} encerradas antes do Alvo 1`,
+    ];
+    return `${parts.join("; ")}.`;
+  }
+
+  private maybeCreateLossStreakDiagnostic(userId: string, beforeConsecutiveLosses: number, afterConsecutiveLosses: number, triggerTrade: DemoTrade): void {
+    if (triggerTrade.status !== "LOSS" || beforeConsecutiveLosses >= 3 || afterConsecutiveLosses < 3) return;
+    const existing = this.db.prepare("SELECT id FROM demo_loss_streak_diagnostics WHERE user_id = ? AND trigger_trade_id = ?").get(userId, triggerTrade.id);
+    if (existing) return;
+    const losses = this.getTrades(userId).filter((trade) => trade.status === "LOSS").slice(0, 3);
+    if (losses.length < 3 || losses[0]?.id !== triggerTrade.id) return;
+    const trades = losses.map((trade) => this.lossStreakTradeSnapshot(userId, trade));
+    const patterns = this.buildLossStreakPatterns(trades);
+    const summary = this.lossStreakSummary(trades, patterns);
+    const minutes = demoLossStreakCooldownMinutes();
+    const createdAt = nowIso();
+    const cooldownEndsAt = minutes > 0 ? new Date(Date.parse(createdAt) + minutes * 60_000).toISOString() : null;
+    const status: LossStreakDiagnosticStatus = minutes > 0 ? "ACTIVE" : "COMPLETED";
+    this.db.prepare(`
+      INSERT OR IGNORE INTO demo_loss_streak_diagnostics
+        (id, user_id, created_at, loss_count, cooldown_started_at, cooldown_ends_at, cooldown_minutes,
+         trigger_trade_id, trades_json, patterns_json, summary, status, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      newId("lossdiag"),
+      userId,
+      createdAt,
+      trades.length,
+      minutes > 0 ? createdAt : null,
+      cooldownEndsAt,
+      minutes,
+      triggerTrade.id,
+      JSON.stringify(trades),
+      JSON.stringify(patterns),
+      summary,
+      status,
+      createdAt,
+    );
   }
 
   getEngineAuditLog(user: AuthUser, params: { symbol?: string; limit?: number; offset?: number } = {}): EngineAuditResponse {
@@ -3404,6 +3689,7 @@ export class DemoStore {
       this.db.prepare("DELETE FROM demo_positions WHERE user_id = ?").run(userId);
       this.db.prepare("DELETE FROM demo_trades WHERE user_id = ?").run(userId);
       this.db.prepare("DELETE FROM demo_events WHERE user_id = ?").run(userId);
+      this.db.prepare("DELETE FROM demo_loss_streak_diagnostics WHERE user_id = ?").run(userId);
       this.putAccount(userId, { balance: configuredBalance, configuredBalance, dailyStats: makeDailyStats(configuredBalance) });
       return this.getSession(userId);
     });
@@ -4150,6 +4436,7 @@ export class DemoStore {
     this.db.prepare("DELETE FROM demo_positions WHERE user_id = ? AND id = ?").run(userId, position.id);
     const account = this.getAccount(userId);
     const stats = { ...account.dailyStats };
+    const previousConsecutiveLosses = stats.consecutiveLosses;
     stats.totalTrades += 1;
     stats.wins += status === "WIN" ? 1 : 0;
     stats.losses += status === "LOSS" ? 1 : 0;
@@ -4160,7 +4447,8 @@ export class DemoStore {
     const newBalance = account.balance + remainingPnl;
     stats.peakBalance = Math.max(stats.peakBalance, newBalance);
     stats.maxDrawdown = Math.max(stats.maxDrawdown, stats.peakBalance - newBalance);
-    stats.safetyLimited = isSafetyLimited(stats);
+    this.maybeCreateLossStreakDiagnostic(userId, previousConsecutiveLosses, stats.consecutiveLosses, closed);
+    stats.safetyLimited = resolveSafetyLimit(stats, demoMaxDailyTrades(), this.resolveActiveLossStreakCooldown(userId)).limited;
     this.putAccount(userId, { balance: newBalance, configuredBalance: account.configuredBalance, dailyStats: stats });
     const alertType = exitReason === "TARGET_2"
       ? "target2_hit"

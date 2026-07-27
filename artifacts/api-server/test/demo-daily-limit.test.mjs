@@ -38,10 +38,10 @@ test("daily limit only blocks openings and keeps worker analysis and auditing ac
 });
 
 test("session exposes structured safety limit code and reason", () => {
-  assert.match(storeSource, /export type SafetyLimitCode = "DAILY_TRADE_LIMIT" \| "CONSECUTIVE_LOSSES" \| "DAILY_LOSS" \| "NONE"/);
+  assert.match(storeSource, /export type SafetyLimitCode = "DAILY_TRADE_LIMIT" \| "LOSS_STREAK_COOLDOWN" \| "DAILY_LOSS" \| "NONE"/);
   assert.match(storeSource, /safetyLimit: SafetyLimitState/);
   assert.match(storeSource, /safetyLimit: account\.safetyLimit/);
-  assert.match(storeSource, /code: "CONSECUTIVE_LOSSES"/);
+  assert.match(storeSource, /code: "LOSS_STREAK_COOLDOWN"/);
   assert.match(storeSource, /code: "DAILY_LOSS"/);
   assert.match(storeSource, /code: "DAILY_TRADE_LIMIT"/);
   assert.match(storeSource, /code: "NONE"/);
