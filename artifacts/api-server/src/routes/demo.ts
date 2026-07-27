@@ -64,6 +64,8 @@ router.get("/demo/trades/export", requireAuth, requireAdmin, ((req, res) => {
     from: typeof req.query.from === "string" ? req.query.from : undefined,
     to: typeof req.query.to === "string" ? req.query.to : undefined,
     symbol: typeof req.query.symbol === "string" ? req.query.symbol : undefined,
+    direction: typeof req.query.direction === "string" ? req.query.direction : undefined,
+    status: typeof req.query.status === "string" ? req.query.status : undefined,
     exitReason: typeof req.query.exitReason === "string" ? req.query.exitReason : undefined,
     limit: req.query.limit !== undefined ? Number(req.query.limit) : undefined,
   };
@@ -74,6 +76,7 @@ router.get("/demo/trades/export", requireAuth, requireAdmin, ((req, res) => {
       const headers = [
         "Pair", "Direction", "EntryPrice", "ExitPrice", "OpenTime", "CloseTime", "DurationMs",
         "StopLoss", "StopLossOriginal", "Target1", "Target2", "ExitReason", "Status",
+        "RiskAmount", "PositionSize", "RemainingPositionSize",
         "PnL", "RealizedPnL", "PartialPnL", "MFE_USDC", "MAE_USDC", "MFE_R", "MAE_R",
         "PeakGivebackUSDC", "OpenGivebackUSDC", "TotalGivebackUSDC", "PeakGivebackPct",
         "MaxPriceSinceEntry", "MinPriceSinceEntry", "MaxUnrealizedPnlUSDC", "MinUnrealizedPnlUSDC",
@@ -93,6 +96,9 @@ router.get("/demo/trades/export", requireAuth, requireAdmin, ((req, res) => {
         trade.target2,
         trade.exitReason,
         trade.status,
+        trade.riskAmount,
+        trade.positionSize,
+        trade.remainingPositionSize,
         trade.pnlUSDC,
         trade.realizedPnlUSDC,
         trade.partialPnlUSDC,

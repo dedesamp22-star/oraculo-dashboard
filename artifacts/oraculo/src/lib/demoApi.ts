@@ -239,6 +239,55 @@ export interface EngineAuditSummary {
   bySymbol: Record<string, EngineAuditSymbolSummary>;
 }
 
+export interface DemoTradeExportEntry {
+  id: string;
+  pair: string;
+  direction: 'BUY' | 'SELL';
+  entryPrice: number;
+  exitPrice: number | null;
+  openTime: number;
+  closeTime: number | null;
+  durationMs: number | null;
+  stopLoss: number;
+  stopLossOriginal: number;
+  target1: number;
+  target2: number;
+  riskAmount?: number | null;
+  positionSize?: number | null;
+  remainingPositionSize?: number | null;
+  exitReason: string | null;
+  status: 'OPEN' | 'WIN' | 'LOSS' | 'BREAKEVEN';
+  pnlUSDC: number | null;
+  realizedPnlUSDC: number | null;
+  partialPnlUSDC: number | null;
+  mfeUSDC: number | null;
+  maeUSDC: number | null;
+  mfeR: number | null;
+  maeR: number | null;
+  peakGivebackUSDC: number | null;
+  peakGivebackPct: number | null;
+  target1Hit: boolean;
+  breakeven: boolean;
+  trailing: boolean;
+  signalReasons: string[];
+  managementTimeline: unknown[];
+}
+
+export interface DemoTradeExportResponse {
+  exportedAt: string;
+  filters: {
+    from: string | null;
+    to: string | null;
+    symbol: string | null;
+    direction?: string | null;
+    status?: string | null;
+    exitReason: string | null;
+    limit: number;
+  };
+  total: number;
+  entries: DemoTradeExportEntry[];
+}
+
 
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -503,6 +552,68 @@ export async function fetchEngineAuditSummary(params: { symbol?: string; period?
   return await request<EngineAuditSummary>(`/api/worker/audit/summary${qs ? `?${qs}` : ''}`);
 }
 
+export interface DemoTradeExportFilters {
+  symbol?: string;
+  direction?: string;
+  status?: string;
+  exitReason?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+  format?: 'json' | 'csv';
+}
+
+function demoTradeExportQuery(params: DemoTradeExportFilters = {}): string {
+  const query = new URLSearchParams();
+  if (params.symbol && params.symbol !== 'ALL') query.set('symbol', params.symbol);
+  if (params.direction && params.direction !== 'ALL') query.set('direction', params.direction);
+  if (params.status && params.status !== 'ALL') query.set('status', params.status);
+  if (params.exitReason && params.exitReason !== 'ALL') query.set('exitReason', params.exitReason);
+  if (params.from) query.set('from', params.from);
+  if (params.to) query.set('to', params.to);
+  if (params.limit !== undefined) query.set('limit', String(params.limit));
+  if (params.format) query.set('format', params.format);
+  return query.toString();
+}
+
+export async function fetchDemoTradeExport(params: DemoTradeExportFilters = {}): Promise<DemoTradeExportResponse> {
+  const qs = demoTradeExportQuery({ ...params, format: 'json' });
+  return await request<DemoTradeExportResponse>(`/api/demo/trades/export${qs ? `?${qs}` : ''}`);
+}
+
+export async function downloadDemoTradeExport(params: DemoTradeExportFilters = {}): Promise<void> {
+  const format = params.format ?? 'json';
+  const qs = demoTradeExportQuery({ ...params, format });
+  const response = await fetch(`/api/demo/trades/export${qs ? `?${qs}` : ''}`, {
+    method: 'GET',
+    credentials: 'include',
+  });
+  if (!response.ok) {
+    let msg = 'Erro ao exportar operações';
+    try {
+      const errJson = (await response.json()) as { error?: string };
+      if (errJson.error) msg = errJson.error;
+    } catch {
+      /* fallback */
+    }
+    throw new Error(msg);
+  }
+  const blob = await response.blob();
+  const filenameHeader = response.headers.get('Content-Disposition');
+  let filename = `demo-trades-export.${format}`;
+  if (filenameHeader) {
+    const match = filenameHeader.match(/filename="?([^";]+)"?/);
+    if (match?.[1]) filename = match[1];
+  }
+  const blobUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = blobUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(blobUrl);
+}
 
 export async function downloadEngineAuditExport(params: {
   hours?: number;

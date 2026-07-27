@@ -242,11 +242,17 @@ test("trade export supports json filters and admin-only route includes CSV formu
     const userId = createUser(store, "exporter");
     const admin = store.getUser(userId);
     store.upsertTrade(userId, sampleTrade({ id: "csv", pair: "SOLUSDT", status: "WIN", closeTime: Date.now(), closePrice: 110, pnlUSDC: 10, exitReason: "TARGET_2", signalReasons: ["=formula"] }));
+    store.upsertTrade(userId, sampleTrade({ id: "loss-export", pair: "ETHUSDT", direction: "SELL", status: "LOSS", closeTime: Date.now(), closePrice: 105, pnlUSDC: -10, exitReason: "STOP_LOSS" }));
     assert.equal(store.exportDemoTradeHistory(admin, { symbol: "BTCUSDT" }).entries.length, 0);
     assert.equal(store.exportDemoTradeHistory(admin, { symbol: "SOLUSDT", exitReason: "TARGET_2" }).entries.length, 1);
+    assert.equal(store.exportDemoTradeHistory(admin, { direction: "SELL", status: "LOSS" }).entries.length, 1);
+    assert.equal(store.exportDemoTradeHistory(admin, { direction: "BUY", status: "LOSS" }).entries.length, 0);
+    assert.equal(store.exportDemoTradeHistory(admin, { symbol: "SOLUSDT" }).entries[0].riskAmount, 10);
   });
   const routeSource = readFileSync(path.join(root, "src", "routes", "demo.ts"), "utf8");
   assert.match(routeSource, /\/demo\/trades\/export", requireAuth, requireAdmin/);
+  assert.match(routeSource, /req\.query\.direction/);
+  assert.match(routeSource, /req\.query\.status/);
   assert.match(routeSource, /\^\[=\+\\-@\]/);
   assert.doesNotMatch(routeSource, /"UserId"/);
 });

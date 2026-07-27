@@ -312,6 +312,8 @@ export interface DemoTradeExportParams {
   from?: string;
   to?: string;
   symbol?: string;
+  direction?: string;
+  status?: string;
   exitReason?: string;
   limit?: number;
 }
@@ -329,6 +331,9 @@ export interface DemoTradeExportEntry {
   stopLossOriginal: number;
   target1: number;
   target2: number;
+  riskAmount: number;
+  positionSize: number;
+  remainingPositionSize: number;
   exitReason: ManagedTradeExitReason | null;
   status: TradeStatus;
   pnlUSDC: number | null;
@@ -359,6 +364,8 @@ export interface DemoTradeExportResponse {
     from: string | null;
     to: string | null;
     symbol: string | null;
+    direction: string | null;
+    status: string | null;
     exitReason: string | null;
     limit: number;
   };
@@ -2746,6 +2753,8 @@ export class DemoStore {
     if (user.role !== "admin") throw new HttpError(403, "Admin required");
     const safeLimit = Math.max(1, Math.min(5000, Math.floor(params.limit ?? 1000)));
     const symbol = params.symbol?.trim().toUpperCase() || null;
+    const direction = params.direction?.trim().toUpperCase() || null;
+    const status = params.status?.trim().toUpperCase() || null;
     const exitReason = params.exitReason?.trim().toUpperCase() || null;
     const from = params.from?.trim() || null;
     const to = params.to?.trim() || null;
@@ -2753,12 +2762,22 @@ export class DemoStore {
     const toMs = to ? Date.parse(to) : null;
     if (from !== null && !Number.isFinite(fromMs)) throw new HttpError(400, "invalid from filter");
     if (to !== null && !Number.isFinite(toMs)) throw new HttpError(400, "invalid to filter");
+    if (direction !== null && direction !== "BUY" && direction !== "SELL") throw new HttpError(400, "invalid direction filter");
+    if (status !== null && status !== "WIN" && status !== "LOSS" && status !== "BREAKEVEN") throw new HttpError(400, "invalid status filter");
 
     const whereClauses: string[] = ["user_id = ?"];
     const sqlArgs: (string | number | null)[] = [user.id];
     if (symbol !== null) {
       whereClauses.push("pair = ?");
       sqlArgs.push(symbol);
+    }
+    if (direction !== null) {
+      whereClauses.push("direction = ?");
+      sqlArgs.push(direction);
+    }
+    if (status !== null) {
+      whereClauses.push("status = ?");
+      sqlArgs.push(status);
     }
     if (exitReason !== null) {
       whereClauses.push("exit_reason = ?");
@@ -2795,6 +2814,9 @@ export class DemoStore {
         stopLossOriginal: trade.stopLossOriginal,
         target1: trade.target1,
         target2: trade.target2,
+        riskAmount: trade.riskAmount,
+        positionSize: trade.positionSize,
+        remainingPositionSize: trade.remainingPositionSize,
         exitReason: trade.exitReason ?? null,
         status: trade.status,
         pnlUSDC: trade.pnlUSDC ?? null,
@@ -2825,6 +2847,8 @@ export class DemoStore {
         from,
         to,
         symbol,
+        direction,
+        status,
         exitReason,
         limit: safeLimit,
       },

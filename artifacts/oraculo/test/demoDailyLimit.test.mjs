@@ -66,7 +66,8 @@ test('stats panel renders unlimited or configured daily operation limit labels',
 
 test('home uses the structured backend safety reason instead of local inference', () => {
   assert.match(homeSource, /demoSession\.safetyLimit\?\.limited \?\? false/);
-  assert.match(homeSource, /demoSession\.safetyLimit\?\.reason/);
+  assert.match(homeSource, /safetyLimitDisplay\(demoSession\.safetyLimit\)/);
+  assert.match(homeSource, /limit\.reason/);
   assert.doesNotMatch(homeSource, /safetyLimitReason\(demoSession\.dailyStats/);
   assert.doesNotMatch(homeSource, /isSafetyLimited\(demoSession\.dailyStats/);
 });

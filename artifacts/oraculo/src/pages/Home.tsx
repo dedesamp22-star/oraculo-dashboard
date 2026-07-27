@@ -1681,6 +1681,15 @@ export default function Home() {
               />
               {authUser.role === 'admin' && <ControlledSimulationPanel />}
               {authUser.role === 'admin' && (
+                <button
+                  type="button"
+                  onClick={() => { window.location.href = '/relatorio-operacoes'; }}
+                  className="min-h-11 border border-[#D4AF37]/35 bg-[#D4AF37]/10 px-4 py-3 text-[10px] font-mono font-bold uppercase tracking-[0.16em] text-[#D4AF37] transition-colors hover:bg-[#D4AF37]/15"
+                >
+                  Relatório de Operações
+                </button>
+              )}
+              {authUser.role === 'admin' && (
                 <ObservabilityPanel publicHealth={apiHealth.health} publicError={apiHealth.error} />
               )}
               {authUser.role === 'admin' && <EngineAuditPanel />}
@@ -1723,6 +1732,18 @@ export default function Home() {
         {authUser.role === 'admin' && (
           <div className="hidden lg:block">
             <ControlledSimulationPanel />
+          </div>
+        )}
+
+        {authUser.role === 'admin' && (
+          <div className="hidden lg:block">
+            <button
+              type="button"
+              onClick={() => { window.location.href = '/relatorio-operacoes'; }}
+              className="w-full min-h-12 border border-[#D4AF37]/35 bg-[#D4AF37]/10 px-5 text-[11px] font-mono font-bold uppercase tracking-[0.18em] text-[#D4AF37] transition-colors hover:bg-[#D4AF37]/15"
+            >
+              Relatório de Operações
+            </button>
           </div>
         )}
 
