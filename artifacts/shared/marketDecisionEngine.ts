@@ -1,12 +1,21 @@
 export type RadarDirection = "COMPRA" | "VENDA" | "AGUARDAR";
 export type RadarTrend = "ALTA" | "BAIXA" | "LATERAL";
-type TradeSide = "BUY" | "SELL";
+export type TradeSide = "BUY" | "SELL";
 export type DemoSymbol = "BTCUSDT" | "ETHUSDT" | "SOLUSDT";
 export type RadarSymbol = DemoSymbol;
 export type TriggerKind = "breakout" | "retest" | "pullback" | null;
 export type TriggerStage = "confirmed" | "forming" | "none" | "invalid";
 type QualitySeverity = "block" | "penalty";
 export type DecisionState = "SEM_SETUP" | "CONTEXTO_FORMANDO" | "SETUP_QUASE_PRONTO" | "BLOQUEADO_RISCO" | "ENTRADA_APROVADA" | "ERRO";
+export type MarketRegime =
+  | "TREND_CLEAN"
+  | "TREND_STRETCHED"
+  | "MOMENTUM"
+  | "TRANSITION"
+  | "LATERAL"
+  | "CHAOTIC"
+  | "INSUFFICIENT_DATA";
+export type AdaptiveStrategy = "CONTINUATION_RETEST" | "CONTINUATION_MOMENTUM" | "NONE";
 
 export interface DemoSignalInput {
   pair: string;
@@ -28,6 +37,70 @@ export interface Candle {
   close: number;
   volume: number;
   closeTime: number;
+}
+
+export interface LastTradeContext {
+  direction: TradeSide;
+  exitReason: string | null;
+  target1Hit: boolean;
+  target2Hit: boolean;
+  closeTime: number | null;
+  signalKey?: string | null;
+}
+
+export interface MarketReorganizationResult {
+  reorganized: boolean;
+  reasons: string[];
+  missingConditions: string[];
+}
+
+export interface MarketRegimeAnalysis {
+  regime: MarketRegime;
+  confidence: number;
+  direction: TradeSide | "NONE";
+  reasons: string[];
+  warnings: string[];
+  ema200DistancePctSigned: number | null;
+  ema200DistanceAtr: number | null;
+  ema9DistancePct: number | null;
+  ema21DistancePct: number | null;
+  atr5m: number | null;
+  atr15m: number | null;
+  atr1h: number | null;
+  sameDirectionCandles: number;
+  candleAlternationRate: number;
+  averageWickBodyRatio: number | null;
+  volumeRelative: number | null;
+  volumeDelta: number | null;
+  trendEfficiency: number | null;
+  stretchedEvidence: {
+    move5Pct: number | null;
+    move5AtrMultiple: number | null;
+    ema9DistancePct: number | null;
+    ema21DistancePct: number | null;
+    sameDirectionCandles: number;
+    extreme: boolean;
+  };
+  chaoticEvidence: {
+    candleAlternationRate: number;
+    averageWickBodyRatio: number | null;
+    trendEfficiency: number | null;
+    high: boolean;
+  };
+}
+
+export interface StrategySelection {
+  selectedStrategy: AdaptiveStrategy;
+  direction: TradeSide | "NONE";
+  approved: boolean;
+  reason: string;
+  blockedReasons: string[];
+  requiredConditions: string[];
+  regime: MarketRegime;
+  confidence: number;
+  score: number;
+  conditionsPassed: string[];
+  conditionsMissing: string[];
 }
 
 export interface TrendDetails {
@@ -122,6 +195,22 @@ export interface RadarLikeAnalysis {
   qualityFilters: QualityFilter[];
   volume: { current: number; average20: number; relative: number; delta5: number; expanding: boolean; veryWeak: boolean } | null;
   signalKey: string;
+  marketRegime: MarketRegimeAnalysis;
+  strategySelection: StrategySelection;
+  selectedStrategy: AdaptiveStrategy;
+  strategyScore: number;
+  ema200DistancePctSigned: number | null;
+  ema200DistanceAtr: number | null;
+  stretchedEvidence: MarketRegimeAnalysis["stretchedEvidence"];
+  chaoticEvidence: MarketRegimeAnalysis["chaoticEvidence"];
+  lastTradeDirection: TradeSide | null;
+  lastTradeExitReason: string | null;
+  lastTradeTarget1Hit: boolean | null;
+  lastTradeTarget2Hit: boolean | null;
+  marketReorganized: boolean | null;
+  reorganizationReasons: string[];
+  momentumConditionsPassed: string[];
+  momentumConditionsMissing: string[];
   diagnostics: {
     trend1h: TrendDetails | null;
     trend15m: TrendDetails | null;
@@ -157,6 +246,20 @@ export const DEMO_EXHAUSTION_CONFIG = {
     ETHUSDT: { maxEma9DistancePct: 0.004, maxEma21DistancePct: 0.006 },
     SOLUSDT: { maxEma9DistancePct: 0.006, maxEma21DistancePct: 0.008 },
   } satisfies Record<DemoSymbol, { maxEma9DistancePct: number; maxEma21DistancePct: number }>,
+};
+
+export const DEMO_ADAPTIVE_CONFIG = {
+  minOperationalScore: 70,
+  momentumMinVolumeRelative: 1,
+  momentumPreferredVolumeRelative: 1.12,
+  momentumStrongBodyRatio: 0.55,
+  chaoticAlternationRate: 0.68,
+  chaoticWickBodyRatio: 1.8,
+  chaoticTrendEfficiency: 0.35,
+  cleanTrendEfficiency: 0.48,
+  reorganizationMaxSameDirectionCandles: 2,
+  reorganizationMaxVolumeRelative: 1.5,
+  reorganizationMinVolumeRelative: 0.8,
 };
 
 function finite(n: number): boolean {
@@ -414,6 +517,219 @@ function sameDirectionRun(candles: Candle[], side: TradeSide): number {
   return count;
 }
 
+function pctDistance(a: number | null | undefined, b: number | null | undefined): number | null {
+  if (a == null || b == null || !finite(a) || !finite(b) || a <= 0) return null;
+  return Math.abs(a - b) / a;
+}
+
+function signedPctDistance(price: number | null, reference: number | null | undefined): number | null {
+  if (price == null || reference == null || !finite(price) || !finite(reference) || price <= 0) return null;
+  return (price - reference) / price;
+}
+
+function candleDirection(candle: Candle): TradeSide | "NONE" {
+  if (candle.close > candle.open) return "BUY";
+  if (candle.close < candle.open) return "SELL";
+  return "NONE";
+}
+
+function candleAlternationRate(candles: Candle[]): number {
+  const recent = candles.slice(-16).map(candleDirection).filter((direction) => direction !== "NONE");
+  if (recent.length < 2) return 0;
+  let alternations = 0;
+  for (let i = 1; i < recent.length; i++) {
+    if (recent[i] !== recent[i - 1]) alternations++;
+  }
+  return alternations / (recent.length - 1);
+}
+
+function averageWickBodyRatio(candles: Candle[]): number | null {
+  const ratios = candles.slice(-12).map((candle) => {
+    const body = Math.abs(candle.close - candle.open);
+    const wick = (candle.high - candle.low) - body;
+    return body > 0 && finite(wick) ? Math.max(0, wick) / body : null;
+  }).filter((value): value is number => value !== null);
+  return ratios.length > 0 ? average(ratios) : null;
+}
+
+function trendEfficiency(candles: Candle[]): number | null {
+  const recent = candles.slice(-20);
+  if (recent.length < 2) return null;
+  const net = Math.abs(recent[recent.length - 1].close - recent[0].close);
+  let path = 0;
+  for (let i = 1; i < recent.length; i++) path += Math.abs(recent[i].close - recent[i - 1].close);
+  return path > 0 ? net / path : null;
+}
+
+function directionFromRadar(direction: RadarDirection): TradeSide | "NONE" {
+  if (direction === "COMPRA") return "BUY";
+  if (direction === "VENDA") return "SELL";
+  return "NONE";
+}
+
+function closeBeyondLevel(candle: Candle | null | undefined, side: TradeSide, level: number | null): boolean {
+  if (!candle || level == null) return false;
+  return side === "BUY" ? candle.close > level : candle.close < level;
+}
+
+function candleBodyRatio(candle: Candle | null | undefined): number {
+  if (!candle) return 0;
+  const range = candle.high - candle.low;
+  return range > 0 ? Math.abs(candle.close - candle.open) / range : 0;
+}
+
+export function classifyMarketRegime(input: {
+  symbol: DemoSymbol;
+  decisionPrice: number | null;
+  candles1h: Candle[];
+  candles15m: Candle[];
+  candles5m: Candle[];
+  trend1h: TrendDetails | null;
+  trend15m: TrendDetails | null;
+  contextDirection: RadarDirection;
+  volume: RadarLikeAnalysis["volume"];
+  insufficient: boolean;
+}): MarketRegimeAnalysis {
+  const side = directionFromRadar(input.contextDirection);
+  const last5m = last(input.candles5m);
+  const atr5m = atr(input.candles5m, 14) || null;
+  const atr15m = atr(input.candles15m, 14) || null;
+  const atr1h = atr(input.candles1h, 14) || null;
+  const ema200DistancePctSigned = signedPctDistance(input.decisionPrice, input.trend1h?.ema200);
+  const ema200DistanceAtr = input.decisionPrice != null && input.trend1h?.ema200 != null && atr1h && atr1h > 0
+    ? (input.decisionPrice - input.trend1h.ema200) / atr1h
+    : null;
+  const ema9DistancePct = pctDistance(input.decisionPrice, input.trend15m?.ema9);
+  const ema21DistancePct = pctDistance(input.decisionPrice, input.trend15m?.ema21);
+  const move5Abs = input.candles5m.length >= 6 && input.decisionPrice != null ? Math.abs(input.decisionPrice - input.candles5m[input.candles5m.length - 6].close) : null;
+  const move5Pct = move5Abs != null && input.decisionPrice != null && input.decisionPrice > 0 ? move5Abs / input.decisionPrice : null;
+  const move5AtrMultiple = move5Abs != null && atr5m && atr5m > 0 ? move5Abs / atr5m : null;
+  const sameDirectionCandles = side === "NONE"
+    ? Math.max(sameDirectionRun(input.candles5m, "BUY"), sameDirectionRun(input.candles5m, "SELL"))
+    : sameDirectionRun(input.candles5m, side);
+  const alternationRate = candleAlternationRate(input.candles5m);
+  const wickBodyRatio = averageWickBodyRatio(input.candles5m);
+  const efficiency = trendEfficiency(input.candles5m);
+  const symbolCfg = DEMO_EXHAUSTION_CONFIG.bySymbol[input.symbol];
+  const extreme = (move5Pct ?? 0) > DEMO_EXHAUSTION_CONFIG.extremeStretchedMovePct
+    || (move5AtrMultiple ?? 0) > DEMO_EXHAUSTION_CONFIG.extremeStretchedAtrMultiple;
+  const stretched = extreme
+    || ((move5Pct ?? 0) > DEMO_EXHAUSTION_CONFIG.maxStretchedMovePct && (move5AtrMultiple ?? 0) > DEMO_EXHAUSTION_CONFIG.stretchedAtrMultiple)
+    || (ema9DistancePct ?? 0) > symbolCfg.maxEma9DistancePct
+    || (ema21DistancePct ?? 0) > symbolCfg.maxEma21DistancePct
+    || sameDirectionCandles > DEMO_EXHAUSTION_CONFIG.maxSameDirectionCandles;
+  const chaotic = alternationRate >= DEMO_ADAPTIVE_CONFIG.chaoticAlternationRate
+    && (wickBodyRatio ?? 0) >= DEMO_ADAPTIVE_CONFIG.chaoticWickBodyRatio
+    && (efficiency ?? 1) <= DEMO_ADAPTIVE_CONFIG.chaoticTrendEfficiency;
+  const aligned = input.trend1h !== null
+    && input.trend15m !== null
+    && input.trend1h.trend !== "LATERAL"
+    && input.trend1h.trend === input.trend15m.trend;
+  const momentum = aligned
+    && !!input.volume
+    && input.volume.relative >= DEMO_ADAPTIVE_CONFIG.momentumPreferredVolumeRelative
+    && (efficiency ?? 0) >= DEMO_ADAPTIVE_CONFIG.cleanTrendEfficiency
+    && last5m !== null
+    && candleConfirms(last5m, input.trend1h?.trend === "ALTA" ? "COMPRA" : "VENDA");
+
+  let regime: MarketRegime = "LATERAL";
+  const reasons: string[] = [];
+  const warnings: string[] = [];
+  if (input.insufficient) {
+    regime = "INSUFFICIENT_DATA";
+    reasons.push("Candles fechados insuficientes para classificar o regime.");
+  } else if (chaotic) {
+    regime = "CHAOTIC";
+    reasons.push("Alternancia alta, pavios relevantes e baixa eficiencia direcional.");
+  } else if (momentum && !extreme) {
+    regime = "MOMENTUM";
+    reasons.push("Tendencias alinhadas com participacao de volume e impulso direcional.");
+  } else if (stretched) {
+    regime = "TREND_STRETCHED";
+    reasons.push("Tendencia com sinais de extensao; exige nova estrutura para continuar.");
+  } else if (aligned) {
+    regime = "TREND_CLEAN";
+    reasons.push("Tendencias 1h e 15m alinhadas sem evidencia forte de exaustao.");
+  } else if (input.contextDirection !== "AGUARDAR") {
+    regime = "TRANSITION";
+    reasons.push("Contexto direcional existe, mas ainda depende de confirmacao.");
+  } else {
+    reasons.push("Mercado sem tendencia operacional clara.");
+  }
+  if (extreme) warnings.push("Extensao extrema detectada.");
+  if (ema200DistancePctSigned !== null) reasons.push(`Distancia assinada da EMA200: ${(ema200DistancePctSigned * 100).toFixed(2)}%.`);
+
+  const confidenceBase = input.insufficient ? 15
+    : chaotic ? 72
+    : stretched ? 70
+    : momentum ? 78
+    : aligned ? 74
+    : input.contextDirection !== "AGUARDAR" ? 58
+    : 45;
+  const confidence = Math.max(0, Math.min(100, confidenceBase + Math.round(((input.volume?.relative ?? 0) - 1) * 8)));
+
+  return {
+    regime,
+    confidence,
+    direction: side,
+    reasons,
+    warnings,
+    ema200DistancePctSigned,
+    ema200DistanceAtr,
+    ema9DistancePct,
+    ema21DistancePct,
+    atr5m,
+    atr15m,
+    atr1h,
+    sameDirectionCandles,
+    candleAlternationRate: alternationRate,
+    averageWickBodyRatio: wickBodyRatio,
+    volumeRelative: input.volume?.relative ?? null,
+    volumeDelta: input.volume?.delta5 ?? null,
+    trendEfficiency: efficiency,
+    stretchedEvidence: { move5Pct, move5AtrMultiple, ema9DistancePct, ema21DistancePct, sameDirectionCandles, extreme },
+    chaoticEvidence: { candleAlternationRate: alternationRate, averageWickBodyRatio: wickBodyRatio, trendEfficiency: efficiency, high: chaotic },
+  };
+}
+
+export function evaluateMarketReorganization(input: {
+  lastTrade: LastTradeContext | null;
+  currentDirection: TradeSide | "NONE";
+  signalKey: string;
+  sameDirectionCandles: number;
+  ema9DistancePct: number | null;
+  ema21DistancePct: number | null;
+  volumeRelative: number | null;
+  triggerLevel: number | null;
+  symbol: DemoSymbol;
+}): MarketReorganizationResult {
+  const lastTrade = input.lastTrade;
+  if (!lastTrade || input.currentDirection === "NONE") {
+    return { reorganized: true, reasons: ["Sem memoria operacional relevante para este ativo."], missingConditions: [] };
+  }
+  if (lastTrade.direction !== input.currentDirection) {
+    return { reorganized: true, reasons: ["Direcao diferente do ultimo trade; memoria nao bloqueia reversao futura."], missingConditions: [] };
+  }
+  const requiresReorganization = lastTrade.target2Hit || lastTrade.exitReason === "TARGET_2";
+  if (!requiresReorganization) {
+    return { reorganized: true, reasons: ["Ultimo trade nao exige reorganizacao pos-alvo."], missingConditions: [] };
+  }
+
+  const cfg = DEMO_EXHAUSTION_CONFIG.bySymbol[input.symbol];
+  const reasons: string[] = [];
+  const missingConditions: string[] = [];
+  if (input.sameDirectionCandles <= DEMO_ADAPTIVE_CONFIG.reorganizationMaxSameDirectionCandles) reasons.push("Sequencia direcional foi interrompida.");
+  else missingConditions.push("interrupcao da sequencia direcional");
+  if ((input.ema9DistancePct ?? Number.POSITIVE_INFINITY) <= cfg.maxEma9DistancePct && (input.ema21DistancePct ?? Number.POSITIVE_INFINITY) <= cfg.maxEma21DistancePct) reasons.push("Preco retornou de forma controlada para EMA9/EMA21.");
+  else missingConditions.push("retorno controlado para EMA9/EMA21");
+  if (input.triggerLevel !== null && input.signalKey !== (lastTrade.signalKey ?? null)) reasons.push("Nova estrutura/signalKey detectada.");
+  else missingConditions.push("nova estrutura confirmada");
+  if ((input.volumeRelative ?? 0) >= DEMO_ADAPTIVE_CONFIG.reorganizationMinVolumeRelative && (input.volumeRelative ?? 0) <= DEMO_ADAPTIVE_CONFIG.reorganizationMaxVolumeRelative) reasons.push("Volume normalizado apos o impulso anterior.");
+  else missingConditions.push("volume normalizado");
+
+  return { reorganized: missingConditions.length === 0, reasons, missingConditions };
+}
+
 export function qualityFilters(
   symbol: DemoSymbol,
   side: TradeSide,
@@ -616,6 +932,7 @@ export function analyzeMarketDecision(input: {
   candles1h: Candle[];
   candles15m: Candle[];
   candles5m: Candle[];
+  lastTrade?: LastTradeContext | null;
   now?: number;
 }): RadarLikeAnalysis {
   const now = input.now ?? Date.now();
@@ -632,7 +949,8 @@ export function analyzeMarketDecision(input: {
   const risks: string[] = [];
   const scoreItems: RadarLikeAnalysis["scoreItems"] = [];
 
-  if (decisionPrice === null || candles1h.length < MIN_1H_CANDLES || candles15m.length < MIN_15M_CANDLES || candles5m.length < MIN_5M_CANDLES) {
+  const insufficientData = decisionPrice === null || candles1h.length < MIN_1H_CANDLES || candles15m.length < MIN_15M_CANDLES || candles5m.length < MIN_5M_CANDLES;
+  if (insufficientData) {
     criticalBlockedReasons.push("Dados insuficientes para calcular o Radar sem usar vela aberta.");
   }
   if (candles1h.length < MIN_EMA200_WARMUP) criticalBlockedReasons.push("Dados insuficientes para warm-up minimo da EMA 200.");
@@ -652,24 +970,126 @@ export function analyzeMarketDecision(input: {
   
   // Base trigger check
   const trigger = trigger5m(candles5m, context.direction, levels.breakoutResistance, levels.breakdownSupport, !!volume && volume.relative >= 0.5);
+  const marketRegime = classifyMarketRegime({
+    symbol: input.symbol,
+    decisionPrice,
+    candles1h,
+    candles15m,
+    candles5m,
+    trend1h: trend1hDetails,
+    trend15m: trend15mDetails,
+    contextDirection: context.direction,
+    volume,
+    insufficient: insufficientData || candles1h.length < MIN_EMA200_WARMUP,
+  });
 
-  // Strong Breakout Candidate Check
+  // Adaptive momentum candidate check. Retest remains the conservative default.
   let isStrongBreakout = false;
+  let momentumScore = 0;
+  let momentumConditionsPassed: string[] = [];
+  let momentumConditionsMissing: string[] = [];
+  let marketReorganization = evaluateMarketReorganization({
+    lastTrade: input.lastTrade ?? null,
+    currentDirection: marketRegime.direction,
+    signalKey: "pending",
+    sameDirectionCandles: marketRegime.sameDirectionCandles,
+    ema9DistancePct: marketRegime.ema9DistancePct,
+    ema21DistancePct: marketRegime.ema21DistancePct,
+    volumeRelative: marketRegime.volumeRelative,
+    triggerLevel: trigger.level,
+    symbol: input.symbol,
+  });
   if (
-    trigger.kind === "breakout" &&
     context.direction !== "AGUARDAR" &&
-    volume !== null &&
-    volume.relative >= 1.2
+    volume !== null
   ) {
-    const candidateEntry = trigger.aggressive;
-    if (candidateEntry !== null) {
-      const candidatePlan = rrPlan(trigger.direction, candidateEntry, levels.support, levels.resistance, levels.breakoutResistance, levels.breakdownSupport);
-      const candidateRrStatus: "pending" | "valid" | "invalid" = candidatePlan.rr === null ? "pending" : riskRewardMeetsMinimum(candidatePlan.rr) ? "valid" : "invalid";
+    const side = directionFromRadar(context.direction);
+    const level = side === "BUY" ? levels.breakoutResistance : side === "SELL" ? levels.breakdownSupport : null;
+    const lastClosed = last(candles5m);
+    const previous = candles5m[candles5m.length - 2] ?? null;
+    const candidateEntry = lastClosed?.close ?? null;
+    const twoClosesBeyond = side !== "NONE" && closeBeyondLevel(previous, side, level) && closeBeyondLevel(lastClosed, side, level);
+    const strongCloseBeyond = side !== "NONE"
+      && closeBeyondLevel(lastClosed, side, level)
+      && candleConfirms(lastClosed!, context.direction)
+      && candleBodyRatio(lastClosed) >= DEMO_ADAPTIVE_CONFIG.momentumStrongBodyRatio
+      && volume.relative >= DEMO_ADAPTIVE_CONFIG.momentumPreferredVolumeRelative
+      && volume.expanding;
+    const structuralBreakout = side !== "NONE" && level !== null && closeBeyondLevel(lastClosed, side, level);
+    const candidatePlan = side !== "NONE" && candidateEntry !== null
+      ? rrPlan(context.direction, candidateEntry, levels.support, levels.resistance, levels.breakoutResistance, levels.breakdownSupport)
+      : { stop: null, target1: null, target2: null, rr: null, valid: false, stopTooFar: false };
+    const candidateRrStatus: "pending" | "valid" | "invalid" = candidatePlan.rr === null ? "pending" : riskRewardMeetsMinimum(candidatePlan.rr) ? "valid" : "invalid";
+    const candidateFilters = side !== "NONE" && candidateEntry !== null && trend15mDetails !== null
+      ? qualityFilters(input.symbol, side, candidateEntry, candles5m, trend15mDetails, volume, {
+          kind: "breakout",
+          level,
+          retestValid: true,
+        })
+      : [];
+    const hasSevereExhaustion = candidateFilters
+      .filter((f) => f.name !== "Reteste conservador")
+      .some((f) => !f.passed && f.severity === "block");
+    const proposedMomentumKey = [
+      "CONTINUATION_MOMENTUM",
+      marketRegime.regime,
+      side,
+      level?.toFixed(2) ?? "none",
+      lastClosed?.closeTime ?? 0,
+    ].join("|");
+    marketReorganization = evaluateMarketReorganization({
+      lastTrade: input.lastTrade ?? null,
+      currentDirection: side,
+      signalKey: proposedMomentumKey,
+      sameDirectionCandles: marketRegime.sameDirectionCandles,
+      ema9DistancePct: marketRegime.ema9DistancePct,
+      ema21DistancePct: marketRegime.ema21DistancePct,
+      volumeRelative: marketRegime.volumeRelative,
+      triggerLevel: level,
+      symbol: input.symbol,
+    });
+    const momentumChecks: Array<[string, boolean]> = [
+      ["tendencias 1h/15m alinhadas", trend1h !== "LATERAL" && trend1h === trend15m],
+      ["rompimento estrutural 5m", structuralBreakout],
+      ["fechamento alem do nivel", side !== "NONE" && closeBeyondLevel(lastClosed, side, level)],
+      ["participacao de volume", volume.relative >= DEMO_ADAPTIVE_CONFIG.momentumMinVolumeRelative],
+      ["mercado nao caotico", marketRegime.regime !== "CHAOTIC"],
+      ["sem extensao extrema", !marketRegime.stretchedEvidence.extreme],
+      ["plano e R/R validos", candidatePlan.valid && candidateRrStatus === "valid" && !candidatePlan.stopTooFar],
+      ["confirmacao por dois fechamentos ou vela forte", twoClosesBeyond || strongCloseBeyond],
+      ["sem exaustao severa", !hasSevereExhaustion],
+      ["mercado reorganizado apos alvo anterior", marketReorganization.reorganized],
+    ];
+    momentumConditionsPassed = momentumChecks.filter(([, passed]) => passed).map(([name]) => name);
+    momentumConditionsMissing = momentumChecks.filter(([, passed]) => !passed).map(([name]) => name);
+    momentumScore = Math.max(0, Math.min(100, 35 + momentumConditionsPassed.length * 7 - momentumConditionsMissing.length * 6));
+
+    if (momentumConditionsMissing.length === 0 && candidateEntry !== null) {
+      isStrongBreakout = true;
+      trigger.direction = context.direction;
+      trigger.aggressive = candidateEntry;
+      trigger.conservative = candidateEntry;
+      trigger.retestValid = true;
+      trigger.stage = "confirmed";
+      trigger.kind = "breakout";
+      trigger.level = level;
+      trigger.confirmation = twoClosesBeyond
+        ? "Momentum confirmado por dois fechamentos 5m alem da estrutura."
+        : "Momentum confirmado por vela forte com volume em expansao.";
+      trigger.missing = null;
+    } else if (
+      trigger.kind === "breakout" &&
+      volume.relative >= 1.2
+    ) {
+      const candidateEntryFallback = trigger.aggressive;
+      if (candidateEntryFallback !== null) {
+        const candidatePlanFallback = rrPlan(trigger.direction, candidateEntryFallback, levels.support, levels.resistance, levels.breakoutResistance, levels.breakdownSupport);
+      const candidateRrStatusFallback: "pending" | "valid" | "invalid" = candidatePlanFallback.rr === null ? "pending" : riskRewardMeetsMinimum(candidatePlanFallback.rr) ? "valid" : "invalid";
       
-      if (candidatePlan.valid && candidateRrStatus === "valid") {
+      if (candidatePlanFallback.valid && candidateRrStatusFallback === "valid") {
         const candidateSide: TradeSide | null = trigger.direction === "COMPRA" ? "BUY" : trigger.direction === "VENDA" ? "SELL" : null;
         if (candidateSide !== null && trend15mDetails !== null) {
-          const candidateFilters = qualityFilters(input.symbol, candidateSide, candidateEntry, candles5m, trend15mDetails, volume, {
+          const candidateFilters = qualityFilters(input.symbol, candidateSide, candidateEntryFallback, candles5m, trend15mDetails, volume, {
             kind: "breakout",
             level: trigger.level,
             retestValid: false,
@@ -689,6 +1109,7 @@ export function analyzeMarketDecision(input: {
         }
       }
     }
+  }
   }
 
   const entry = trigger.conservative;
@@ -711,6 +1132,33 @@ export function analyzeMarketDecision(input: {
       })
     : [];
 
+  const selectedStrategyCandidate: AdaptiveStrategy = isStrongBreakout
+    ? "CONTINUATION_MOMENTUM"
+    : trigger.kind === "retest" || trigger.kind === "pullback"
+      ? "CONTINUATION_RETEST"
+      : "NONE";
+  const adaptiveSignalKeySeed = [
+    selectedStrategyCandidate,
+    marketRegime.regime,
+    directionFromRadar(trigger.direction),
+    trigger.level?.toFixed(2) ?? "none",
+    candles5m[candles5m.length - 1]?.closeTime ?? 0,
+    entry?.toFixed(2) ?? "none",
+  ].join("|");
+  marketReorganization = evaluateMarketReorganization({
+    lastTrade: input.lastTrade ?? null,
+    currentDirection: directionFromRadar(trigger.direction),
+    signalKey: adaptiveSignalKeySeed,
+    sameDirectionCandles: marketRegime.sameDirectionCandles,
+    ema9DistancePct: marketRegime.ema9DistancePct,
+    ema21DistancePct: marketRegime.ema21DistancePct,
+    volumeRelative: marketRegime.volumeRelative,
+    triggerLevel: trigger.level,
+    symbol: input.symbol,
+  });
+  if (!marketReorganization.reorganized && trigger.direction !== "AGUARDAR") {
+    criticalBlockedReasons.push("Mercado ainda nao reorganizou apos ultimo alvo no mesmo sentido.");
+  }
     
   const qualityBlocks = blockingQualityFailures(qualityFilterResults);
   for (const filter of qualityBlocks) {
@@ -819,11 +1267,41 @@ export function analyzeMarketDecision(input: {
   
   const blockedReasons = [...criticalBlockedReasons, ...warnings];
   const decisiveReason = blockedReasons[0] ?? missingConditions[0] ?? (state === "ENTRADA_APROVADA" ? "Entrada aprovada pelo funil operacional." : "Contexto em formacao.");
+  const selectedStrategy: AdaptiveStrategy = state === "ENTRADA_APROVADA" || trigger.stage !== "none"
+    ? selectedStrategyCandidate
+    : "NONE";
+  const strategyScore = selectedStrategy === "CONTINUATION_MOMENTUM" ? Math.max(momentumScore, scoreOperacional) : scoreOperacional;
+  const strategySelection: StrategySelection = {
+    selectedStrategy,
+    direction: directionFromRadar(trigger.direction),
+    approved: state === "ENTRADA_APROVADA",
+    reason: selectedStrategy === "CONTINUATION_MOMENTUM"
+      ? (state === "ENTRADA_APROVADA" ? "Momentum aprovado pelo seletor adaptativo." : "Momentum avaliado, mas ainda incompleto.")
+      : selectedStrategy === "CONTINUATION_RETEST"
+        ? (state === "ENTRADA_APROVADA" ? "Reteste/retomada conservadora aprovado pelo seletor adaptativo." : "Reteste/retomada conservadora ainda incompleto.")
+        : "Nenhuma estrategia compativel foi selecionada.",
+    blockedReasons,
+    requiredConditions: selectedStrategy === "CONTINUATION_MOMENTUM"
+      ? momentumConditionsMissing
+      : missingConditions,
+    regime: marketRegime.regime,
+    confidence: marketRegime.confidence,
+    score: strategyScore,
+    conditionsPassed: selectedStrategy === "CONTINUATION_MOMENTUM"
+      ? momentumConditionsPassed
+      : checklist.filter((item) => item.passed).map((item) => item.label),
+    conditionsMissing: selectedStrategy === "CONTINUATION_MOMENTUM"
+      ? momentumConditionsMissing
+      : missingConditions,
+  };
   const signalKey = [
+    selectedStrategy,
+    marketRegime.regime,
     suggestedDirection,
     candles1h[candles1h.length - 1]?.closeTime ?? 0,
     candles15m[candles15m.length - 1]?.closeTime ?? 0,
     candles5m[candles5m.length - 1]?.closeTime ?? 0,
+    trigger.level?.toFixed(2) ?? "none",
     entry?.toFixed(2) ?? "none",
     plan.stop?.toFixed(2) ?? "none",
   ].join("|");
@@ -869,6 +1347,22 @@ export function analyzeMarketDecision(input: {
     volume,
     generatedAt,
     signalKey,
+    marketRegime,
+    strategySelection,
+    selectedStrategy,
+    strategyScore,
+    ema200DistancePctSigned: marketRegime.ema200DistancePctSigned,
+    ema200DistanceAtr: marketRegime.ema200DistanceAtr,
+    stretchedEvidence: marketRegime.stretchedEvidence,
+    chaoticEvidence: marketRegime.chaoticEvidence,
+    lastTradeDirection: input.lastTrade?.direction ?? null,
+    lastTradeExitReason: input.lastTrade?.exitReason ?? null,
+    lastTradeTarget1Hit: input.lastTrade?.target1Hit ?? null,
+    lastTradeTarget2Hit: input.lastTrade?.target2Hit ?? null,
+    marketReorganized: input.lastTrade ? marketReorganization.reorganized : null,
+    reorganizationReasons: marketReorganization.reorganized ? marketReorganization.reasons : marketReorganization.missingConditions,
+    momentumConditionsPassed,
+    momentumConditionsMissing,
     diagnostics: {
       trend1h: trend1hDetails,
       trend15m: trend15mDetails,
@@ -884,6 +1378,7 @@ export function analyzeDemoCandles(input: {
   candles1h: Candle[];
   candles15m: Candle[];
   candles5m: Candle[];
+  lastTrade?: LastTradeContext | null;
   now?: number;
 }): { price: number; signal: DemoSignalInput; analysis: RadarLikeAnalysis; filters: QualityFilter[] } {
   if (!ALLOWED_SYMBOLS.has(input.symbol)) throw new Error(`Unsupported demo symbol ${input.symbol}`);

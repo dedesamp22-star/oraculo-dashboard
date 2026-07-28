@@ -18,7 +18,7 @@ let running = false;
 type AutomationUser = { user: AuthUser; automation: { enabled: boolean; symbol: string } };
 type DemoWorkerStore = Pick<
   typeof demoStore,
-  "getAutomationUsers" | "updatePrices" | "openFromSignalWithResult" | "recordWorkerDiagnostic" | "recordEngineAudit"
+  "getAutomationUsers" | "updatePrices" | "openFromSignalWithResult" | "recordWorkerDiagnostic" | "recordEngineAudit" | "getLastTradeForSymbol"
 >;
 
 interface DemoWorkerDeps {
@@ -82,7 +82,18 @@ async function runSymbolCycle(item: AutomationUser, symbol: DemoWorkerSymbol, ti
     const latencyMs = Date.now() - priceStartedAt;
     deps.store.updatePrices(user.id, { pair: symbol, price });
 
-    const { signal, analysis, filters } = await deps.analyzeSignal(symbol);
+    const lastTrade = deps.store.getLastTradeForSymbol(user.id, symbol);
+    const { signal, analysis, filters } = await deps.analyzeSignal(symbol, {
+      lastTrade: lastTrade
+        ? {
+            direction: lastTrade.direction,
+            exitReason: lastTrade.exitReason ?? null,
+            target1Hit: lastTrade.target1Hit,
+            target2Hit: lastTrade.exitReason === "TARGET_2",
+            closeTime: lastTrade.closeTime ?? null,
+          }
+        : null,
+    });
     let auditDecisionState = analysis.decisionState;
     let auditDecisiveReason = analysis.decisiveReason;
     let auditBlockedReasons = analysis.blockedReasons;
@@ -143,6 +154,8 @@ async function runSymbolCycle(item: AutomationUser, symbol: DemoWorkerSymbol, ti
           missingConditions: analysis.missingConditions,
           decisiveReason: auditDecisiveReason,
           signalKey: analysis.signalKey,
+          regime: analysis.marketRegime.regime,
+          selectedStrategy: analysis.selectedStrategy,
         },
         trends: { trend1h: analysis.trend1h, trend15m: analysis.trend15m, trigger5m: analysis.trigger5m, details: analysis.diagnostics },
         indicators: {
@@ -153,6 +166,10 @@ async function runSymbolCycle(item: AutomationUser, symbol: DemoWorkerSymbol, ti
           support: analysis.support,
           resistance: analysis.resistance,
           rr: analysis.rr,
+          ema200DistancePctSigned: analysis.ema200DistancePctSigned,
+          ema200DistanceAtr: analysis.ema200DistanceAtr,
+          regime: analysis.marketRegime,
+          strategy: analysis.strategySelection,
         },
         filters: {
           approved,
@@ -197,6 +214,22 @@ async function runSymbolCycle(item: AutomationUser, symbol: DemoWorkerSymbol, ti
         rr: analysis.rr,
         volumeRelative: analysis.volume?.relative ?? null,
         engineVersion: ENGINE_VERSION_AUDIT,
+        regime: analysis.marketRegime.regime,
+        regimeConfidence: analysis.marketRegime.confidence,
+        selectedStrategy: analysis.selectedStrategy,
+        strategyScore: analysis.strategyScore,
+        ema200DistancePctSigned: analysis.ema200DistancePctSigned,
+        ema200DistanceAtr: analysis.ema200DistanceAtr,
+        stretchedEvidence: analysis.stretchedEvidence,
+        chaoticEvidence: analysis.chaoticEvidence,
+        lastTradeDirection: analysis.lastTradeDirection,
+        lastTradeExitReason: analysis.lastTradeExitReason,
+        lastTradeTarget1Hit: analysis.lastTradeTarget1Hit,
+        lastTradeTarget2Hit: analysis.lastTradeTarget2Hit,
+        marketReorganized: analysis.marketReorganized,
+        reorganizationReasons: analysis.reorganizationReasons,
+        momentumConditionsPassed: analysis.momentumConditionsPassed,
+        momentumConditionsMissing: analysis.momentumConditionsMissing,
       });
     } catch (auditErr) {
       logger.warn({ err: auditErr, userId: user.id, symbol }, "Engine audit record failed (non-critical)");

@@ -15,7 +15,7 @@ test("demo worker has a fixed backend allowlist for BTC, ETH and SOL", () => {
 test("demo worker analyzes and audits every allowed symbol in each user cycle", () => {
   assert.match(workerSource, /for \(const symbol of DEMO_WORKER_SYMBOLS\)/);
   assert.match(workerSource, /await deps\.fetchPrice\(symbol\)/);
-  assert.match(workerSource, /await deps\.analyzeSignal\(symbol\)/);
+  assert.match(workerSource, /await deps\.analyzeSignal\(symbol, \{/);
   assert.match(workerSource, /deps\.store\.recordEngineAudit\(\{/);
   assert.match(workerSource, /symbol,/);
 });

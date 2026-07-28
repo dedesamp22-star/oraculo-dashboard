@@ -33,7 +33,7 @@ test("daily limit only blocks openings and keeps worker analysis and auditing ac
   assert.match(openBody, /account\.safetyLimit\.limited/);
   assert.match(openBody, /return blocked\(account\.safetyLimit\.reason, "BLOQUEADO_RISCO"\)/);
   assert.match(workerSource, /for \(const symbol of DEMO_WORKER_SYMBOLS\)/);
-  assert.match(workerSource, /await deps\.analyzeSignal\(symbol\)/);
+  assert.match(workerSource, /await deps\.analyzeSignal\(symbol, \{/);
   assert.match(workerSource, /deps\.store\.recordEngineAudit\(\{/);
 });
 

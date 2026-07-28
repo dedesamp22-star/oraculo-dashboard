@@ -14,6 +14,7 @@ import {
   type Candle,
   type DemoSignalInput,
   type DemoSymbol,
+  type LastTradeContext,
   type QualityFilter,
   type RadarLikeAnalysis,
 } from "@shared/marketDecisionEngine";
@@ -64,7 +65,7 @@ export async function fetchDisplayPrice(symbol: string): Promise<number> {
   return price;
 }
 
-export async function analyzeDemoSignal(symbol: string): Promise<{ price: number; signal: DemoSignalInput; analysis: RadarLikeAnalysis; filters: QualityFilter[] }> {
+export async function analyzeDemoSignal(symbol: string, options: { lastTrade?: LastTradeContext | null } = {}): Promise<{ price: number; signal: DemoSignalInput; analysis: RadarLikeAnalysis; filters: QualityFilter[] }> {
   const normalized = symbol.toUpperCase() as DemoSymbol;
   if (!ALLOWED_SYMBOLS.has(normalized)) throw new Error(`Unsupported demo symbol ${symbol}`);
   const [price, candles1h, candles15m, candles5m] = await Promise.all([
@@ -73,5 +74,5 @@ export async function analyzeDemoSignal(symbol: string): Promise<{ price: number
     fetchKlines(normalized, "15m", 90),
     fetchKlines(normalized, "5m", 80),
   ]);
-  return analyzeDemoCandles({ symbol: normalized, displayPrice: price, candles1h, candles15m, candles5m });
+  return analyzeDemoCandles({ symbol: normalized, displayPrice: price, candles1h, candles15m, candles5m, lastTrade: options.lastTrade ?? null });
 }

@@ -244,6 +244,22 @@ export interface EngineAuditInput {
   rr: number | null;
   volumeRelative: number | null;
   engineVersion: string;
+  regime?: string | null;
+  regimeConfidence?: number | null;
+  selectedStrategy?: string | null;
+  strategyScore?: number | null;
+  ema200DistancePctSigned?: number | null;
+  ema200DistanceAtr?: number | null;
+  stretchedEvidence?: Record<string, unknown> | null;
+  chaoticEvidence?: Record<string, unknown> | null;
+  lastTradeDirection?: string | null;
+  lastTradeExitReason?: string | null;
+  lastTradeTarget1Hit?: boolean | null;
+  lastTradeTarget2Hit?: boolean | null;
+  marketReorganized?: boolean | null;
+  reorganizationReasons?: string[] | null;
+  momentumConditionsPassed?: string[] | null;
+  momentumConditionsMissing?: string[] | null;
 }
 
 export interface EngineAuditEntry {
@@ -275,6 +291,22 @@ export interface EngineAuditEntry {
   rr: number | null;
   volumeRelative: number | null;
   engineVersion: string;
+  regime: string | null;
+  regimeConfidence: number | null;
+  selectedStrategy: string | null;
+  strategyScore: number | null;
+  ema200DistancePctSigned: number | null;
+  ema200DistanceAtr: number | null;
+  stretchedEvidence: Record<string, unknown> | null;
+  chaoticEvidence: Record<string, unknown> | null;
+  lastTradeDirection: string | null;
+  lastTradeExitReason: string | null;
+  lastTradeTarget1Hit: boolean | null;
+  lastTradeTarget2Hit: boolean | null;
+  marketReorganized: boolean | null;
+  reorganizationReasons: string[];
+  momentumConditionsPassed: string[];
+  momentumConditionsMissing: string[];
   createdAt: string;
 }
 
@@ -1802,6 +1834,35 @@ export class DemoStore {
         this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (11, 'demo_loss_streak_diagnostics', ?)").run(nowIso());
       });
     }
+    const v12 = this.db.prepare("SELECT version FROM schema_migrations WHERE version = 12").get();
+    if (!v12) {
+      this.transaction(() => {
+        const addColumn = (column: string, definition: string) => {
+          const exists = (this.db.prepare("PRAGMA table_info(engine_audit_log)").all() as Array<{ name: string }>).some((row) => row.name === column);
+          if (!exists) this.db.exec(`ALTER TABLE engine_audit_log ADD COLUMN ${definition}`);
+        };
+        const columns: Array<[string, string]> = [
+          ["regime", "regime TEXT"],
+          ["regime_confidence", "regime_confidence REAL"],
+          ["selected_strategy", "selected_strategy TEXT"],
+          ["strategy_score", "strategy_score REAL"],
+          ["ema200_distance_pct_signed", "ema200_distance_pct_signed REAL"],
+          ["ema200_distance_atr", "ema200_distance_atr REAL"],
+          ["stretched_evidence_json", "stretched_evidence_json TEXT"],
+          ["chaotic_evidence_json", "chaotic_evidence_json TEXT"],
+          ["last_trade_direction", "last_trade_direction TEXT"],
+          ["last_trade_exit_reason", "last_trade_exit_reason TEXT"],
+          ["last_trade_target1_hit", "last_trade_target1_hit INTEGER"],
+          ["last_trade_target2_hit", "last_trade_target2_hit INTEGER"],
+          ["market_reorganized", "market_reorganized INTEGER"],
+          ["reorganization_reasons_json", "reorganization_reasons_json TEXT"],
+          ["momentum_conditions_passed_json", "momentum_conditions_passed_json TEXT"],
+          ["momentum_conditions_missing_json", "momentum_conditions_missing_json TEXT"],
+        ];
+        for (const [column, definition] of columns) addColumn(column, definition);
+        this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (12, 'adaptive_engine_audit_fields', ?)").run(nowIso());
+      });
+    }
   }
 
   private applyInitialAdminEnv(): void {
@@ -2184,8 +2245,14 @@ export class DemoStore {
            blocked_reasons_json, quality_penalties_json,
            decisive_reason, missing_conditions_json,
            entry_price, stop_price, target1, target2, rr, volume_relative,
-           engine_version, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           engine_version, regime, regime_confidence, selected_strategy, strategy_score,
+           ema200_distance_pct_signed, ema200_distance_atr,
+           stretched_evidence_json, chaotic_evidence_json,
+           last_trade_direction, last_trade_exit_reason, last_trade_target1_hit, last_trade_target2_hit,
+           market_reorganized, reorganization_reasons_json,
+           momentum_conditions_passed_json, momentum_conditions_missing_json,
+           created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         id,
         input.userId,
@@ -2215,6 +2282,22 @@ export class DemoStore {
         input.rr,
         input.volumeRelative,
         input.engineVersion,
+        input.regime ?? null,
+        input.regimeConfidence ?? null,
+        input.selectedStrategy ?? null,
+        input.strategyScore ?? null,
+        input.ema200DistancePctSigned ?? null,
+        input.ema200DistanceAtr ?? null,
+        JSON.stringify(input.stretchedEvidence ?? null),
+        JSON.stringify(input.chaoticEvidence ?? null),
+        input.lastTradeDirection ?? null,
+        input.lastTradeExitReason ?? null,
+        input.lastTradeTarget1Hit == null ? null : Number(input.lastTradeTarget1Hit),
+        input.lastTradeTarget2Hit == null ? null : Number(input.lastTradeTarget2Hit),
+        input.marketReorganized == null ? null : Number(input.marketReorganized),
+        JSON.stringify(input.reorganizationReasons ?? []),
+        JSON.stringify(input.momentumConditionsPassed ?? []),
+        JSON.stringify(input.momentumConditionsMissing ?? []),
         now,
       );
       this.db.prepare(`
@@ -2467,6 +2550,22 @@ export class DemoStore {
       rr: row.rr == null ? null : Number(row.rr),
       volumeRelative: row.volume_relative == null ? null : Number(row.volume_relative),
       engineVersion: String(row.engine_version),
+      regime: row.regime == null ? null : String(row.regime),
+      regimeConfidence: row.regime_confidence == null ? null : Number(row.regime_confidence),
+      selectedStrategy: row.selected_strategy == null ? null : String(row.selected_strategy),
+      strategyScore: row.strategy_score == null ? null : Number(row.strategy_score),
+      ema200DistancePctSigned: row.ema200_distance_pct_signed == null ? null : Number(row.ema200_distance_pct_signed),
+      ema200DistanceAtr: row.ema200_distance_atr == null ? null : Number(row.ema200_distance_atr),
+      stretchedEvidence: row.stretched_evidence_json == null ? null : jsonParse<Record<string, unknown>>(String(row.stretched_evidence_json), {}),
+      chaoticEvidence: row.chaotic_evidence_json == null ? null : jsonParse<Record<string, unknown>>(String(row.chaotic_evidence_json), {}),
+      lastTradeDirection: row.last_trade_direction == null ? null : String(row.last_trade_direction),
+      lastTradeExitReason: row.last_trade_exit_reason == null ? null : String(row.last_trade_exit_reason),
+      lastTradeTarget1Hit: row.last_trade_target1_hit == null ? null : Boolean(row.last_trade_target1_hit),
+      lastTradeTarget2Hit: row.last_trade_target2_hit == null ? null : Boolean(row.last_trade_target2_hit),
+      marketReorganized: row.market_reorganized == null ? null : Boolean(row.market_reorganized),
+      reorganizationReasons: jsonParse<string[]>(String(row.reorganization_reasons_json ?? "[]"), []),
+      momentumConditionsPassed: jsonParse<string[]>(String(row.momentum_conditions_passed_json ?? "[]"), []),
+      momentumConditionsMissing: jsonParse<string[]>(String(row.momentum_conditions_missing_json ?? "[]"), []),
       createdAt: String(row.created_at),
     }));
     return { entries, total, limit: safeLimit, offset: safeOffset };
@@ -2734,6 +2833,22 @@ export class DemoStore {
       rr: row.rr == null ? null : Number(row.rr),
       volumeRelative: row.volume_relative == null ? null : Number(row.volume_relative),
       engineVersion: String(row.engine_version),
+      regime: row.regime == null ? null : String(row.regime),
+      regimeConfidence: row.regime_confidence == null ? null : Number(row.regime_confidence),
+      selectedStrategy: row.selected_strategy == null ? null : String(row.selected_strategy),
+      strategyScore: row.strategy_score == null ? null : Number(row.strategy_score),
+      ema200DistancePctSigned: row.ema200_distance_pct_signed == null ? null : Number(row.ema200_distance_pct_signed),
+      ema200DistanceAtr: row.ema200_distance_atr == null ? null : Number(row.ema200_distance_atr),
+      stretchedEvidence: row.stretched_evidence_json == null ? null : jsonParse<Record<string, unknown>>(String(row.stretched_evidence_json), {}),
+      chaoticEvidence: row.chaotic_evidence_json == null ? null : jsonParse<Record<string, unknown>>(String(row.chaotic_evidence_json), {}),
+      lastTradeDirection: row.last_trade_direction == null ? null : String(row.last_trade_direction),
+      lastTradeExitReason: row.last_trade_exit_reason == null ? null : String(row.last_trade_exit_reason),
+      lastTradeTarget1Hit: row.last_trade_target1_hit == null ? null : Boolean(row.last_trade_target1_hit),
+      lastTradeTarget2Hit: row.last_trade_target2_hit == null ? null : Boolean(row.last_trade_target2_hit),
+      marketReorganized: row.market_reorganized == null ? null : Boolean(row.market_reorganized),
+      reorganizationReasons: jsonParse<string[]>(String(row.reorganization_reasons_json ?? "[]"), []),
+      momentumConditionsPassed: jsonParse<string[]>(String(row.momentum_conditions_passed_json ?? "[]"), []),
+      momentumConditionsMissing: jsonParse<string[]>(String(row.momentum_conditions_missing_json ?? "[]"), []),
       createdAt: String(row.created_at),
     }));
 
@@ -3940,6 +4055,16 @@ export class DemoStore {
 
   getTrades(userId: string) {
     return (this.db.prepare("SELECT * FROM demo_trades WHERE user_id = ? ORDER BY COALESCE(close_time, open_time) DESC").all(userId) as Record<string, unknown>[]).map(tradeFromRow);
+  }
+
+  getLastTradeForSymbol(userId: string, symbol: string) {
+    const row = this.db.prepare(`
+      SELECT * FROM demo_trades
+      WHERE user_id = ? AND pair = ?
+      ORDER BY COALESCE(close_time, open_time) DESC
+      LIMIT 1
+    `).get(userId, symbol.toUpperCase()) as Record<string, unknown> | undefined;
+    return row ? tradeFromRow(row) : null;
   }
 
   private validatePosition(body: unknown): DemoTrade {
