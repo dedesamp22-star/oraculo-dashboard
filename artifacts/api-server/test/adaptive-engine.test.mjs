@@ -192,6 +192,34 @@ function organizedTrendCandles(length, start = 108, step = 0.02) {
   });
 }
 
+function btcCaseCandles(mode = "calm", length = 40, intervalMs = 300_000) {
+  return Array.from({ length }, (_, index) => {
+    const closeTime = alignedNow - (length - 1 - index) * intervalMs;
+    let base = 63_520 - index * 7 + Math.sin(index / 5) * 5;
+    let open = index % 3 === 0 ? base - 7 : base + 10;
+    let close = index % 3 === 0 ? base + 5 : base - 10;
+    let high = Math.max(open, close) + 80;
+    let low = Math.min(open, close) - 80;
+    if (mode === "atr-extension" && index >= length - 6) {
+      const step = index - (length - 6);
+      base = 64_050 - step * 165;
+      open = base + 35;
+      close = base - 75;
+      high = Math.max(open, close) + 120;
+      low = Math.min(open, close) - 120;
+    }
+    if (mode === "sequence" && index >= length - 5) {
+      const step = index - (length - 5);
+      base = 63_320 - step * 30;
+      open = base + 18;
+      close = base - 18;
+      high = open + 220;
+      low = close - 220;
+    }
+    return { openTime: closeTime - intervalMs + 1, closeTime, open, close, high, low, volume: 120 };
+  });
+}
+
 const trend1hUp = {
   trend: "ALTA",
   ema9: 108,
@@ -454,6 +482,77 @@ test("EMA200 distance only stretches the regime when combined with extension evi
       insufficient: false,
     });
     assert.equal(nearEma200Normal.regime, "TREND_CLEAN");
+  } finally {
+    cleanup();
+  }
+});
+
+test("BTC EMA200 calibration uses 2.5 percent threshold without isolated blocking", async () => {
+  const { mod, cleanup } = await loadEngine();
+  try {
+    const decisionPrice = 63_213.69;
+    const btcTrend1h = { ...trend1hDown, ema9: 63_100, ema21: 63_400, ema200: 64_877.57 };
+    const btcTrend15m = { ...trend15mDown, ema9: 63_230, ema21: 63_260 };
+    const baseInput = {
+      symbol: "BTCUSDT",
+      decisionPrice,
+      candles1h: btcCaseCandles("calm"),
+      candles15m: btcCaseCandles("calm"),
+      candles5m: btcCaseCandles("calm"),
+      trend1h: btcTrend1h,
+      trend15m: btcTrend15m,
+      contextDirection: "VENDA",
+      volume: { current: 120, average20: 120, relative: 1, delta5: 0, expanding: false, veryWeak: false },
+      insufficient: false,
+    };
+
+    const ema200Only = mod.classifyMarketRegime(baseInput);
+    assert.ok(Math.abs(ema200Only.ema200DistancePctSigned - -0.02632) < 0.0001);
+    assert.equal(ema200Only.stretchedEvidence.ema200Far, true);
+    assert.equal(ema200Only.stretchedEvidence.ema200CombinedExtension, false);
+    assert.notEqual(ema200Only.regime, "TREND_STRETCHED");
+
+    const atrCombined = mod.classifyMarketRegime({ ...baseInput, candles5m: btcCaseCandles("atr-extension") });
+    assert.equal(atrCombined.regime, "TREND_STRETCHED");
+    assert.equal(atrCombined.stretchedEvidence.ema200CombinedExtension, true);
+    assert.ok(atrCombined.stretchedEvidence.ema200CombinedEvidence.includes("extensao recente em ATR"));
+
+    const sequenceCombined = mod.classifyMarketRegime({ ...baseInput, candles5m: btcCaseCandles("sequence") });
+    assert.equal(sequenceCombined.regime, "TREND_STRETCHED");
+    assert.equal(sequenceCombined.stretchedEvidence.ema200CombinedExtension, true);
+    assert.ok(sequenceCombined.stretchedEvidence.ema200CombinedEvidence.includes("sequencia de candles"));
+
+    const decision = mod.analyzeDemoCandles({
+      symbol: "BTCUSDT",
+      displayPrice: decisionPrice,
+      candles1h: btcCaseCandles("calm", 220, 3_600_000),
+      candles15m: btcCaseCandles("calm", 90, 900_000),
+      candles5m: btcCaseCandles("calm", 40, 300_000),
+      now: alignedNow,
+    });
+    assert.doesNotMatch(decision.analysis.blockedReasons.join(" | "), /EMA200/);
+
+    const belowThreshold = mod.classifyMarketRegime({
+      ...baseInput,
+      decisionPrice: 100,
+      trend1h: { ...btcTrend1h, ema200: 102.4 },
+      trend15m: { ...btcTrend15m, ema9: 99.9, ema21: 99.8 },
+      candles1h: organizedTrendCandles(40, 99.1, 0.02),
+      candles15m: organizedTrendCandles(40, 99.1, 0.02),
+      candles5m: organizedTrendCandles(40, 99.1, 0.02),
+    });
+    assert.equal(belowThreshold.stretchedEvidence.ema200Far, false);
+
+    const aboveThreshold = mod.classifyMarketRegime({
+      ...baseInput,
+      decisionPrice: 100,
+      trend1h: { ...btcTrend1h, ema200: 102.6 },
+      trend15m: { ...btcTrend15m, ema9: 99.9, ema21: 99.8 },
+      candles1h: organizedTrendCandles(40, 99.1, 0.02),
+      candles15m: organizedTrendCandles(40, 99.1, 0.02),
+      candles5m: organizedTrendCandles(40, 99.1, 0.02),
+    });
+    assert.equal(aboveThreshold.stretchedEvidence.ema200Far, true);
   } finally {
     cleanup();
   }

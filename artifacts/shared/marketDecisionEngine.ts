@@ -260,7 +260,7 @@ export const DEMO_ADAPTIVE_CONFIG = {
   chaoticWickBodyRatio: 1.8,
   chaoticTrendEfficiency: 0.35,
   cleanTrendEfficiency: 0.48,
-  ema200FarDistancePct: 0.12,
+  ema200FarDistancePct: 0.025,
   ema200FarAtrMultiple: 8,
   reorganizationMaxSameDirectionCandles: 2,
   reorganizationMaxVolumeRelative: 1.5,
