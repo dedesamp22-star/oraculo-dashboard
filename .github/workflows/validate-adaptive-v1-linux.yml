@@ -138,6 +138,9 @@ jobs:
 
       - name: Build complete workspace
         shell: bash
+        env:
+          PORT: "4173"
+          BASE_PATH: "/"
         run: |
           set -euo pipefail
           pnpm run build
