@@ -1,0 +1,159 @@
+name: Validate Adaptive V1 Linux
+
+on:
+  push:
+    branches:
+      - ci/adaptive-linux-validation
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-adaptive-v1-linux
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Linux Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node:
+          - 22
+          - 24
+
+    env:
+      CI: "true"
+      EXPECTED_SHA: f3f1873f59e774971483eecd176d32ec0f29c4d6
+
+    steps:
+      - name: Checkout exact engine commit
+        uses: actions/checkout@v4
+        with:
+          ref: f3f1873f59e774971483eecd176d32ec0f29c4d6
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify Linux and exact SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "$(uname -s)" = "Linux"
+
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+
+          echo "EXPECTED_SHA=$EXPECTED_SHA"
+          echo "ACTUAL_SHA=$ACTUAL_SHA"
+          uname -a
+
+          test "$ACTUAL_SHA" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Show tool versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --version
+          pnpm --version
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+
+      - name: Verify lockfile and tracked files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code -- pnpm-lock.yaml
+          git diff --exit-code
+          test -z "$(git status --porcelain --untracked-files=no)"
+
+      - name: Backend typecheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm --filter @workspace/api-server typecheck
+
+      - name: Adaptive engine tests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd artifacts/api-server
+
+          node --test --test-reporter=spec \
+            test/adaptive-engine.test.mjs \
+            test/adaptive-audit.test.mjs \
+            test/demo-worker-engine.test.mjs \
+            test/demo-worker-multiasset.test.mjs \
+            test/demo-trade-observability.test.mjs \
+            test/demo-daily-limit.test.mjs \
+            test/demo-loss-streak-cooldown.test.mjs \
+            test/demo-session-aggregates.test.mjs
+
+      - name: Execute real adaptive replay
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd artifacts/api-server
+          node scripts/replay-adaptive-engine.mjs \
+            | tee "../../replay-adaptive-node-${{ matrix.node }}.json"
+
+          grep -q \
+            '"classification": "TESTE_FUNCIONAL_DETERMINISTICO_NAO_E_PROVA_ESTATISTICA"' \
+            "../../replay-adaptive-node-${{ matrix.node }}.json"
+
+      - name: Build backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm --filter @workspace/api-server build
+
+      - name: Build complete workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm run build
+
+      - name: Final repository integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git diff --check
+          git diff --exit-code
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+          echo "FINAL_SHA=$(git rev-parse HEAD)"
+          git status --short --branch
+          git log -3 --oneline --decorate
+
+      - name: Upload replay report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: adaptive-replay-node-${{ matrix.node }}
+          path: replay-adaptive-node-${{ matrix.node }}.json
+          if-no-files-found: warn
+          retention-days: 7
