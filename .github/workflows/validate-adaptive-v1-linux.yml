@@ -88,6 +88,12 @@ jobs:
           git diff --exit-code
           test -z "$(git status --porcelain --untracked-files=no)"
 
+      - name: Build library type declarations
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm run typecheck:libs
+
       - name: Backend typecheck
         shell: bash
         run: |
