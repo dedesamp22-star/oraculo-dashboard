@@ -1,0 +1,84 @@
+name: Validate UI Login Linux
+
+on:
+  push:
+    branches:
+      - ci/ui-login-linux-validation
+  workflow_dispatch:
+
+jobs:
+  validate-ui-login:
+    name: UI Login Linux Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout UI commit
+        uses: actions/checkout@v4
+        with:
+          ref: 9018fcf906b25e3b4cd4b3baedd830b9cd8f34fa
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: '10'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build library type declarations
+        run: pnpm run typecheck:libs
+
+      - name: Frontend typecheck
+        run: pnpm --filter @workspace/oraculo typecheck
+
+      - name: Frontend build
+        env:
+          PORT: '4173'
+          BASE_PATH: '/'
+        run: pnpm --filter @workspace/oraculo build
+
+      - name: Install Playwright browser
+        run: pnpm dlx playwright@1.49.1 install --with-deps chromium
+
+      - name: Start preview
+        env:
+          PORT: '4173'
+          BASE_PATH: '/'
+        run: |
+          set -euo pipefail
+          pnpm --filter @workspace/oraculo exec vite preview --config vite.config.ts --host 127.0.0.1 --port 4173 > /tmp/oraculo-ui-preview.log 2>&1 &
+          echo "$!" > /tmp/oraculo-ui-preview.pid
+          for attempt in {1..30}; do
+            if curl -fsS http://127.0.0.1:4173/ >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/oraculo-ui-preview.log
+          exit 1
+
+      - name: Capture screenshots
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/ui-login
+          pnpm dlx playwright@1.49.1 screenshot --browser=chromium --viewport-size=1440,900 http://127.0.0.1:4173/ artifacts/ui-login/home-login-desktop-1440x900.png
+          pnpm dlx playwright@1.49.1 screenshot --browser=chromium --viewport-size=390,844 http://127.0.0.1:4173/ artifacts/ui-login/home-login-mobile-390x844.png
+
+      - name: Stop preview
+        if: always()
+        run: |
+          if [ -f /tmp/oraculo-ui-preview.pid ]; then
+            kill "$(cat /tmp/oraculo-ui-preview.pid)" 2>/dev/null || true
+          fi
+
+      - name: Upload screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-login-screenshots
+          path: artifacts/ui-login/*.png
+          if-no-files-found: error
