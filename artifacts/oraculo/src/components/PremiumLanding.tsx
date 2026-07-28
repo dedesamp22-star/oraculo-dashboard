@@ -1,196 +1,143 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Activity,
+  ArrowRight,
   BarChart3,
   Bell,
   BrainCircuit,
-  ChevronRight,
-  CircleDot,
-  Eye,
+  CheckCircle2,
+  Cloud,
+  Database,
+  Infinity,
+  Lock,
   LockKeyhole,
+  Mail,
   ShieldCheck,
-  Sparkles,
+  Target,
   Zap,
 } from 'lucide-react';
 import type { OracleVisualState } from '@shared/oracleVisualState';
 
-const PRODUCT_NAME = 'OR\u00c1CULO TRADE IA';
-const HERO_SUBTITLE = 'A intelig\u00eancia que observa o mercado antes de todos.';
-const SUPPORT_PHRASE = 'O mercado deixa sinais. O Oraculo interpreta.';
 const GUARDIAN_IMAGE_SRC = '/brand/oraculo-guardian.png';
-const INTRO_SESSION_KEY = 'oraculoGuardianIntroSeen';
 
-const pillars = [
-  { title: 'IA Proprietaria', text: 'Leitura tecnica estruturada para decisoes auditaveis.', icon: BrainCircuit, accent: '#00D8FF' },
-  { title: 'BTC Futures', text: 'Arquitetura visual preparada para operacao inteligente.', icon: BarChart3, accent: '#D4AF37' },
-  { title: 'Gestao de Risco', text: 'Prioridade para protecao, disciplina e continuidade.', icon: ShieldCheck, accent: '#00FF88' },
-  { title: 'Alertas Telegram', text: 'Sinais e eventos importantes no canal certo.', icon: Bell, accent: '#00D8FF' },
-  { title: 'Observabilidade', text: 'Diagnostico claro do robo e da saude operacional.', icon: Eye, accent: '#F4F4F5' },
-  { title: 'Execucao Inteligente', text: 'Base pronta para evoluir sem misturar modos ou riscos.', icon: Zap, accent: '#FF4D4D' },
+const steps = [
+  { title: 'Coleta de dados', text: 'Dados em tempo real de multiplas fontes.', icon: Database },
+  { title: 'Analise inteligente', text: 'IA identifica padroes e oportunidades.', icon: BrainCircuit },
+  { title: 'Sinal aprovado', text: 'Probabilidade alta com gerenciamento.', icon: Target },
+  { title: 'Gestao de risco', text: 'Protecao do capital em primeiro lugar.', icon: ShieldCheck },
+  { title: 'Alertas e execucao', text: 'Notificacoes e execucao com disciplina.', icon: Bell },
 ];
 
-const oracleStates: Array<{ key: OracleVisualState; label: string; tone: string; message: string }> = [
-  { key: 'waiting', label: 'Aguardando', tone: '#D4AF37', message: 'O Oraculo observa o mercado.' },
-  { key: 'analyzing', label: 'Analisando', tone: '#00D8FF', message: 'Analisando milhares de possibilidades...' },
-  { key: 'buy', label: 'Compra', tone: '#00FF88', message: 'Oportunidade de compra detectada.' },
-  { key: 'sell', label: 'Venda', tone: '#FF4D4D', message: 'Pressao vendedora dominante.' },
+const benefits = [
+  { title: 'Seguranca total', text: 'Seus dados e operacoes sempre protegidos.', icon: ShieldCheck },
+  { title: 'Sem emocao', text: 'Decisoes racionais, 100% baseadas em dados.', icon: Lock },
+  { title: 'Acesso de qualquer lugar', text: 'Web, Mobile e Telegram em tempo real.', icon: Cloud },
+  { title: 'Tecnologia avancada', text: 'Infraestrutura robusta, rapida e escalavel.', icon: BrainCircuit },
+  { title: 'Foco no que importa', text: 'Menos ruido, mais precisao, mais resultado.', icon: Infinity },
 ];
 
-const introSteps = [
-  'Inicializando nucleo...',
-  'Conectando mercados...',
-  'Sincronizando IA...',
-  'Radar online.',
-  'Oraculo ativo.',
-];
-
-function isOracleVisualState(value: string | null): value is OracleVisualState {
-  return oracleStates.some((item) => item.key === value);
-}
-
-function readPreviewState(): OracleVisualState | null {
-  if (!import.meta.env.DEV || typeof window === 'undefined') return null;
-  const value = new URLSearchParams(window.location.search).get('oracleState');
-  return isOracleVisualState(value) ? value : null;
-}
+const stateMeta: Record<OracleVisualState, { label: string; color: string; message: string }> = {
+  waiting: {
+    label: 'Aguardando',
+    color: '#D4AF37',
+    message: 'O Oraculo observa o mercado.',
+  },
+  analyzing: {
+    label: 'Analisando',
+    color: '#00D8FF',
+    message: 'Analisando milhares de possibilidades...',
+  },
+  buy: {
+    label: 'Compra',
+    color: '#00FF88',
+    message: 'Oportunidade de compra detectada.',
+  },
+  sell: {
+    label: 'Venda',
+    color: '#FF4D4D',
+    message: 'Pressao vendedora dominante.',
+  },
+};
 
 function scrollToId(id: string) {
   document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-function PremiumLogo() {
+function BrandSeal() {
   return (
-    <div className="flex items-center gap-3">
-      <div className="relative grid h-10 w-10 place-items-center overflow-hidden border border-[#00D8FF]/40 bg-[#00D8FF]/10 shadow-[0_0_28px_rgba(0,216,255,0.16)]">
-        <div className="absolute inset-2 border border-[#D4AF37]/35 rotate-45" />
-        <div className="h-2.5 w-2.5 bg-[#00D8FF] shadow-[0_0_18px_rgba(0,216,255,0.7)]" />
-      </div>
-      <div className="leading-none">
-        <p className="text-[11px] font-bold uppercase tracking-[0.32em] text-[#F4F4F5]">Oraculo</p>
-        <p className="mt-1 text-[9px] uppercase tracking-[0.24em] text-[#00D8FF]/75">Trade IA</p>
+    <div className="relative mx-auto grid h-20 w-20 place-items-center rounded-full border border-[#00FF88]/35 bg-[#00FF88]/10 shadow-[0_0_55px_rgba(0,255,136,0.16)]">
+      <div className="absolute inset-2 rounded-full border border-[#00D8FF]/20" />
+      <div className="absolute h-12 w-12 rotate-45 border border-[#00FF88]/55" />
+      <div className="relative h-5 w-10 rounded-full border-2 border-[#00FF88] shadow-[0_0_22px_rgba(0,255,136,0.42)]">
+        <div className="absolute left-1/2 top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#00FF88]" />
       </div>
     </div>
   );
 }
 
-function shouldShowIntro(): boolean {
-  if (typeof window === 'undefined') return false;
-  const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-  if (reducedMotion) return false;
-  try {
-    return window.sessionStorage.getItem(INTRO_SESSION_KEY) !== 'true';
-  } catch {
-    return false;
-  }
-}
-
-function OracleIntro({ onDone }: { onDone: () => void }) {
-  const [stepIndex, setStepIndex] = useState(0);
-
-  useEffect(() => {
-    const stepTimer = window.setInterval(() => {
-      setStepIndex((current) => Math.min(current + 1, introSteps.length - 1));
-    }, 300);
-    const doneTimer = window.setTimeout(onDone, 1850);
-    return () => {
-      window.clearInterval(stepTimer);
-      window.clearTimeout(doneTimer);
-    };
-  }, [onDone]);
-
+function BackgroundSystemPanel() {
   return (
-    <div className="premium-intro" role="status" aria-live="polite">
-      <div className="premium-intro-core">
-        <div className="premium-intro-mark" />
-        <p className="text-[10px] font-bold uppercase tracking-[0.28em] text-[#D4AF37]">Oraculo Trade IA</p>
-        <p className="mt-3 min-h-6 text-sm text-[#F4F4F5]/72">{introSteps[stepIndex]}</p>
-        <div className="mt-5 h-1 overflow-hidden bg-[#232329]">
-          <div className="h-full bg-[#D4AF37] transition-all duration-300" style={{ width: `${((stepIndex + 1) / introSteps.length) * 100}%` }} />
-        </div>
-        <button
-          type="button"
-          onClick={onDone}
-          className="mt-5 min-h-10 border border-[#232329] px-4 text-[10px] font-bold uppercase tracking-[0.16em] text-[#F4F4F5]/58 transition-colors hover:border-[#D4AF37]/70 hover:text-[#D4AF37]"
-        >
-          Pular
-        </button>
+    <>
+      <div className="pointer-events-none absolute left-4 top-24 hidden w-52 rounded-lg border border-[#00D8FF]/10 bg-[#061018]/35 p-4 text-[#00D8FF]/70 shadow-[0_24px_80px_rgba(0,0,0,0.36)] backdrop-blur-sm lg:block">
+        <p className="text-sm text-[#F4F4F5]/62">BTC/USDT</p>
+        <p className="mt-1 text-[10px] uppercase tracking-[0.22em] text-[#00D8FF]/54">Futures</p>
+        <p className="mt-4 text-3xl font-light text-[#00D8FF]/78">113,197.50</p>
+        <p className="mt-2 text-xs text-[#00FF88]">+2,35%</p>
+        <div className="mt-5 h-24 rounded border border-[#00D8FF]/10 bg-[linear-gradient(135deg,transparent_20%,rgba(0,216,255,0.16)),linear-gradient(to_top,rgba(0,255,136,0.20),transparent_55%)]" />
       </div>
-    </div>
+      <div className="pointer-events-none absolute left-5 top-[21rem] hidden w-44 rounded-lg border border-[#00D8FF]/10 bg-[#061018]/38 p-4 text-[10px] uppercase tracking-[0.14em] text-[#00D8FF]/72 backdrop-blur-sm lg:block">
+        <p className="mb-3 text-[#F4F4F5]/68">Oraculo system</p>
+        <p>Status: <span className="text-[#00FF88]">Ativo</span></p>
+        <p className="mt-3">Modo: Estrategico</p>
+        <p className="mt-3">Risco: 1.00%</p>
+        <p className="mt-3">Missao: Consistencia</p>
+        <p className="mt-3">Disciplina: 100%</p>
+      </div>
+    </>
   );
 }
 
-function OracleSoul({ state = 'waiting', framed = false }: { state?: OracleVisualState; framed?: boolean }) {
+function StepFlow() {
   return (
-    <div className={`premium-oracle-soul ${framed ? 'premium-oracle-soul-framed' : ''}`} data-oracle-state={state}>
-      <div className="premium-oracle-aura" />
-      <div className="premium-oracle-scan premium-oracle-scan-a" />
-      <div className="premium-oracle-scan premium-oracle-scan-b" />
-      <div className="premium-oracle-grid" />
-      <div className="premium-oracle-art-wrap">
-        <div className="premium-oracle-eye premium-oracle-eye-left" />
-        <div className="premium-oracle-eye premium-oracle-eye-right" />
-        <img
-          src={GUARDIAN_IMAGE_SRC}
-          alt="Oraculo Trade IA com guardiao, globo de mercado, touro, urso e candles"
-          className="premium-oracle-art"
-          loading="eager"
-          decoding="async"
-          width="1536"
-          height="1241"
-        />
+    <section id="como-funciona" className="relative z-10 mx-auto mt-12 w-full max-w-6xl">
+      <div className="grid gap-3 md:grid-cols-5">
+        {steps.map((step, index) => {
+          const Icon = step.icon;
+          return (
+            <article
+              key={step.title}
+              className="group relative min-h-[150px] rounded-lg border border-[#00FF88]/14 bg-[#091316]/72 p-4 text-center shadow-[0_22px_80px_rgba(0,0,0,0.28)] backdrop-blur-md transition-all hover:-translate-y-1 hover:border-[#00FF88]/45 hover:bg-[#0B1D1B]/78"
+            >
+              {index > 0 && (
+                <span className="absolute -left-3 top-1/2 hidden -translate-y-1/2 text-[#00FF88] md:block">→</span>
+              )}
+              <div className="mx-auto grid h-14 w-14 place-items-center rounded-xl border border-[#00FF88]/28 bg-[#00FF88]/10 text-[#00FF88] shadow-[0_0_30px_rgba(0,255,136,0.14)] transition-transform group-hover:scale-105">
+                <Icon className="h-7 w-7" />
+              </div>
+              <h2 className="mt-5 text-xs font-bold uppercase tracking-[0.12em] text-[#F4F4F5]">
+                {index + 1}. {step.title}
+              </h2>
+              <p className="mt-2 text-xs leading-5 text-[#F4F4F5]/62">{step.text}</p>
+            </article>
+          );
+        })}
       </div>
-      <div className="premium-oracle-core" aria-hidden="true">
-        <div className="premium-oracle-ring premium-oracle-ring-a" />
-        <div className="premium-oracle-ring premium-oracle-ring-b" />
-        <div className="premium-oracle-ring premium-oracle-ring-c" />
-        <div className="premium-oracle-globe">
-          <div className="premium-oracle-equator" />
-          <div className="premium-oracle-meridian" />
-          <div className="premium-oracle-meridian premium-oracle-meridian-b" />
-          <div className="premium-oracle-signal premium-oracle-signal-a" />
-          <div className="premium-oracle-signal premium-oracle-signal-b" />
-          <div className="premium-oracle-signal premium-oracle-signal-c" />
-        </div>
-        <div className="premium-oracle-energy premium-oracle-energy-bull" />
-        <div className="premium-oracle-energy premium-oracle-energy-bear" />
-      </div>
-      <div className="premium-market-line premium-market-line-a" />
-      <div className="premium-market-line premium-market-line-b" />
-      {framed && (
-        <div className="premium-oracle-readout">
-          <div>
-            <p className="text-[9px] font-bold uppercase tracking-[0.22em] text-[#F4F4F5]/45">Estado visual</p>
-            <p className="mt-1 text-sm font-semibold uppercase tracking-[0.16em]" style={{ color: oracleStates.find((item) => item.key === state)?.tone ?? '#D4AF37' }}>
-              {oracleStates.find((item) => item.key === state)?.label ?? 'Aguardando'}
-            </p>
-            <p key={state} className="premium-oracle-message mt-2 text-xs leading-5 text-[#F4F4F5]/64">
-              {oracleStates.find((item) => item.key === state)?.message ?? 'O Oraculo observa o mercado.'}
-            </p>
-          </div>
-          <div className="grid grid-cols-4 gap-1.5">
-            {oracleStates.map((item) => (
-              <span
-                key={item.key}
-                className="h-1.5 border border-white/10"
-                style={{ background: item.key === state ? item.tone : 'rgba(244,244,245,0.12)' }}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
+    </section>
   );
 }
 
-function LoginPanel({ loading, error, onLogin, spotlight }: {
+function LoginPanel({
+  loading,
+  error,
+  onLogin,
+}: {
   loading: boolean;
   error: string | null;
   onLogin: (username: string, password: string) => void;
-  spotlight?: boolean;
 }) {
-  const [username, setUsername] = useState('admin');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const passwordRef = useRef<HTMLInputElement | null>(null);
+  const [remember, setRemember] = useState(false);
+  const [recoveryHint, setRecoveryHint] = useState(false);
 
   return (
     <form
@@ -199,285 +146,208 @@ function LoginPanel({ loading, error, onLogin, spotlight }: {
         event.preventDefault();
         onLogin(username, password);
       }}
-      className={`premium-login-panel mx-auto grid w-full max-w-5xl scroll-mt-28 gap-5 border border-[#232329] bg-[#111114]/70 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.35)] backdrop-blur-xl sm:grid-cols-[1fr_1.1fr] sm:p-6 ${spotlight ? 'premium-login-panel-active' : ''}`}
+      className="min-w-0"
     >
-      <div className="flex min-h-[220px] flex-col justify-between border border-[#232329]/80 bg-[#09090B]/70 p-5">
-        <div>
-          <div className="inline-flex items-center gap-2 border border-[#00D8FF]/25 bg-[#00D8FF]/10 px-3 py-2 text-[10px] font-bold uppercase tracking-[0.22em] text-[#00D8FF]">
-            <LockKeyhole className="h-3.5 w-3.5" />
-            Acesso seguro
-          </div>
-          <h2 className="mt-5 max-w-sm text-2xl font-semibold tracking-normal text-[#F4F4F5] sm:text-3xl">
-            Entre no centro de comando do Oraculo.
-          </h2>
-        </div>
-        <p className="mt-5 max-w-md text-sm leading-6 text-[#F4F4F5]/60">
-          Sessao protegida, dados privados no servidor e experiencia preparada para desktop, celular e PWA.
-        </p>
-      </div>
+      <p className="text-lg font-semibold uppercase tracking-[0.08em] text-[#00FF88]">Acesso a plataforma</p>
+      <p className="mt-2 text-sm text-[#F4F4F5]/72">Entre com sua conta para continuar</p>
 
-      <div className="grid gap-4">
-        <label className="grid gap-2">
-          <span className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#F4F4F5]/55">Usuario</span>
+      <label className="mt-6 grid gap-2">
+        <span className="text-sm text-[#F4F4F5]/85">E-mail</span>
+        <span className="flex min-h-12 items-center gap-3 rounded-md border border-[#F4F4F5]/12 bg-[#0B1215]/82 px-4 transition-colors focus-within:border-[#00FF88]/65">
+          <Mail className="h-4 w-4 text-[#F4F4F5]/70" />
           <input
             value={username}
             onChange={(event) => setUsername(event.target.value)}
             autoComplete="username"
-            className="min-h-12 border border-[#232329] bg-[#09090B] px-4 text-sm text-[#F4F4F5] outline-none transition-colors placeholder:text-[#F4F4F5]/25 focus:border-[#00D8FF]"
+            inputMode="email"
+            className="min-w-0 flex-1 bg-transparent text-sm text-[#F4F4F5] outline-none placeholder:text-[#F4F4F5]/38"
+            placeholder="seu@email.com"
           />
-        </label>
-        <label className="grid gap-2">
-          <span className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#F4F4F5]/55">Senha</span>
+        </span>
+      </label>
+
+      <label className="mt-4 grid gap-2">
+        <span className="text-sm text-[#F4F4F5]/85">Senha</span>
+        <span className="flex min-h-12 items-center gap-3 rounded-md border border-[#F4F4F5]/12 bg-[#0B1215]/82 px-4 transition-colors focus-within:border-[#00FF88]/65">
+          <LockKeyhole className="h-4 w-4 text-[#F4F4F5]/70" />
           <input
-            ref={passwordRef}
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             type="password"
             autoComplete="current-password"
-            className="min-h-12 border border-[#232329] bg-[#09090B] px-4 text-sm text-[#F4F4F5] outline-none transition-colors placeholder:text-[#F4F4F5]/25 focus:border-[#00D8FF]"
+            className="min-w-0 flex-1 bg-transparent text-sm text-[#F4F4F5] outline-none placeholder:text-[#F4F4F5]/38"
+            placeholder="••••••••••••"
           />
+        </span>
+      </label>
+
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+        <label className="inline-flex min-h-9 items-center gap-2 text-sm text-[#F4F4F5]/74">
+          <input
+            type="checkbox"
+            checked={remember}
+            onChange={(event) => setRemember(event.target.checked)}
+            className="h-4 w-4 rounded border-[#F4F4F5]/20 bg-transparent accent-[#00FF88]"
+          />
+          Lembrar-me
         </label>
-        {error && <p className="text-xs text-[#FF4D4D]">{error}</p>}
-        <button
-          type="submit"
-          disabled={loading || password.length === 0 || username.trim().length === 0}
-          className="group min-h-12 border border-[#00D8FF]/70 bg-[#00D8FF] px-5 text-sm font-bold uppercase tracking-[0.16em] text-[#09090B] shadow-[0_0_24px_rgba(0,216,255,0.18)] transition-all hover:shadow-[0_0_34px_rgba(0,216,255,0.34)] disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {loading ? 'Entrando...' : 'Entrar no Oraculo'}
-        </button>
         <button
           type="button"
-          onClick={() => passwordRef.current?.focus()}
-          className="min-h-11 border border-[#232329] px-4 text-[10px] font-bold uppercase tracking-[0.16em] text-[#F4F4F5]/60 transition-colors hover:border-[#D4AF37]/70 hover:text-[#D4AF37]"
+          onClick={() => setRecoveryHint(true)}
+          className="min-h-9 text-sm font-medium text-[#00D8FF] transition-colors hover:text-[#00FF88]"
         >
-          Continuar com credenciais existentes
+          Esqueci minha senha
         </button>
       </div>
+
+      {recoveryHint && (
+        <p className="mt-2 text-xs leading-5 text-[#F4F4F5]/52">
+          Recuperacao de acesso deve ser solicitada ao administrador do Oraculo.
+        </p>
+      )}
+      {error && <p className="mt-3 text-sm leading-5 text-[#FF4D4D]">{error}</p>}
+
+      <button
+        type="submit"
+        disabled={loading || password.length === 0 || username.trim().length === 0}
+        className="mt-5 inline-flex min-h-12 w-full items-center justify-center gap-3 rounded-md border border-[#00FF88]/45 bg-gradient-to-r from-[#00FF88]/70 to-[#00D8FF]/48 px-5 text-sm font-bold uppercase tracking-[0.12em] text-[#F4F4F5] shadow-[0_0_34px_rgba(0,255,136,0.18)] transition-all hover:-translate-y-0.5 hover:shadow-[0_0_48px_rgba(0,255,136,0.26)] disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        {loading ? 'Entrando...' : 'Entrar'}
+        <ArrowRight className="h-5 w-5" />
+      </button>
     </form>
   );
 }
 
-function OracleStatePreview({ state, onChange }: {
-  state: OracleVisualState;
-  onChange: (state: OracleVisualState) => void;
-}) {
-  if (!import.meta.env.DEV) return null;
-
+function DemoCard({ onLoginFocus }: { onLoginFocus: () => void }) {
   return (
-    <div className="fixed bottom-3 left-3 right-3 z-[60] mx-auto max-w-xl border border-[#232329] bg-[#09090B]/88 p-2 shadow-[0_18px_70px_rgba(0,0,0,0.38)] backdrop-blur-xl sm:bottom-5 sm:left-auto sm:right-5 sm:mx-0">
-      <p className="mb-2 px-1 text-[9px] font-bold uppercase tracking-[0.18em] text-[#F4F4F5]/45">Preview local do Oraculo Core</p>
-      <div className="grid grid-cols-4 gap-1.5">
-        {oracleStates.map((item) => (
-          <button
-            key={item.key}
-            type="button"
-            onClick={() => onChange(item.key)}
-            className="min-h-9 border px-2 text-[9px] font-bold uppercase tracking-[0.12em] transition-all"
-            style={{
-              borderColor: state === item.key ? item.tone : '#232329',
-              color: state === item.key ? item.tone : 'rgba(244,244,245,0.56)',
-              background: state === item.key ? `${item.tone}18` : 'rgba(17,17,20,0.7)',
-              boxShadow: state === item.key ? `0 0 22px ${item.tone}22` : 'none',
-            }}
-          >
-            {item.label}
-          </button>
-        ))}
+    <aside className="min-w-0 border-l border-[#F4F4F5]/10 pt-8 md:pl-8 md:pt-0">
+      <p className="text-center text-sm font-semibold uppercase tracking-[0.12em] text-[#F4F4F5]/48">Demonstracao</p>
+      <p className="mt-2 text-center text-sm text-[#F4F4F5]/72">Conheca o poder do Oraculo</p>
+      <div className="mt-8 rounded-lg border border-[#F4F4F5]/12 bg-[#0B1215]/76 p-6 shadow-[0_22px_80px_rgba(0,0,0,0.28)]">
+        <div className="flex gap-5">
+          <div className="grid h-16 w-16 flex-shrink-0 place-items-center rounded-xl border border-[#00FF88]/25 bg-[#00FF88]/10 text-[#00FF88]">
+            <BarChart3 className="h-9 w-9" />
+          </div>
+          <div className="min-w-0">
+            <h3 className="font-semibold text-[#F4F4F5]">Ambiente de Demonstracao</h3>
+            <p className="mt-2 text-sm leading-6 text-[#F4F4F5]/70">
+              Explore a plataforma com dados simulados e estrategias.
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onLoginFocus}
+          className="mt-7 inline-flex min-h-12 w-full items-center justify-center rounded-md border border-[#00FF88]/55 px-5 text-sm font-bold uppercase tracking-[0.12em] text-[#00FF88] transition-all hover:-translate-y-0.5 hover:bg-[#00FF88]/10 hover:shadow-[0_0_28px_rgba(0,255,136,0.16)]"
+        >
+          Entrar no DEMO
+        </button>
       </div>
-    </div>
+    </aside>
   );
 }
 
-export function PremiumLanding({ loading, error, onLogin, state }: {
+function BenefitsFooter() {
+  return (
+    <footer className="relative z-10 mx-auto mt-10 w-full max-w-6xl pb-9">
+      <div className="grid gap-3 rounded-xl border border-[#F4F4F5]/10 bg-[#091316]/70 p-3 shadow-[0_28px_90px_rgba(0,0,0,0.28)] backdrop-blur-md md:grid-cols-3 lg:grid-cols-5">
+        {benefits.map((benefit) => {
+          const Icon = benefit.icon;
+          return (
+            <div key={benefit.title} className="flex items-center gap-3 rounded-lg p-3">
+              <div className="grid h-12 w-12 flex-shrink-0 place-items-center rounded-full border border-[#00FF88]/20 bg-[#00FF88]/8 text-[#00FF88]">
+                <Icon className="h-6 w-6" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-bold uppercase tracking-[0.08em] text-[#00FF88]">{benefit.title}</p>
+                <p className="mt-1 text-xs leading-5 text-[#F4F4F5]/62">{benefit.text}</p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <p className="mt-7 text-center text-sm text-[#F4F4F5]/44">
+        © 2026 Oraculo. Todos os direitos reservados. <span className="mx-4 text-[#00FF88]">•</span> v0.5.0
+      </p>
+    </footer>
+  );
+}
+
+export function PremiumLanding({
+  loading,
+  error,
+  onLogin,
+  state = 'waiting',
+}: {
   loading: boolean;
   error: string | null;
   onLogin: (username: string, password: string) => void;
   state?: OracleVisualState;
 }) {
-  const [oraclePreviewState, setOraclePreviewState] = useState<OracleVisualState | null>(() => readPreviewState());
-  const [introVisible, setIntroVisible] = useState(() => shouldShowIntro());
-  const [loginSpotlight, setLoginSpotlight] = useState(false);
-  const loginSpotlightTimerRef = useRef<number | null>(null);
-  const visualState = oraclePreviewState ?? state ?? 'waiting';
-
-  useEffect(() => () => {
-    if (loginSpotlightTimerRef.current !== null) window.clearTimeout(loginSpotlightTimerRef.current);
-  }, []);
+  const loginRef = useRef<HTMLDivElement | null>(null);
+  const meta = stateMeta[state] ?? stateMeta.waiting;
 
   useEffect(() => {
     const previousTitle = document.title;
-    document.title = `${PRODUCT_NAME} 0.6`;
+    document.title = 'ORACULO - Plataforma de Trading Inteligente';
     return () => {
       document.title = previousTitle;
     };
   }, []);
 
-  const finishIntro = () => {
-    try {
-      window.sessionStorage.setItem(INTRO_SESSION_KEY, 'true');
-    } catch {
-      // Visual-only session flag; blocked storage should not affect login.
-    }
-    setIntroVisible(false);
-  };
-
-  const handlePreviewStateChange = (nextState: OracleVisualState) => {
-    setOraclePreviewState(nextState);
-    if (import.meta.env.DEV) {
-      const url = new URL(window.location.href);
-      url.searchParams.set('oracleState', nextState);
-      window.history.replaceState(null, '', url);
-    }
-  };
-
-  const handleLoginFocus = () => {
-    setLoginSpotlight(true);
-    if (loginSpotlightTimerRef.current !== null) window.clearTimeout(loginSpotlightTimerRef.current);
-    loginSpotlightTimerRef.current = window.setTimeout(() => setLoginSpotlight(false), 1400);
-    scrollToId('login');
+  const focusLogin = () => {
+    loginRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   };
 
   return (
-    <div className={`premium-shell min-h-screen overflow-x-hidden bg-[#09090B] text-[#F4F4F5] ${loginSpotlight ? 'premium-shell-login-focus' : ''}`}>
-      {introVisible && <OracleIntro onDone={finishIntro} />}
-      <OracleStatePreview state={visualState} onChange={handlePreviewStateChange} />
-      <header className="fixed left-0 right-0 top-0 z-50 border-b border-[#232329]/70 bg-[#09090B]/72 backdrop-blur-xl">
-        <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
-          <PremiumLogo />
-          <nav className="hidden items-center gap-7 text-[10px] font-bold uppercase tracking-[0.2em] text-[#F4F4F5]/58 lg:flex">
-            <button type="button" onClick={() => scrollToId('dashboard')} className="transition-colors hover:text-[#00D8FF]">Dashboard</button>
-            <button type="button" onClick={() => scrollToId('radar')} className="transition-colors hover:text-[#00D8FF]">Radar</button>
-            <button type="button" onClick={() => scrollToId('telegram')} className="transition-colors hover:text-[#00D8FF]">Telegram</button>
-            <button type="button" onClick={() => scrollToId('historico')} className="transition-colors hover:text-[#00D8FF]">Historico</button>
-          </nav>
-          <button
-            type="button"
-            onClick={handleLoginFocus}
-            className="min-h-10 border border-[#00D8FF]/45 px-4 text-[10px] font-bold uppercase tracking-[0.18em] text-[#00D8FF] transition-all hover:bg-[#00D8FF]/10 hover:shadow-[0_0_22px_rgba(0,216,255,0.18)]"
-          >
-            Entrar
-          </button>
-        </div>
-      </header>
+    <div className="min-h-screen overflow-x-hidden bg-[#020709] text-[#F4F4F5]">
+      <main className="relative min-h-screen px-4 py-8 sm:px-6 lg:px-8">
+        <img
+          src={GUARDIAN_IMAGE_SRC}
+          alt=""
+          aria-hidden="true"
+          className="pointer-events-none fixed left-1/2 top-0 h-[108vh] min-h-[760px] w-[120vw] max-w-none -translate-x-1/2 object-cover object-top opacity-[0.24] saturate-[0.9] [clip-path:inset(0_0_15%_0)]"
+          loading="eager"
+          decoding="async"
+        />
+        <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_50%_38%,rgba(0,255,136,0.16),transparent_22%),radial-gradient(circle_at_50%_12%,rgba(0,216,255,0.13),transparent_24%),linear-gradient(180deg,rgba(2,7,9,0.58),rgba(2,7,9,0.88)_56%,#020709_100%)]" />
+        <div className="pointer-events-none fixed inset-0 bg-[linear-gradient(90deg,rgba(2,7,9,0.90),rgba(2,7,9,0.40)_42%,rgba(2,7,9,0.92))]" />
+        <div className="pointer-events-none fixed inset-0 bg-[linear-gradient(rgba(0,255,136,0.035)_1px,transparent_1px),linear-gradient(90deg,rgba(0,216,255,0.026)_1px,transparent_1px)] bg-[size:84px_84px] opacity-45" />
+        <BackgroundSystemPanel />
 
-      <main>
-        <section className="relative flex min-h-screen items-center overflow-hidden px-4 pb-16 pt-24 sm:px-6 lg:px-8">
-          <div className="premium-particles" aria-hidden="true" />
-          <div className="premium-grid-bg" aria-hidden="true" />
-          <div className="premium-nebula" aria-hidden="true" />
-          <div className="premium-tech-lines" aria-hidden="true" />
-          <div className="premium-candle-field" aria-hidden="true" />
-
-          <div className="relative z-10 mx-auto grid w-full max-w-7xl gap-10 lg:grid-cols-[minmax(0,0.92fr)_minmax(420px,0.78fr)] lg:items-center">
-            <div className="max-w-4xl lg:pt-8">
-              <div className="inline-flex items-center gap-2 border border-[#D4AF37]/30 bg-[#D4AF37]/10 px-3 py-2 text-[10px] font-bold uppercase tracking-[0.24em] text-[#D4AF37]">
-                <Sparkles className="h-3.5 w-3.5" />
-                Seu Analista de Mercado 24h
-              </div>
-              <h1 className="mt-7 max-w-4xl text-5xl font-semibold leading-[0.92] tracking-normal text-[#F4F4F5] sm:text-7xl lg:text-8xl">
-                {PRODUCT_NAME}
-              </h1>
-              <p className="mt-7 max-w-2xl text-lg leading-8 text-[#F4F4F5]/72 sm:text-xl">
-                "{HERO_SUBTITLE}"
-              </p>
-              <p className="mt-4 max-w-xl text-sm leading-7 text-[#F4F4F5]/48">
-                {SUPPORT_PHRASE}
-              </p>
-              <div className="mt-9 flex flex-col gap-3 sm:flex-row">
-                <button
-                  type="button"
-                  onClick={handleLoginFocus}
-                  className="group inline-flex min-h-12 items-center justify-center gap-2 border border-[#00D8FF] bg-[#00D8FF] px-6 text-sm font-bold uppercase tracking-[0.16em] text-[#09090B] shadow-[0_0_30px_rgba(0,216,255,0.2)] transition-all hover:translate-y-[-1px] hover:shadow-[0_0_42px_rgba(0,216,255,0.36)]"
-                >
-                  Entrar no Oraculo
-                  <ChevronRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => scrollToId('pilares')}
-                  className="inline-flex min-h-12 items-center justify-center border border-[#232329] bg-[#111114]/70 px-6 text-sm font-bold uppercase tracking-[0.16em] text-[#F4F4F5] transition-all hover:border-[#D4AF37]/70 hover:text-[#D4AF37]"
-                >
-                  Conhecer o Projeto
-                </button>
-              </div>
-              <div className="mt-10 grid max-w-2xl grid-cols-3 border border-[#232329] bg-[#111114]/50 backdrop-blur">
-                {[
-                  ['24h', 'Analista AI'],
-                  ['3', 'Ativos demo'],
-                  ['0', 'Ordens reais'],
-                ].map(([value, label]) => (
-                  <div key={label} className="border-r border-[#232329] p-4 last:border-r-0">
-                    <p className="text-2xl font-semibold text-[#F4F4F5]">{value}</p>
-                    <p className="mt-1 text-[10px] uppercase tracking-[0.16em] text-[#F4F4F5]/45">{label}</p>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-5 flex max-w-2xl flex-wrap gap-2">
-                {oracleStates.map((item) => (
-                  <span
-                    key={item.key}
-                    className="inline-flex min-h-8 items-center gap-2 border border-[#232329] bg-[#111114]/55 px-3 text-[9px] font-bold uppercase tracking-[0.16em] text-[#F4F4F5]/56"
-                  >
-                    <CircleDot className="h-3 w-3" style={{ color: item.tone }} />
-                    {item.label}
-                  </span>
-                ))}
-              </div>
-            </div>
-
-            <div className="premium-oracle-panel relative min-h-[420px] sm:min-h-[520px]">
-              <div className="absolute left-5 right-5 top-5 z-10 flex items-center justify-between text-[10px] uppercase tracking-[0.22em] text-[#F4F4F5]/45 sm:left-8 sm:right-8 sm:top-8">
-                <span>Nucleo do Oraculo</span>
-                <span className="text-[#D4AF37]">Ativo</span>
-              </div>
-              <div className="absolute inset-0">
-                <OracleSoul state={visualState} framed />
-              </div>
-            </div>
+        <section className="relative z-10 mx-auto flex min-h-[56vh] w-full max-w-6xl flex-col items-center justify-end pt-14 text-center sm:pt-20 lg:min-h-[52vh]">
+          <BrandSeal />
+          <h1 className="mt-6 text-5xl font-semibold uppercase leading-none tracking-[0.18em] text-[#F4F4F5] drop-shadow-[0_0_28px_rgba(244,244,245,0.14)] sm:text-7xl lg:text-8xl">
+            Oraculo
+          </h1>
+          <p className="mt-4 text-sm font-semibold uppercase tracking-[0.22em] text-[#00FF88] sm:text-base">
+            Plataforma de Trading Inteligente
+          </p>
+          <p className="mt-6 max-w-2xl text-base leading-7 text-[#F4F4F5]/78 sm:text-lg">
+            Inteligencia que antecede. Disciplina que executa. Resultados que se repetem.
+          </p>
+          <div className="mt-5 flex w-full max-w-xl items-center gap-2 text-[#00FF88]/80">
+            <span className="h-px flex-1 bg-gradient-to-r from-transparent to-[#00FF88]/45" />
+            <span className="h-2 w-2 rotate-45 border border-[#00FF88]" />
+            <span className="h-px flex-1 bg-gradient-to-l from-transparent to-[#00FF88]/45" />
           </div>
+          <p className="mt-4 text-xs uppercase tracking-[0.18em]" style={{ color: meta.color }}>
+            {meta.message}
+          </p>
         </section>
 
-        <section id="pilares" className="relative z-10 border-y border-[#232329] bg-[#09090B] px-4 py-16 sm:px-6 lg:px-8">
-          <div className="mx-auto w-full max-w-7xl">
-            <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
-              <div>
-                <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-[#00D8FF]">Arquitetura visual premium</p>
-                <h2 className="mt-3 max-w-2xl text-3xl font-semibold tracking-normal text-[#F4F4F5] sm:text-5xl">
-                  Inteligencia, precisao e controle em uma unica experiencia.
-                </h2>
-              </div>
-              <p className="max-w-md text-sm leading-6 text-[#F4F4F5]/58">
-                Esta etapa prepara a identidade oficial para receber arte do Oraculo, globo, touro, urso e grafico animado sem retrabalho futuro.
-              </p>
-            </div>
+        <StepFlow />
 
-            <div className="mt-10 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {pillars.map((pillar) => {
-                const Icon = pillar.icon;
-                return (
-                  <article
-                    key={pillar.title}
-                    id={pillar.title === 'Alertas Telegram' ? 'telegram' : pillar.title === 'Observabilidade' ? 'dashboard' : pillar.title === 'IA Proprietaria' ? 'radar' : pillar.title === 'Execucao Inteligente' ? 'historico' : undefined}
-                    className="group min-h-[170px] border border-[#232329] bg-[#111114] p-5 transition-all duration-300 hover:-translate-y-1 hover:border-[#00D8FF]/40 hover:bg-[#151519] hover:shadow-[0_22px_80px_rgba(0,216,255,0.07)]"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="grid h-11 w-11 place-items-center border border-[#232329] bg-[#09090B]" style={{ color: pillar.accent }}>
-                        <Icon className="h-5 w-5" />
-                      </div>
-                      <Activity className="h-4 w-4 text-[#F4F4F5]/20 transition-colors group-hover:text-[#00D8FF]/70" />
-                    </div>
-                    <h3 className="mt-6 text-lg font-semibold tracking-normal text-[#F4F4F5]">{pillar.title}</h3>
-                    <p className="mt-3 text-sm leading-6 text-[#F4F4F5]/55">{pillar.text}</p>
-                  </article>
-                );
-              })}
-            </div>
-          </div>
+        <section
+          ref={loginRef}
+          className="relative z-10 mx-auto mt-8 grid w-full max-w-6xl scroll-mt-10 gap-8 rounded-xl border border-[#F4F4F5]/12 bg-[#061014]/82 p-6 shadow-[0_30px_120px_rgba(0,0,0,0.50)] backdrop-blur-xl md:grid-cols-[1.08fr_0.92fr] md:p-8"
+        >
+          <LoginPanel loading={loading} error={error} onLogin={onLogin} />
+          <DemoCard onLoginFocus={focusLogin} />
         </section>
 
-        <section className="relative z-10 px-4 py-16 sm:px-6 lg:px-8">
-          <LoginPanel loading={loading} error={error} onLogin={onLogin} spotlight={loginSpotlight} />
-        </section>
+        <BenefitsFooter />
       </main>
     </div>
   );
