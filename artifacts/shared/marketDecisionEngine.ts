@@ -78,6 +78,9 @@ export interface MarketRegimeAnalysis {
     move5AtrMultiple: number | null;
     ema9DistancePct: number | null;
     ema21DistancePct: number | null;
+    ema200Far: boolean;
+    ema200CombinedExtension: boolean;
+    ema200CombinedEvidence: string[];
     sameDirectionCandles: number;
     extreme: boolean;
   };
@@ -257,6 +260,8 @@ export const DEMO_ADAPTIVE_CONFIG = {
   chaoticWickBodyRatio: 1.8,
   chaoticTrendEfficiency: 0.35,
   cleanTrendEfficiency: 0.48,
+  ema200FarDistancePct: 0.12,
+  ema200FarAtrMultiple: 8,
   reorganizationMaxSameDirectionCandles: 2,
   reorganizationMaxVolumeRelative: 1.5,
   reorganizationMinVolumeRelative: 0.8,
@@ -613,11 +618,24 @@ export function classifyMarketRegime(input: {
   const symbolCfg = DEMO_EXHAUSTION_CONFIG.bySymbol[input.symbol];
   const extreme = (move5Pct ?? 0) > DEMO_EXHAUSTION_CONFIG.extremeStretchedMovePct
     || (move5AtrMultiple ?? 0) > DEMO_EXHAUSTION_CONFIG.extremeStretchedAtrMultiple;
+  const ema200Far = Math.abs(ema200DistancePctSigned ?? 0) >= DEMO_ADAPTIVE_CONFIG.ema200FarDistancePct
+    || Math.abs(ema200DistanceAtr ?? 0) >= DEMO_ADAPTIVE_CONFIG.ema200FarAtrMultiple;
+  const ema200CombinedEvidence = [
+    ["extensao recente em ATR", (move5AtrMultiple ?? 0) > DEMO_EXHAUSTION_CONFIG.stretchedAtrMultiple],
+    ["distancia da EMA9", (ema9DistancePct ?? 0) > symbolCfg.maxEma9DistancePct],
+    ["distancia da EMA21", (ema21DistancePct ?? 0) > symbolCfg.maxEma21DistancePct],
+    ["sequencia de candles", sameDirectionCandles > DEMO_EXHAUSTION_CONFIG.maxSameDirectionCandles],
+    ["candle climatico ou movimento extremo", extreme],
+    ["exaustao ou perda de eficiencia", (efficiency ?? 1) <= DEMO_ADAPTIVE_CONFIG.chaoticTrendEfficiency],
+    ["volume de exaustao", (input.volume?.relative ?? 0) >= DEMO_EXHAUSTION_CONFIG.volumeExhaustionRelative],
+  ].filter(([, present]) => present).map(([name]) => name as string);
+  const ema200CombinedExtension = ema200Far && ema200CombinedEvidence.length > 0;
   const stretched = extreme
     || ((move5Pct ?? 0) > DEMO_EXHAUSTION_CONFIG.maxStretchedMovePct && (move5AtrMultiple ?? 0) > DEMO_EXHAUSTION_CONFIG.stretchedAtrMultiple)
     || (ema9DistancePct ?? 0) > symbolCfg.maxEma9DistancePct
     || (ema21DistancePct ?? 0) > symbolCfg.maxEma21DistancePct
-    || sameDirectionCandles > DEMO_EXHAUSTION_CONFIG.maxSameDirectionCandles;
+    || sameDirectionCandles > DEMO_EXHAUSTION_CONFIG.maxSameDirectionCandles
+    || ema200CombinedExtension;
   const chaotic = alternationRate >= DEMO_ADAPTIVE_CONFIG.chaoticAlternationRate
     && (wickBodyRatio ?? 0) >= DEMO_ADAPTIVE_CONFIG.chaoticWickBodyRatio
     && (efficiency ?? 1) <= DEMO_ADAPTIVE_CONFIG.chaoticTrendEfficiency;
@@ -641,7 +659,7 @@ export function classifyMarketRegime(input: {
   } else if (chaotic) {
     regime = "CHAOTIC";
     reasons.push("Alternancia alta, pavios relevantes e baixa eficiencia direcional.");
-  } else if (momentum && !extreme) {
+  } else if (momentum && !extreme && !ema200CombinedExtension) {
     regime = "MOMENTUM";
     reasons.push("Tendencias alinhadas com participacao de volume e impulso direcional.");
   } else if (stretched) {
@@ -658,6 +676,7 @@ export function classifyMarketRegime(input: {
   }
   if (extreme) warnings.push("Extensao extrema detectada.");
   if (ema200DistancePctSigned !== null) reasons.push(`Distancia assinada da EMA200: ${(ema200DistancePctSigned * 100).toFixed(2)}%.`);
+  if (ema200CombinedExtension) reasons.push(`EMA200 distante combinada com: ${ema200CombinedEvidence.join(", ")}.`);
 
   const confidenceBase = input.insufficient ? 15
     : chaotic ? 72
@@ -687,7 +706,7 @@ export function classifyMarketRegime(input: {
     volumeRelative: input.volume?.relative ?? null,
     volumeDelta: input.volume?.delta5 ?? null,
     trendEfficiency: efficiency,
-    stretchedEvidence: { move5Pct, move5AtrMultiple, ema9DistancePct, ema21DistancePct, sameDirectionCandles, extreme },
+    stretchedEvidence: { move5Pct, move5AtrMultiple, ema9DistancePct, ema21DistancePct, ema200Far, ema200CombinedExtension, ema200CombinedEvidence, sameDirectionCandles, extreme },
     chaoticEvidence: { candleAlternationRate: alternationRate, averageWickBodyRatio: wickBodyRatio, trendEfficiency: efficiency, high: chaotic },
   };
 }
@@ -1077,39 +1096,7 @@ export function analyzeMarketDecision(input: {
         ? "Momentum confirmado por dois fechamentos 5m alem da estrutura."
         : "Momentum confirmado por vela forte com volume em expansao.";
       trigger.missing = null;
-    } else if (
-      trigger.kind === "breakout" &&
-      volume.relative >= 1.2
-    ) {
-      const candidateEntryFallback = trigger.aggressive;
-      if (candidateEntryFallback !== null) {
-        const candidatePlanFallback = rrPlan(trigger.direction, candidateEntryFallback, levels.support, levels.resistance, levels.breakoutResistance, levels.breakdownSupport);
-      const candidateRrStatusFallback: "pending" | "valid" | "invalid" = candidatePlanFallback.rr === null ? "pending" : riskRewardMeetsMinimum(candidatePlanFallback.rr) ? "valid" : "invalid";
-      
-      if (candidatePlanFallback.valid && candidateRrStatusFallback === "valid") {
-        const candidateSide: TradeSide | null = trigger.direction === "COMPRA" ? "BUY" : trigger.direction === "VENDA" ? "SELL" : null;
-        if (candidateSide !== null && trend15mDetails !== null) {
-          const candidateFilters = qualityFilters(input.symbol, candidateSide, candidateEntryFallback, candles5m, trend15mDetails, volume, {
-            kind: "breakout",
-            level: trigger.level,
-            retestValid: false,
-          });
-          const hasSevereExhaustion = candidateFilters
-            .filter((f) => f.name !== "Reteste conservador")
-            .some((f) => !f.passed && f.severity === "block");
-            
-          if (!hasSevereExhaustion) {
-            isStrongBreakout = true;
-            trigger.conservative = trigger.aggressive;
-            trigger.retestValid = true;
-            trigger.stage = "confirmed";
-            trigger.confirmation = "Rompimento de alto volume confirmado no 5m.";
-            trigger.missing = null;
-          }
-        }
-      }
     }
-  }
   }
 
   const entry = trigger.conservative;
