@@ -66,8 +66,52 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts/ui-login
-          pnpm dlx playwright@1.49.1 screenshot --browser=chromium --viewport-size=1440,900 http://127.0.0.1:4173/ artifacts/ui-login/home-login-desktop-1440x900.png
-          pnpm dlx playwright@1.49.1 screenshot --browser=chromium --viewport-size=390,844 http://127.0.0.1:4173/ artifacts/ui-login/home-login-mobile-390x844.png
+          cat > /tmp/capture-ui-login.mjs <<'EOF'
+          import { chromium } from 'playwright';
+          import { readFileSync } from 'node:fs';
+
+          const url = 'http://127.0.0.1:4173/';
+          const consoleEvents = [];
+
+          async function capturePage(page, viewport, path) {
+            await page.setViewportSize(viewport);
+            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+            try {
+              await page.waitForSelector('#login', { state: 'visible', timeout: 20000 });
+            } catch (error) {
+              console.error('LOGIN_ELEMENT_NOT_FOUND');
+              console.error(error);
+              console.error('BROWSER_EVENTS');
+              for (const event of consoleEvents) console.error(event);
+              console.error('PREVIEW_LOG');
+              try {
+                console.error(readFileSync('/tmp/oraculo-ui-preview.log', 'utf8'));
+              } catch (logError) {
+                console.error(logError);
+              }
+              throw error;
+            }
+            await page.waitForTimeout(2000);
+            await page.screenshot({ path, fullPage: true });
+          }
+
+          const browser = await chromium.launch();
+          const page = await browser.newPage();
+          page.on('console', (message) => {
+            consoleEvents.push(`[console:${message.type()}] ${message.text()}`);
+          });
+          page.on('pageerror', (error) => {
+            consoleEvents.push(`[pageerror] ${error.message}`);
+          });
+
+          try {
+            await capturePage(page, { width: 1440, height: 900 }, 'artifacts/ui-login/home-login-desktop-1440x900.png');
+            await capturePage(page, { width: 390, height: 844 }, 'artifacts/ui-login/home-login-mobile-390x844.png');
+          } finally {
+            await browser.close();
+          }
+          EOF
+          pnpm dlx --package playwright@1.49.1 node /tmp/capture-ui-login.mjs
 
       - name: Stop preview
         if: always()
