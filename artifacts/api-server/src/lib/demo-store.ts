@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, chmodSync, statSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { resolveOracleVisualState, type OracleVisualState } from "@shared/oracleVisualState";
+import type { ClaimedPushDelivery, PushVapidConfig } from "./push-delivery-processor";
+import { formatPushPayload, shouldQueuePushDelivery } from "./push-notifications";
 import { formatTelegramNotification, shouldQueueTelegramDelivery, telegramRuntimeStatus } from "./telegram-notifications";
 
 export type TradeDirection = "BUY" | "SELL";
@@ -1170,6 +1172,10 @@ function telegramOperationalNotificationsEnabled(): boolean {
   return process.env["ORACULO_TELEGRAM_OPERATIONAL_NOTIFICATIONS"] === "true";
 }
 
+function pushOperationalNotificationsEnabled(): boolean {
+  return process.env["ORACULO_PUSH_OPERATIONAL_NOTIFICATIONS"] === "true";
+}
+
 function telegramApiUrl(pathname: string): string {
   const token = process.env["ORACULO_TELEGRAM_BOT_TOKEN"];
   if (!token) throw new HttpError(503, "Telegram is not configured");
@@ -1647,6 +1653,9 @@ export class DemoStore {
         };
         addColumn("notification_deliveries", "attempt_count", "attempt_count INTEGER NOT NULL DEFAULT 0");
         addColumn("notification_deliveries", "next_attempt_at", "next_attempt_at TEXT");
+        addColumn("notification_deliveries", "payload_json", "payload_json TEXT");
+        addColumn("notification_deliveries", "delivered_at", "delivered_at TEXT");
+        addColumn("notification_deliveries", "locked_at", "locked_at TEXT");
         this.db.exec(`
           CREATE TABLE IF NOT EXISTS telegram_connections (
             id TEXT PRIMARY KEY,
@@ -1679,6 +1688,16 @@ export class DemoStore {
         `);
         this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (8, 'telegram_notifications', ?)").run(nowIso());
       });
+    }
+    for (const definition of [
+      "payload_json TEXT",
+      "delivered_at TEXT",
+      "locked_at TEXT",
+    ]) {
+      const columnName = definition.split(" ")[0];
+      if (!(this.db.prepare("PRAGMA table_info(notification_deliveries)").all() as Array<{ name: string }>).some((row) => row.name === columnName)) {
+        this.db.exec(`ALTER TABLE notification_deliveries ADD COLUMN ${definition}`);
+      }
     }
     const v9 = this.db.prepare("SELECT version FROM schema_migrations WHERE version = 9").get();
     if (!v9) {
@@ -3388,13 +3407,26 @@ export class DemoStore {
   private queuePushDeliveries(userId: string, notificationId: string): void {
     const prefs = this.getNotificationPreferences(userId);
     if (!prefs.push) return;
+    const notificationRow = this.db.prepare("SELECT * FROM notifications WHERE id = ? AND user_id = ?")
+      .get(notificationId, userId) as Record<string, unknown> | undefined;
+    if (!notificationRow) return;
+    const type = String(notificationRow.type ?? "");
+    const source = String(notificationRow.source ?? "DEMO") as NotificationSource;
+    if (!shouldQueuePushDelivery(type, source, pushOperationalNotificationsEnabled())) return;
+    const notification = notificationFromRow(notificationRow, "admin");
+    const payload = formatPushPayload(notification);
     const subscriptions = this.db.prepare("SELECT * FROM push_subscriptions WHERE user_id = ? AND revoked_at IS NULL").all(userId) as Record<string, unknown>[];
     for (const subscription of subscriptions) {
+      const existing = this.db.prepare(`
+        SELECT id FROM notification_deliveries
+        WHERE notification_id = ? AND provider = 'webpush' AND subscription_id = ?
+      `).get(notificationId, String(subscription.id));
+      if (existing) continue;
       this.db.prepare(`
         INSERT INTO notification_deliveries
-          (id, notification_id, provider, subscription_id, status, failure_reason, created_at, updated_at)
-        VALUES (?, ?, 'webpush', ?, 'queued', NULL, ?, ?)
-      `).run(newId("dlv"), notificationId, String(subscription.id), nowIso(), nowIso());
+          (id, notification_id, provider, subscription_id, status, failure_reason, payload_json, created_at, updated_at)
+        VALUES (?, ?, 'webpush', ?, 'queued', NULL, ?, ?, ?)
+      `).run(newId("dlv"), notificationId, String(subscription.id), JSON.stringify(payload), nowIso(), nowIso());
     }
   }
 
@@ -3513,6 +3545,31 @@ export class DemoStore {
     return { publicKey, configured: !!publicKey && !!process.env["ORACULO_VAPID_PRIVATE_KEY"] };
   }
 
+  getWebPushVapidConfig(): PushVapidConfig {
+    const publicKey = process.env["ORACULO_VAPID_PUBLIC_KEY"]?.trim() ?? "";
+    const privateKey = process.env["ORACULO_VAPID_PRIVATE_KEY"]?.trim() ?? "";
+    const subject = process.env["ORACULO_VAPID_SUBJECT"]?.trim() ?? "";
+    if (!publicKey || !privateKey || !subject) {
+      return {
+        configured: false,
+        publicKey: publicKey || null,
+        privateKey: null,
+        subject: subject || null,
+        reason: "missing VAPID configuration",
+      };
+    }
+    if (!subject.startsWith("mailto:") && !subject.startsWith("https://")) {
+      return {
+        configured: false,
+        publicKey,
+        privateKey: null,
+        subject: null,
+        reason: "invalid VAPID subject",
+      };
+    }
+    return { configured: true, publicKey, privateKey, subject };
+  }
+
   listPushSubscriptions(userId: string): PushSubscriptionDto[] {
     return (this.db.prepare("SELECT * FROM push_subscriptions WHERE user_id = ? AND revoked_at IS NULL ORDER BY updated_at DESC").all(userId) as Record<string, unknown>[])
       .map(pushSubscriptionFromRow);
@@ -3552,6 +3609,118 @@ export class DemoStore {
   removeInvalidPushSubscription(userId: string, id: string, reason: unknown): void {
     this.db.prepare("UPDATE push_subscriptions SET revoked_at = ?, failure_reason = ?, updated_at = ? WHERE user_id = ? AND id = ?")
       .run(nowIso(), sanitizeFailure(reason), nowIso(), userId, id);
+  }
+
+  claimWebPushDeliveries(options: {
+    limit: number;
+    maxAttempts: number;
+    lockTimeoutMs: number;
+    now: Date;
+  }): ClaimedPushDelivery[] {
+    const now = options.now.toISOString();
+    const staleLockedAt = new Date(options.now.getTime() - options.lockTimeoutMs).toISOString();
+    const candidates = this.db.prepare(`
+      SELECT d.id
+      FROM notification_deliveries d
+      JOIN push_subscriptions s ON s.id = d.subscription_id AND s.revoked_at IS NULL
+      WHERE d.provider = 'webpush'
+        AND d.attempt_count < ?
+        AND (
+          d.status = 'queued'
+          OR (d.status = 'failed' AND (d.next_attempt_at IS NULL OR d.next_attempt_at <= ?))
+          OR (d.status = 'sending' AND d.locked_at IS NOT NULL AND d.locked_at <= ?)
+        )
+      ORDER BY d.created_at ASC
+      LIMIT ?
+    `).all(options.maxAttempts, now, staleLockedAt, options.limit) as Array<{ id: string }>;
+    const claimed: ClaimedPushDelivery[] = [];
+    for (const candidate of candidates) {
+      const result = this.db.prepare(`
+        UPDATE notification_deliveries
+        SET status = 'sending', locked_at = ?, updated_at = ?
+        WHERE id = ?
+          AND provider = 'webpush'
+          AND attempt_count < ?
+          AND (
+            status = 'queued'
+            OR (status = 'failed' AND (next_attempt_at IS NULL OR next_attempt_at <= ?))
+            OR (status = 'sending' AND locked_at IS NOT NULL AND locked_at <= ?)
+          )
+      `).run(now, now, candidate.id, options.maxAttempts, now, staleLockedAt);
+      if (!result.changes) continue;
+      const row = this.db.prepare(`
+        SELECT
+          d.id,
+          d.notification_id,
+          d.subscription_id,
+          d.payload_json,
+          d.attempt_count,
+          n.user_id,
+          s.endpoint,
+          s.p256dh,
+          s.auth
+        FROM notification_deliveries d
+        JOIN notifications n ON n.id = d.notification_id
+        JOIN push_subscriptions s ON s.id = d.subscription_id
+        WHERE d.id = ?
+      `).get(candidate.id) as Record<string, unknown> | undefined;
+      if (!row) continue;
+      claimed.push({
+        id: String(row.id),
+        userId: String(row.user_id),
+        notificationId: String(row.notification_id),
+        subscriptionId: String(row.subscription_id),
+        endpoint: String(row.endpoint ?? ""),
+        p256dh: String(row.p256dh ?? ""),
+        auth: String(row.auth ?? ""),
+        payloadJson: row.payload_json === null || row.payload_json === undefined ? null : String(row.payload_json),
+        attemptCount: Number(row.attempt_count ?? 0),
+      });
+    }
+    return claimed;
+  }
+
+  markWebPushDelivered(id: string, now: Date): void {
+    const timestamp = now.toISOString();
+    this.db.prepare(`
+      UPDATE notification_deliveries
+      SET status = 'delivered',
+          failure_reason = NULL,
+          attempt_count = attempt_count + 1,
+          next_attempt_at = NULL,
+          delivered_at = ?,
+          locked_at = NULL,
+          updated_at = ?
+      WHERE id = ? AND provider = 'webpush' AND status = 'sending'
+    `).run(timestamp, timestamp, id);
+  }
+
+  markWebPushRetry(id: string, failure: string, nextAttemptAt: Date, now: Date): void {
+    const timestamp = now.toISOString();
+    this.db.prepare(`
+      UPDATE notification_deliveries
+      SET status = 'failed',
+          failure_reason = ?,
+          attempt_count = attempt_count + 1,
+          next_attempt_at = ?,
+          locked_at = NULL,
+          updated_at = ?
+      WHERE id = ? AND provider = 'webpush' AND status = 'sending'
+    `).run(sanitizeFailure(failure), nextAttemptAt.toISOString(), timestamp, id);
+  }
+
+  markWebPushPermanentFailure(id: string, failure: string, now: Date): void {
+    const timestamp = now.toISOString();
+    this.db.prepare(`
+      UPDATE notification_deliveries
+      SET status = 'failed',
+          failure_reason = ?,
+          attempt_count = attempt_count + 1,
+          next_attempt_at = NULL,
+          locked_at = NULL,
+          updated_at = ?
+      WHERE id = ? AND provider = 'webpush' AND status = 'sending'
+    `).run(sanitizeFailure(failure), timestamp, id);
   }
 
   getTelegramStatus(userId: string): TelegramStatusDto {

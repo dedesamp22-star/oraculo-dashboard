@@ -11,17 +11,18 @@ const root = path.resolve(import.meta.dirname, "..");
 
 function loadDemoStore() {
   const tempDir = mkdtempSync(path.join(tmpdir(), "oraculo-demo-store-observability-"));
-  const telegramSourcePath = path.join(root, "src", "lib", "telegram-notifications.ts");
-  const telegramSource = readFileSync(telegramSourcePath, "utf8");
-  const telegramOutput = ts.transpileModule(telegramSource, {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2022,
-      esModuleInterop: true,
-    },
-    fileName: "telegram-notifications.ts",
-  }).outputText;
-  writeFileSync(path.join(tempDir, "telegram-notifications.js"), telegramOutput);
+  for (const moduleName of ["push-notifications", "telegram-notifications"]) {
+    const moduleSource = readFileSync(path.join(root, "src", "lib", `${moduleName}.ts`), "utf8");
+    const moduleOutput = ts.transpileModule(moduleSource, {
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        target: ts.ScriptTarget.ES2022,
+        esModuleInterop: true,
+      },
+      fileName: `${moduleName}.ts`,
+    }).outputText;
+    writeFileSync(path.join(tempDir, `${moduleName}.js`), moduleOutput);
+  }
   const sourcePath = path.join(root, "src", "lib", "demo-store.ts");
   const source = readFileSync(sourcePath, "utf8")
     .replace(
