@@ -1332,7 +1332,7 @@ test("server session is authoritative and demo signal/price events are idempoten
     assert.equal(afterTarget1.realizedPnlUSDC, 5);
     assert.equal(afterTarget1.unrealizedPnlUSDC, 5);
     assert.equal(afterTarget1.partialPnlUSDC, 5);
-    assert.ok(afterTarget1.openRiskUSDC > 0);
+    assert.equal(afterTarget1.openRiskUSDC, 0);
     assert.equal(afterTarget1.history.length, 0);
     assert.equal(afterTarget1.dailyStats.totalTrades, 0);
     assert.equal(afterTarget1.dailyStats.wins, 0);

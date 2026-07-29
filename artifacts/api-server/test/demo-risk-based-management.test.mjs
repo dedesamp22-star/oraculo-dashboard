@@ -116,19 +116,21 @@ test("BUY uses 1R partial and 1.5R trailing while preserving target2", () => {
     assert.equal(trade.partialTriggerR, 1);
     assert.equal(trade.partialPnlUSDC, 5);
 
-    store.updatePrices(userId, { pair: "BTCUSDT", price: 114 });
+    store.updatePrices(userId, { pair: "BTCUSDT", price: 107.49 });
     trade = latestPosition(store, userId);
     assert.equal(trade.trailing, false);
     assert.equal(trade.stopLoss, 100);
 
-    store.updatePrices(userId, { pair: "BTCUSDT", price: 115 });
+    store.updatePrices(userId, { pair: "BTCUSDT", price: 107.51 });
     trade = latestPosition(store, userId);
     assert.equal(trade.trailing, true);
     assert.equal(trade.trailingTriggerR, 1.5);
+    assert.equal(trade.remainingPositionSize, 1);
+    assert.equal(timelineTypes(trade).filter((type) => type === "PARTIAL_EXECUTED").length, 1);
     assert.ok(trade.stopLoss >= 100);
 
     const trailedStop = trade.stopLoss;
-    store.updatePrices(userId, { pair: "BTCUSDT", price: 116 });
+    store.updatePrices(userId, { pair: "BTCUSDT", price: 107.5 });
     trade = latestPosition(store, userId);
     assert.ok(trade.stopLoss >= trailedStop);
 
@@ -169,19 +171,21 @@ test("SELL uses 1R partial and 1.5R trailing while preserving target2", () => {
     assert.equal(trade.partialTriggerR, 1);
     assert.equal(trade.partialPnlUSDC, 5);
 
-    store.updatePrices(userId, { pair: "SOLUSDT", price: 86 });
+    store.updatePrices(userId, { pair: "SOLUSDT", price: 92.51 });
     trade = latestPosition(store, userId);
     assert.equal(trade.trailing, false);
     assert.equal(trade.stopLoss, 100);
 
-    store.updatePrices(userId, { pair: "SOLUSDT", price: 85 });
+    store.updatePrices(userId, { pair: "SOLUSDT", price: 92.49 });
     trade = latestPosition(store, userId);
     assert.equal(trade.trailing, true);
     assert.equal(trade.trailingTriggerR, 1.5);
+    assert.equal(trade.remainingPositionSize, 1);
+    assert.equal(timelineTypes(trade).filter((type) => type === "PARTIAL_EXECUTED").length, 1);
     assert.ok(trade.stopLoss <= 100);
 
     const trailedStop = trade.stopLoss;
-    store.updatePrices(userId, { pair: "SOLUSDT", price: 84 });
+    store.updatePrices(userId, { pair: "SOLUSDT", price: 92.5 });
     trade = latestPosition(store, userId);
     assert.ok(trade.stopLoss <= trailedStop);
 

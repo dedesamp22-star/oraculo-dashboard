@@ -4686,7 +4686,10 @@ export class DemoStore {
   private openRiskMultiple(trade: DemoTrade, price: number): number | null {
     const initialRisk = trade.initialRiskAmount ?? trade.riskAmount;
     if (!Number.isFinite(initialRisk) || initialRisk <= 0) return null;
-    return this.unrealizedFor(trade, price) / initialRisk;
+    const fullPositionPnl = trade.direction === "BUY"
+      ? (price - trade.entry) * trade.positionSize
+      : (trade.entry - price) * trade.positionSize;
+    return fullPositionPnl / initialRisk;
   }
 
   private managementStateFingerprint(trade: DemoTrade): string {
