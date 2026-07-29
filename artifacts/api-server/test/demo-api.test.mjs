@@ -1324,7 +1324,9 @@ test("server session is authoritative and demo signal/price events are idempoten
     }
     const afterTarget1 = await authedJson(server.base, cookie, "/api/demo/session");
     assert.equal(afterTarget1.activeTrade.target1Hit, true);
-    assert.ok(afterTarget1.activeTrade.stopLoss >= 100.02);
+    assert.equal(afterTarget1.activeTrade.isBreakevenStop, true);
+    assert.ok(Math.abs(afterTarget1.activeTrade.stopLoss - 100) < 0.000001);
+    assert.equal(afterTarget1.activeTrade.trailing, false);
     assert.equal(afterTarget1.activeTrade.remainingPositionSize, 1);
     assert.equal(afterTarget1.activeTrade.realizedPnlUSDC, 5);
     assert.equal(afterTarget1.realizedPnlUSDC, 5);
@@ -1451,7 +1453,7 @@ test("management keeps partial idempotent and statistics count only final closes
   }
 });
 
-test("breakeven buffer works for BUY and SELL without counting wins early", async () => {
+test("breakeven moves to entry for BUY and SELL without counting wins early", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "oraculo-demo-breakeven-"));
   const dbPath = path.join(dir, "oraculo.sqlite");
   const port = 5128;
@@ -1460,7 +1462,9 @@ test("breakeven buffer works for BUY and SELL without counting wins early", asyn
     const cookie = await login(server.base);
     await postPosition(server.base, cookie, sampleTrade({ id: "buy_be" }));
     const buy = await postPrice(server.base, cookie, "BTCUSDT", 105);
-    assert.ok(Math.abs(buy.activeTrade.stopLoss - 100.02) < 0.000001 || buy.activeTrade.stopLoss > 100.02);
+    assert.ok(Math.abs(buy.activeTrade.stopLoss - 100) < 0.000001);
+    assert.equal(buy.activeTrade.isBreakevenStop, true);
+    assert.equal(buy.activeTrade.trailing, false);
     assert.equal(buy.dailyStats.wins, 0);
 
     await postPrice(server.base, cookie, "BTCUSDT", 110);
@@ -1475,8 +1479,9 @@ test("breakeven buffer works for BUY and SELL without counting wins early", asyn
       target2: 90,
     }));
     const sell = await postPrice(server.base, cookie, "ETHUSDT", 95);
-    assert.ok(sell.activeTrade.stopLoss <= 99.98);
+    assert.ok(Math.abs(sell.activeTrade.stopLoss - 100) < 0.000001);
     assert.equal(sell.activeTrade.isBreakevenStop, true);
+    assert.equal(sell.activeTrade.trailing, false);
     assert.equal(sell.activeTrade.remainingPositionSize, 1);
   } finally {
     await stopServer(server.child);
@@ -1492,20 +1497,35 @@ test("adaptive trailing never worsens and uses symbol-specific bounds", async ()
   try {
     const cookie = await login(server.base);
     await postPosition(server.base, cookie, sampleTrade({ id: "btc_trailing" }));
-    const btc = await postPrice(server.base, cookie, "BTCUSDT", 106);
+    const btcPartial = await postPrice(server.base, cookie, "BTCUSDT", 106);
+    assert.equal(btcPartial.activeTrade.target1Hit, true);
+    assert.equal(btcPartial.activeTrade.isBreakevenStop, true);
+    assert.equal(btcPartial.activeTrade.trailing, false);
+    assert.ok(Math.abs(btcPartial.activeTrade.stopLoss - 100) < 0.000001);
+
+    const btcTrailPrice = 107.51;
+    const btc = await postPrice(server.base, cookie, "BTCUSDT", btcTrailPrice);
+    assert.equal(btc.activeTrade.trailing, true);
     const btcStop = btc.activeTrade.stopLoss;
-    assert.ok(btcStop >= 106 * (1 - 0.0035) - 0.000001);
-    assert.ok(btcStop <= 106 * (1 - 0.0018) + 0.000001);
+    assert.ok(btcStop >= btcTrailPrice * (1 - 0.0035) - 0.000001);
+    assert.ok(btcStop <= btcTrailPrice * (1 - 0.0018) + 0.000001);
 
     const notWorse = await postPrice(server.base, cookie, "BTCUSDT", btcStop + 0.05);
     assert.equal(notWorse.activeTrade.stopLoss, btcStop);
 
     await postPrice(server.base, cookie, "BTCUSDT", 110);
     await postPosition(server.base, cookie, sampleTrade({ id: "sol_trailing", pair: "SOLUSDT" }));
-    const sol = await postPrice(server.base, cookie, "SOLUSDT", 106);
+    const solPartial = await postPrice(server.base, cookie, "SOLUSDT", 105);
+    assert.equal(solPartial.activeTrade.target1Hit, true);
+    assert.equal(solPartial.activeTrade.trailing, false);
+    assert.ok(Math.abs(solPartial.activeTrade.stopLoss - 100) < 0.000001);
+
+    const solTrailPrice = 107.51;
+    const sol = await postPrice(server.base, cookie, "SOLUSDT", solTrailPrice);
+    assert.equal(sol.activeTrade.trailing, true);
     const solStop = sol.activeTrade.stopLoss;
-    assert.ok(solStop >= 106 * (1 - 0.005) - 0.000001);
-    assert.ok(solStop <= 106 * (1 - 0.0025) + 0.000001);
+    assert.ok(solStop >= solTrailPrice * (1 - 0.005) - 0.000001);
+    assert.ok(solStop <= solTrailPrice * (1 - 0.0025) + 0.000001);
     assert.ok(solStop < btcStop);
   } finally {
     await stopServer(server.child);
