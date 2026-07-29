@@ -14,6 +14,7 @@ type DemoWorkerSymbol = (typeof DEMO_WORKER_SYMBOLS)[number];
 
 let started = false;
 let running = false;
+let timer: ReturnType<typeof setInterval> | null = null;
 
 type AutomationUser = { user: AuthUser; automation: { enabled: boolean; symbol: string } };
 type DemoWorkerStore = Pick<
@@ -287,7 +288,15 @@ async function tick(): Promise<void> {
 export function startDemoWorker(): void {
   if (started) return;
   started = true;
-  setInterval(() => void tick(), TICK_MS);
+  timer = setInterval(() => void tick(), TICK_MS);
   void tick();
   logger.info({ intervalMs: TICK_MS }, "Demo worker started");
+}
+
+export function stopDemoWorker(): void {
+  if (timer) {
+    clearInterval(timer);
+    timer = null;
+  }
+  started = false;
 }

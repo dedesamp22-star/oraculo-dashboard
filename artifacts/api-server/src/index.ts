@@ -1,8 +1,9 @@
 import app from "./app";
 import { logger } from "./lib/logger";
-import { startDemoWorker } from "./lib/demo-worker";
+import { startDemoWorker, stopDemoWorker } from "./lib/demo-worker";
 import { demoStore } from "./lib/demo-store-instance";
 import { PushDeliveryProcessor } from "./lib/push-delivery-processor";
+import type { Server } from "node:http";
 
 const rawPort = process.env["PORT"];
 
@@ -15,12 +16,13 @@ if (!rawPort) {
 const port = Number(rawPort);
 const host = process.env["ORACULO_API_HOST"] ?? "0.0.0.0";
 const pushDeliveryProcessor = new PushDeliveryProcessor({ store: demoStore, logger });
+let server: Server | null = null;
 
 if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-app.listen({ host, port }, (err) => {
+server = app.listen({ host, port }, (err) => {
   if (err) {
     logger.error({ err }, "Error listening on port");
     process.exit(1);
@@ -31,9 +33,32 @@ app.listen({ host, port }, (err) => {
   startDemoWorker();
 });
 
-function shutdownPushProcessor(): void {
-  pushDeliveryProcessor.stop();
+let shuttingDown = false;
+
+function closeServer(): Promise<void> {
+  if (!server) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    server?.close((err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
 }
 
-process.once("SIGTERM", shutdownPushProcessor);
-process.once("SIGINT", shutdownPushProcessor);
+async function gracefulShutdown(signal: NodeJS.Signals): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.info({ signal }, "Shutting down API server");
+  try {
+    stopDemoWorker();
+    pushDeliveryProcessor.stop();
+    await closeServer();
+    process.exitCode = 0;
+  } catch (err) {
+    process.exitCode = 1;
+    logger.error({ err, signal }, "Error during graceful shutdown");
+  }
+}
+
+process.once("SIGTERM", () => void gracefulShutdown("SIGTERM"));
+process.once("SIGINT", () => void gracefulShutdown("SIGINT"));
