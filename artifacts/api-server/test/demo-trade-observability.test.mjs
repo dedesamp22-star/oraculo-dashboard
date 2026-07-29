@@ -164,15 +164,28 @@ test("SELL observability records MFE and MAE with initial risk denominator", () 
       positionSize: 1,
       remainingPositionSize: 1,
     }));
-    store.updatePrices(userId, { pair: "ETHUSDT", price: 1980 });
+    store.updatePrices(userId, { pair: "ETHUSDT", price: 1981 });
     let trade = latestPosition(store, userId);
     assert.ok(trade, "SELL position must remain open after favorable move");
-    assert.equal(trade.mfeUSDC, 20);
-    assert.equal(trade.mfeR, 1);
+    assert.equal(trade.mfeUSDC, 19);
+    assert.equal(trade.mfeR, 0.95);
 
-    store.updatePrices(userId, { pair: "ETHUSDT", price: 2010 });
+    const adverseIntermediatePrice = (trade.entry + trade.stopLossOriginal) / 2;
+    store.updatePrices(userId, { pair: "ETHUSDT", price: adverseIntermediatePrice });
     trade = latestPosition(store, userId);
-    assert.ok(trade, "SELL position must remain open between entry and stop");
+    const closed = store.getTrades(userId).find((item) => item.id === "sell");
+    assert.ok(trade, `SELL position must remain open between entry and stop; debug=${JSON.stringify({
+      price: adverseIntermediatePrice,
+      entry: 2000,
+      initialRiskAmount: 20,
+      stopLossOriginal: 2020,
+      stopLoss: closed?.stopLoss ?? null,
+      target1Hit: closed?.target1Hit ?? null,
+      breakeven: closed?.isBreakevenStop ?? null,
+      trailing: closed?.trailing ?? null,
+      status: closed?.status ?? null,
+      exitReason: closed?.exitReason ?? null,
+    })}`);
     assert.equal(trade.maeUSDC, 10);
     assert.equal(trade.maeR, 0.5, "R remains based on initial risk, not updated stop");
   });
@@ -224,9 +237,33 @@ test("timeout, stop and trailing events are preserved without changing exits", (
 
     store.postPosition(userId, sampleTrade({ id: "trail", pair: "SOLUSDT", entry: 50, stopLoss: 45, target1: 55, target2: 70, positionSize: 2, remainingPositionSize: 2 }));
     store.updatePrices(userId, { pair: "SOLUSDT", price: 55 });
-    store.updatePrices(userId, { pair: "SOLUSDT", price: 60 });
-    const trailing = latestPosition(store, userId);
-    assert.ok(trailing.managementTimeline.some((event) => event.type === "TRAILING_ACTIVATED" || event.type === "TRAILING_UPDATED"));
+    let trailing = latestPosition(store, userId);
+    assert.equal(trailing.target1Hit, true);
+    assert.equal(trailing.remainingPositionSize, 1);
+    assert.equal(trailing.isBreakevenStop, true);
+    assert.equal(trailing.stopLoss, 50);
+    assert.equal(trailing.trailing, false);
+    assert.ok(trailing.managementTimeline.some((event) => event.type === "PARTIAL_EXECUTED"));
+    assert.ok(trailing.managementTimeline.some((event) => event.type === "BREAKEVEN_ACTIVATED"));
+    assert.equal(trailing.managementTimeline.some((event) => event.type === "TRAILING_ACTIVATED"), false);
+
+    store.updatePrices(userId, { pair: "SOLUSDT", price: 64.9 });
+    trailing = latestPosition(store, userId);
+    assert.equal(trailing.trailing, false);
+    assert.equal(trailing.stopLoss, 50);
+
+    store.updatePrices(userId, { pair: "SOLUSDT", price: 65.1 });
+    trailing = latestPosition(store, userId);
+    assert.equal(trailing.trailing, true);
+    assert.equal(trailing.managementTimeline.filter((event) => event.type === "TRAILING_ACTIVATED").length, 1);
+    assert.ok(trailing.stopLoss >= 50);
+    const stopAfterActivation = trailing.stopLoss;
+
+    store.updatePrices(userId, { pair: "SOLUSDT", price: 65.1 });
+    trailing = latestPosition(store, userId);
+    assert.equal(trailing.managementTimeline.filter((event) => event.type === "TRAILING_ACTIVATED").length, 1);
+    assert.equal(trailing.managementTimeline.filter((event) => event.type === "PARTIAL_EXECUTED").length, 1);
+    assert.ok(trailing.stopLoss >= stopAfterActivation);
   });
 });
 

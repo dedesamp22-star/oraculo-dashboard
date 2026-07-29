@@ -81,6 +81,7 @@ export interface DemoTrade {
   status: TradeStatus;
   target1Hit: boolean;
   isBreakevenStop: boolean;
+  trailing: boolean;
   closePrice?: number;
   exitReason?: ManagedTradeExitReason;
   pnlUSDC?: number;
@@ -88,6 +89,8 @@ export interface DemoTrade {
   realizedPnlUSDC?: number;
   partialPnlUSDC?: number;
   target1ClosePrice?: number;
+  partialTriggerR?: number | null;
+  trailingTriggerR?: number | null;
   maxDurationMs?: number;
   initialRiskAmount?: number;
   maxPriceSinceEntry?: number | null;
@@ -389,6 +392,8 @@ export interface DemoTradeExportEntry {
   target1Hit: boolean;
   breakeven: boolean;
   trailing: boolean;
+  partialTriggerR: number | null;
+  trailingTriggerR: number | null;
   signalReasons: string[];
   managementTimeline: ManagementTimelineEvent[];
 }
@@ -830,12 +835,33 @@ function envInt(name: string, fallback: number, min: number, max: number): numbe
   return Number.isInteger(value) && value >= min && value <= max ? value : fallback;
 }
 
+function envNumber(name: string, fallback: number, min: number, max: number): number {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value >= min && value <= max ? value : fallback;
+}
+
+function envBool(name: string, fallback: boolean): boolean {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  return ["1", "true", "yes", "on"].includes(raw.trim().toLowerCase());
+}
+
 function demoMaxDailyTrades(): number {
   return envInt("ORACULO_DEMO_MAX_DAILY_TRADES", 0, 0, 10_000);
 }
 
 function demoLossStreakCooldownMinutes(): number {
   return envInt("ORACULO_DEMO_LOSS_STREAK_COOLDOWN_MINUTES", 60, 0, 24 * 60);
+}
+
+function demoManagementSettings() {
+  return {
+    partialTriggerR: envNumber("DEMO_PARTIAL_TRIGGER_R", 1, 0.1, 100),
+    partialClosePercent: envNumber("DEMO_PARTIAL_CLOSE_PERCENT", 50, 1, 99),
+    trailingTriggerR: envNumber("DEMO_TRAILING_TRIGGER_R", 1.5, 0.1, 100),
+    moveStopToBreakeven: envBool("DEMO_MOVE_STOP_TO_BREAKEVEN", true),
+    trailingEnabled: envBool("DEMO_TRAILING_ENABLED", true),
+  };
 }
 
 function sessionTtlSeconds(): number {
@@ -1000,9 +1026,12 @@ function tradeFromRow(row: Record<string, unknown>): DemoTrade {
     exitReason: row.exit_reason == null ? undefined : String(row.exit_reason) as ManagedTradeExitReason,
     target1Hit: Boolean(row.target1_hit),
     isBreakevenStop: Boolean(row.is_breakeven_stop),
+    trailing: Boolean(row.trailing),
     realizedPnlUSDC: row.realized_pnl_usdc == null ? undefined : Number(row.realized_pnl_usdc),
     partialPnlUSDC: row.partial_pnl_usdc == null ? undefined : Number(row.partial_pnl_usdc),
     target1ClosePrice: row.target1_close_price == null ? undefined : Number(row.target1_close_price),
+    partialTriggerR: optionalNonNegativeNumber(row.partial_trigger_r),
+    trailingTriggerR: optionalNonNegativeNumber(row.trailing_trigger_r),
     maxDurationMs: row.max_duration_ms == null ? undefined : Number(row.max_duration_ms),
     initialRiskAmount: row.initial_risk_amount == null ? Number(row.risk_amount) : Number(row.initial_risk_amount),
     maxPriceSinceEntry: optionalFiniteNumber(row.max_price_since_entry),
@@ -1277,9 +1306,12 @@ export class DemoStore {
             risk_reward TEXT NOT NULL,
             target1_hit INTEGER NOT NULL DEFAULT 0,
             is_breakeven_stop INTEGER NOT NULL DEFAULT 0,
+            trailing INTEGER NOT NULL DEFAULT 0,
             realized_pnl_usdc REAL NOT NULL DEFAULT 0,
             partial_pnl_usdc REAL NOT NULL DEFAULT 0,
             target1_close_price REAL,
+            partial_trigger_r REAL,
+            trailing_trigger_r REAL,
             max_duration_ms INTEGER NOT NULL DEFAULT 5400000,
             initial_risk_amount REAL,
             max_price_since_entry REAL,
@@ -1297,7 +1329,7 @@ export class DemoStore {
             total_giveback_usdc REAL,
             peak_giveback_pct REAL,
             last_management_update_at TEXT,
-            management_timeline_json TEXT,
+            management_timeline_json TEXT DEFAULT '[]',
             signal_reasons_json TEXT NOT NULL,
             market_conditions TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -1344,10 +1376,13 @@ export class DemoStore {
             total_giveback_usdc REAL,
             peak_giveback_pct REAL,
             last_management_update_at TEXT,
-            management_timeline_json TEXT,
+            management_timeline_json TEXT DEFAULT '[]',
             exit_reason TEXT,
             target1_hit INTEGER NOT NULL DEFAULT 0,
             is_breakeven_stop INTEGER NOT NULL DEFAULT 0,
+            trailing INTEGER NOT NULL DEFAULT 0,
+            partial_trigger_r REAL,
+            trailing_trigger_r REAL,
             signal_reasons_json TEXT NOT NULL,
             market_conditions TEXT NOT NULL,
             created_at TEXT NOT NULL,
@@ -1861,6 +1896,25 @@ export class DemoStore {
         ];
         for (const [column, definition] of columns) addColumn(column, definition);
         this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (12, 'adaptive_engine_audit_fields', ?)").run(nowIso());
+      });
+    }
+    const v13 = this.db.prepare("SELECT version FROM schema_migrations WHERE version = 13").get();
+    if (!v13) {
+      this.transaction(() => {
+        const addColumn = (table: string, column: string, definition: string) => {
+          const exists = (this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((row) => row.name === column);
+          if (!exists) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+        };
+        const columns: Array<[string, string]> = [
+          ["trailing", "trailing INTEGER NOT NULL DEFAULT 0"],
+          ["partial_trigger_r", "partial_trigger_r REAL"],
+          ["trailing_trigger_r", "trailing_trigger_r REAL"],
+        ];
+        for (const [column, definition] of columns) {
+          addColumn("demo_positions", column, definition);
+          addColumn("demo_trades", column, definition);
+        }
+        this.db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (13, 'demo_risk_based_management', ?)").run(nowIso());
       });
     }
   }
@@ -2958,7 +3012,9 @@ export class DemoStore {
         minUnrealizedPnlUSDC: trade.minUnrealizedPnlUSDC ?? 0,
         target1Hit: trade.target1Hit,
         breakeven: trade.isBreakevenStop,
-        trailing: (trade.managementTimeline ?? []).some((event) => event.type === "TRAILING_ACTIVATED" || event.type === "TRAILING_UPDATED"),
+        trailing: trade.trailing || (trade.managementTimeline ?? []).some((event) => event.type === "TRAILING_ACTIVATED" || event.type === "TRAILING_UPDATED"),
+        partialTriggerR: trade.partialTriggerR ?? null,
+        trailingTriggerR: trade.trailingTriggerR ?? null,
         signalReasons: trade.signalReasons,
         managementTimeline: trade.managementTimeline ?? [],
       };
@@ -3290,6 +3346,7 @@ export class DemoStore {
           status: "OPEN",
           target1Hit: false,
           isBreakevenStop: false,
+          trailing: false,
           realizedPnlUSDC: 0,
           partialPnlUSDC: 0,
           maxDurationMs: scenario.maxDurationMs,
@@ -4093,9 +4150,12 @@ export class DemoStore {
       status: "OPEN",
       target1Hit: bool(input.target1Hit),
       isBreakevenStop: bool(input.isBreakevenStop),
+      trailing: bool(input.trailing),
       realizedPnlUSDC: finiteNumber(input.realizedPnlUSDC ?? 0, "realizedPnlUSDC", -MAX_BALANCE, MAX_BALANCE),
       partialPnlUSDC: finiteNumber(input.partialPnlUSDC ?? 0, "partialPnlUSDC", -MAX_BALANCE, MAX_BALANCE),
       target1ClosePrice: input.target1ClosePrice === undefined ? undefined : finiteNumber(input.target1ClosePrice, "target1ClosePrice", 0.00000001, MAX_PRICE),
+      partialTriggerR: optionalNonNegativeNumber(input.partialTriggerR ?? input.partial_trigger_r),
+      trailingTriggerR: optionalNonNegativeNumber(input.trailingTriggerR ?? input.trailing_trigger_r),
       maxDurationMs: finiteNumber(input.maxDurationMs ?? DEFAULT_MAX_DURATION_MS, "maxDurationMs", 60_000, 24 * 60 * 60 * 1000),
       initialRiskAmount: finiteNumber(input.initialRiskAmount ?? input.initial_risk_amount ?? riskAmount, "initialRiskAmount", 0, MAX_BALANCE),
       maxPriceSinceEntry: optionalFiniteNumber(input.maxPriceSinceEntry ?? input.max_price_since_entry) ?? entry,
@@ -4126,8 +4186,8 @@ export class DemoStore {
       this.db.prepare(`
         INSERT INTO demo_positions
           (id, user_id, pair, direction, status, open_time, entry, stop_loss, stop_loss_original, target1, target2,
-           balance_at_open, risk_amount, position_size, remaining_position_size, risk_reward, target1_hit, is_breakeven_stop,
-           realized_pnl_usdc, partial_pnl_usdc, target1_close_price, max_duration_ms,
+           balance_at_open, risk_amount, position_size, remaining_position_size, risk_reward, target1_hit, is_breakeven_stop, trailing,
+           realized_pnl_usdc, partial_pnl_usdc, target1_close_price, partial_trigger_r, trailing_trigger_r, max_duration_ms,
            initial_risk_amount, max_price_since_entry, min_price_since_entry,
            max_unrealized_pnl_usdc, min_unrealized_pnl_usdc,
            max_unrealized_pnl_before_partial, max_unrealized_pnl_after_partial,
@@ -4135,12 +4195,12 @@ export class DemoStore {
            peak_giveback_usdc, open_giveback_usdc, total_giveback_usdc, peak_giveback_pct,
            last_management_update_at, management_timeline_json,
            signal_reasons_json, market_conditions, updated_at)
-        VALUES (?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         position.id, userId, position.pair, position.direction, position.openTime, position.entry, position.stopLoss,
         position.stopLossOriginal, position.target1, position.target2, position.balanceAtOpen, position.riskAmount,
-        position.positionSize, position.remainingPositionSize, position.riskReward, Number(position.target1Hit), Number(position.isBreakevenStop),
-        position.realizedPnlUSDC ?? 0, position.partialPnlUSDC ?? 0, position.target1ClosePrice ?? null, position.maxDurationMs ?? DEFAULT_MAX_DURATION_MS,
+        position.positionSize, position.remainingPositionSize, position.riskReward, Number(position.target1Hit), Number(position.isBreakevenStop), Number(position.trailing),
+        position.realizedPnlUSDC ?? 0, position.partialPnlUSDC ?? 0, position.target1ClosePrice ?? null, position.partialTriggerR ?? null, position.trailingTriggerR ?? null, position.maxDurationMs ?? DEFAULT_MAX_DURATION_MS,
         position.initialRiskAmount ?? position.riskAmount,
         position.maxPriceSinceEntry ?? position.entry,
         position.minPriceSinceEntry ?? position.entry,
@@ -4293,6 +4353,7 @@ export class DemoStore {
         status: "OPEN",
         target1Hit: false,
         isBreakevenStop: false,
+        trailing: false,
         realizedPnlUSDC: 0,
         partialPnlUSDC: 0,
         maxDurationMs: this.tradeManagementSettings(userId).maxDurationMs,
@@ -4518,9 +4579,16 @@ export class DemoStore {
       : (trade.entry - price) * size;
   }
 
+  private openRiskMultiple(trade: DemoTrade, price: number): number | null {
+    const initialRisk = trade.initialRiskAmount ?? trade.riskAmount;
+    if (!Number.isFinite(initialRisk) || initialRisk <= 0) return null;
+    return this.unrealizedFor(trade, price) / initialRisk;
+  }
+
   private applyPriceToPosition(userId: string, trade: DemoTrade, price: number): void {
     const isBuy = trade.direction === "BUY";
     const settings = this.tradeManagementSettings(userId);
+    const riskSettings = demoManagementSettings();
     const history = this.pushPriceHistory(userId, trade, price);
     trade = this.updatePositionObservability(userId, trade, price);
 
@@ -4538,15 +4606,20 @@ export class DemoStore {
     }
 
     let current = trade;
-    if (!trade.target1Hit && (isBuy ? price >= trade.target1 : price <= trade.target1)) {
-      const key = `target1:${trade.id}`;
+    const currentR = this.openRiskMultiple(trade, price);
+    if (!trade.target1Hit && currentR !== null && currentR >= riskSettings.partialTriggerR) {
+      const key = `partial:${trade.id}:risk:${riskSettings.partialTriggerR}`;
       if (this.recordEvent(userId, key, "target1", trade.id)) {
-        current = this.realizeTarget1(userId, trade, settings.breakevenBufferPct);
+        current = this.realizeRiskPartial(userId, trade, price, riskSettings);
       }
     }
 
+    const trailingR = this.openRiskMultiple(current, price);
+    if (current.target1Hit && riskSettings.trailingEnabled && trailingR !== null && trailingR >= riskSettings.trailingTriggerR) {
+      current = this.updateTrailingStop(userId, current, price, settings.trailingStopPct, history, riskSettings.trailingTriggerR);
+    }
+
     if (current.target1Hit) {
-      current = this.updateTrailingStop(userId, current, price, settings.trailingStopPct, history);
       if (this.lossOfStrengthReached(userId, current, price, settings.lossOfStrengthPct, history)) {
         const key = `close:${current.id}:LOSS_OF_STRENGTH`;
         if (this.recordEvent(userId, key, "close", current.id)) this.closePosition(userId, current, price, "LOSS_OF_STRENGTH");
@@ -4560,38 +4633,43 @@ export class DemoStore {
     }
   }
 
-  private realizeTarget1(userId: string, trade: DemoTrade, bufferPct: number): DemoTrade {
+  private realizeRiskPartial(userId: string, trade: DemoTrade, price: number, riskSettings = demoManagementSettings()): DemoTrade {
     const latest = this.getOpenPosition(userId, trade.id) ?? trade;
     if (latest.target1Hit) return latest;
     const currentRemaining = latest.remainingPositionSize ?? latest.positionSize;
-    const closedSize = Math.min(currentRemaining, latest.positionSize * 0.5);
+    const closeFraction = riskSettings.partialClosePercent / 100;
+    const closedSize = Math.min(currentRemaining, latest.positionSize * closeFraction);
     const remainingPositionSize = Math.max(0, currentRemaining - closedSize);
     const partialPnlUSDC = trade.direction === "BUY"
-      ? (latest.target1 - latest.entry) * closedSize
-      : (latest.entry - latest.target1) * closedSize;
-    const rawBreakevenStop = latest.direction === "BUY"
-      ? latest.entry * (1 + bufferPct)
-      : latest.entry * (1 - bufferPct);
-    const stopLoss = latest.direction === "BUY"
-      ? Math.max(latest.stopLoss, rawBreakevenStop)
-      : Math.min(latest.stopLoss, rawBreakevenStop);
+      ? (price - latest.entry) * closedSize
+      : (latest.entry - price) * closedSize;
+    const stopLoss = riskSettings.moveStopToBreakeven
+      ? latest.direction === "BUY"
+        ? Math.max(latest.stopLoss, latest.entry)
+        : Math.min(latest.stopLoss, latest.entry)
+      : latest.stopLoss;
     const realizedPnlUSDC = (latest.realizedPnlUSDC ?? 0) + partialPnlUSDC;
     let timeline = safeManagementTimeline(latest.managementTimeline ?? []);
     if (timeline.length === 0) timeline = [openedTimelineEvent(latest)];
     const baseAtTarget = { ...latest, remainingPositionSize: currentRemaining };
-    timeline = appendTimelineEvent(timeline, this.timelineEvent("TARGET_1", baseAtTarget, latest.target1, "Alvo 1 atingido.", { target1: latest.target1 }));
-    timeline = appendTimelineEvent(timeline, this.timelineEvent("PARTIAL_EXECUTED", baseAtTarget, latest.target1, "Parcial de 50% executada.", { closedSize, remainingPositionSize, partialPnlUSDC }));
-    timeline = appendTimelineEvent(timeline, this.timelineEvent("BREAKEVEN_ACTIVATED", baseAtTarget, stopLoss, "Stop movido para breakeven.", { stopLoss, bufferPct }));
+    timeline = appendTimelineEvent(timeline, this.timelineEvent("TARGET_1", baseAtTarget, price, `Gatilho de parcial por +${riskSettings.partialTriggerR}R atingido.`, { target1: latest.target1, partialTriggerR: riskSettings.partialTriggerR }));
+    timeline = appendTimelineEvent(timeline, this.timelineEvent("PARTIAL_EXECUTED", baseAtTarget, price, `Parcial de ${riskSettings.partialClosePercent}% executada.`, { closedSize, remainingPositionSize, partialPnlUSDC, partialTriggerR: riskSettings.partialTriggerR }));
+    if (riskSettings.moveStopToBreakeven) {
+      timeline = appendTimelineEvent(timeline, this.timelineEvent("BREAKEVEN_ACTIVATED", baseAtTarget, stopLoss, "Stop movido para breakeven.", { stopLoss, partialTriggerR: riskSettings.partialTriggerR }));
+    }
     const managementUpdatedAt = nowIso();
     const next = {
       ...latest,
       target1Hit: true,
       stopLoss,
-      isBreakevenStop: true,
+      isBreakevenStop: riskSettings.moveStopToBreakeven || latest.isBreakevenStop,
+      trailing: latest.trailing,
       remainingPositionSize,
       realizedPnlUSDC,
       partialPnlUSDC,
-      target1ClosePrice: latest.target1,
+      target1ClosePrice: price,
+      partialTriggerR: riskSettings.partialTriggerR,
+      trailingTriggerR: latest.trailingTriggerR ?? null,
       maxUnrealizedPnlBeforePartial: latest.maxUnrealizedPnlBeforePartial ?? latest.maxUnrealizedPnlUSDC ?? 0,
       maxUnrealizedPnlAfterPartial: latest.maxUnrealizedPnlAfterPartial ?? 0,
       lastManagementUpdateAt: managementUpdatedAt,
@@ -4599,18 +4677,22 @@ export class DemoStore {
     };
     this.db.prepare(`
       UPDATE demo_positions
-      SET stop_loss = ?, target1_hit = 1, is_breakeven_stop = 1,
+      SET stop_loss = ?, target1_hit = 1, is_breakeven_stop = ?,
           remaining_position_size = ?, realized_pnl_usdc = ?, partial_pnl_usdc = ?,
-          target1_close_price = ?, max_unrealized_pnl_before_partial = ?,
+          target1_close_price = ?, partial_trigger_r = ?, trailing_trigger_r = ?,
+          max_unrealized_pnl_before_partial = ?,
           max_unrealized_pnl_after_partial = ?, last_management_update_at = ?,
           management_timeline_json = ?, updated_at = ?
       WHERE user_id = ? AND id = ? AND status = 'OPEN'
     `).run(
       stopLoss,
+      Number(next.isBreakevenStop),
       remainingPositionSize,
       realizedPnlUSDC,
       partialPnlUSDC,
-      latest.target1,
+      price,
+      next.partialTriggerR,
+      next.trailingTriggerR,
       next.maxUnrealizedPnlBeforePartial,
       next.maxUnrealizedPnlAfterPartial,
       managementUpdatedAt,
@@ -4619,7 +4701,7 @@ export class DemoStore {
       userId,
       latest.id,
     );
-    const withReason = this.appendPositionReason(userId, next, `TARGET_1 parcial: realizou ${closedSize.toFixed(8)} em ${latest.target1}; PnL parcial ${partialPnlUSDC.toFixed(8)}; stop movido para breakeven ${stopLoss.toFixed(8)} com buffer ${(bufferPct * 100).toFixed(4)}%.`);
+    const withReason = this.appendPositionReason(userId, next, `PARCIAL_R: realizou ${closedSize.toFixed(8)} em ${price}; PnL parcial ${partialPnlUSDC.toFixed(8)}; gatilho ${riskSettings.partialTriggerR}R; stop ${riskSettings.moveStopToBreakeven ? `movido para breakeven ${stopLoss.toFixed(8)}` : "mantido"}.`);
 
     const account = this.getAccount(userId);
     const stats = { ...account.dailyStats };
@@ -4631,37 +4713,39 @@ export class DemoStore {
     this.putAccount(userId, { balance: newBalance, configuredBalance: account.configuredBalance, dailyStats: stats });
     this.createNotification(userId, {
       type: "target1_hit",
-      title: "Alvo 1 atingido",
-      message: `${latest.pair}: Alvo 1 atingido em ${latest.target1}.`,
+      title: "Parcial por risco executada",
+      message: `${latest.pair}: parcial executada em ${price} ao atingir +${riskSettings.partialTriggerR}R.`,
       severity: "success",
       symbol: latest.pair,
       source: "DEMO",
       relatedEventId: latest.id,
       idempotencyKey: `${userId}:target1_hit:${latest.id}:${latest.pair}`,
-      adminMetadata: { trade: withReason, tradeId: latest.id, target1: latest.target1 },
+      adminMetadata: { trade: withReason, tradeId: latest.id, target1: latest.target1, partialTriggerR: riskSettings.partialTriggerR },
     });
     this.createNotification(userId, {
       type: "partial_executed",
       title: "Parcial executada",
-      message: `${latest.pair}: parcial de 50% realizada; PnL ${partialPnlUSDC.toFixed(4)}.`,
+      message: `${latest.pair}: parcial de ${riskSettings.partialClosePercent}% realizada; PnL ${partialPnlUSDC.toFixed(4)}.`,
       severity: "success",
       symbol: latest.pair,
       source: "DEMO",
       relatedEventId: latest.id,
       idempotencyKey: `${userId}:partial_executed:${latest.id}:${latest.pair}`,
-      adminMetadata: { trade: withReason, closedSize, remainingPositionSize, partialPnlUSDC },
+      adminMetadata: { trade: withReason, closedSize, remainingPositionSize, partialPnlUSDC, partialTriggerR: riskSettings.partialTriggerR },
     });
-    this.createNotification(userId, {
-      type: "breakeven_moved",
-      title: "Stop em breakeven",
-      message: `${latest.pair}: stop movido para ${stopLoss.toFixed(8)}.`,
-      severity: "success",
-      symbol: latest.pair,
-      source: "DEMO",
-      relatedEventId: latest.id,
-      idempotencyKey: `${userId}:breakeven_moved:${latest.id}:${latest.pair}`,
-      adminMetadata: { trade: withReason, stopLoss, bufferPct },
-    });
+    if (riskSettings.moveStopToBreakeven) {
+      this.createNotification(userId, {
+        type: "breakeven_moved",
+        title: "Stop em breakeven",
+        message: `${latest.pair}: stop movido para ${stopLoss.toFixed(8)}.`,
+        severity: "success",
+        symbol: latest.pair,
+        source: "DEMO",
+        relatedEventId: latest.id,
+        idempotencyKey: `${userId}:breakeven_moved:${latest.id}:${latest.pair}`,
+        adminMetadata: { trade: withReason, stopLoss, partialTriggerR: riskSettings.partialTriggerR },
+      });
+    }
     return withReason;
   }
 
@@ -4676,28 +4760,29 @@ export class DemoStore {
     return clamp(candidate, limits.minPct, limits.maxPct);
   }
 
-  private updateTrailingStop(userId: string, trade: DemoTrade, price: number, trailingPct: number, history: Array<{ price: number; at: number }>): DemoTrade {
+  private updateTrailingStop(userId: string, trade: DemoTrade, price: number, trailingPct: number, history: Array<{ price: number; at: number }>, triggerR: number | null = null): DemoTrade {
     if (!Number.isFinite(price) || price <= 0) return trade;
     const adaptivePct = this.adaptiveTrailingPct(trade, price, trailingPct, history);
     const nextStop = trade.direction === "BUY"
       ? Math.max(trade.stopLoss, price * (1 - adaptivePct))
       : Math.min(trade.stopLoss, price * (1 + adaptivePct));
-    if (nextStop === trade.stopLoss) return trade;
+    if (nextStop === trade.stopLoss && trade.trailing && (triggerR === null || trade.trailingTriggerR != null)) return trade;
     let timeline = safeManagementTimeline(trade.managementTimeline ?? []);
     if (timeline.length === 0) timeline = [openedTimelineEvent(trade)];
-    const trailingSeen = timeline.some((event) => event.type === "TRAILING_ACTIVATED" || event.type === "TRAILING_UPDATED");
+    const trailingSeen = trade.trailing || timeline.some((event) => event.type === "TRAILING_ACTIVATED" || event.type === "TRAILING_UPDATED");
     const stopMoveUSDC = Math.abs(nextStop - trade.stopLoss) * (trade.remainingPositionSize ?? trade.positionSize);
     const shouldRecordTrailing = !trailingSeen || stopMoveUSDC >= managementToleranceUSDC(trade, MANAGEMENT_TRAILING_TOLERANCE_R);
     if (shouldRecordTrailing) {
       timeline = appendTimelineEvent(
         timeline,
-        this.timelineEvent(trailingSeen ? "TRAILING_UPDATED" : "TRAILING_ACTIVATED", trade, price, trailingSeen ? "Trailing atualizado." : "Trailing ativado.", { previousStop: trade.stopLoss, nextStop, adaptivePct }),
+        this.timelineEvent(trailingSeen ? "TRAILING_UPDATED" : "TRAILING_ACTIVATED", trade, price, trailingSeen ? "Trailing atualizado." : "Trailing ativado.", { previousStop: trade.stopLoss, nextStop, adaptivePct, trailingTriggerR: triggerR ?? trade.trailingTriggerR ?? null }),
       );
     }
     const updatedAt = nowIso();
-    this.db.prepare("UPDATE demo_positions SET stop_loss = ?, last_management_update_at = ?, management_timeline_json = ?, updated_at = ? WHERE user_id = ? AND id = ? AND status = 'OPEN'")
-      .run(nextStop, updatedAt, JSON.stringify(timeline), updatedAt, userId, trade.id);
-    const next = { ...trade, stopLoss: nextStop, lastManagementUpdateAt: updatedAt, managementTimeline: timeline };
+    const trailingTriggerR = trade.trailingTriggerR ?? triggerR;
+    this.db.prepare("UPDATE demo_positions SET stop_loss = ?, trailing = 1, trailing_trigger_r = ?, last_management_update_at = ?, management_timeline_json = ?, updated_at = ? WHERE user_id = ? AND id = ? AND status = 'OPEN'")
+      .run(nextStop, trailingTriggerR, updatedAt, JSON.stringify(timeline), updatedAt, userId, trade.id);
+    const next = { ...trade, stopLoss: nextStop, trailing: true, trailingTriggerR, lastManagementUpdateAt: updatedAt, managementTimeline: timeline };
     const bucket = Math.floor(Date.now() / envInt("ORACULO_TRAILING_ALERT_COOLDOWN_MS", 300_000, 60_000, 3_600_000));
     this.createNotification(userId, {
       type: "trailing_updated",
@@ -4708,9 +4793,9 @@ export class DemoStore {
       source: "DEMO",
       relatedEventId: trade.id,
       idempotencyKey: `${userId}:trailing_updated:${trade.id}:${bucket}`,
-      adminMetadata: { trade: next, nextStop, adaptivePct, price },
+      adminMetadata: { trade: next, nextStop, adaptivePct, price, trailingTriggerR },
     });
-    return this.appendPositionReason(userId, next, `TRAILING: stop ajustado para ${nextStop.toFixed(8)} usando ${(adaptivePct * 100).toFixed(3)}% adaptativo pela volatilidade recente.`);
+    return this.appendPositionReason(userId, next, `TRAILING: stop ajustado para ${nextStop.toFixed(8)} apos gatilho ${trailingTriggerR ?? "-"}R usando ${(adaptivePct * 100).toFixed(3)}% adaptativo pela volatilidade recente.`);
   }
 
   private lossOfStrengthReached(userId: string, trade: DemoTrade, price: number, thresholdPct: number, history: Array<{ price: number; at: number }>): boolean {
@@ -4869,25 +4954,39 @@ export class DemoStore {
     const owner = this.db.prepare("SELECT user_id FROM demo_trades WHERE id = ?").get(trade.id) as Record<string, unknown> | undefined;
     if (owner && owner.user_id !== userId) throw new HttpError(404, "trade not found");
     const now = nowIso();
+    const stopLoss = trade.stopLoss ?? trade.stopLossOriginal;
+    const stopLossOriginal = trade.stopLossOriginal ?? stopLoss;
+    const remainingPositionSize = trade.remainingPositionSize ?? trade.positionSize;
+    const realizedPnlUSDC = trade.realizedPnlUSDC ?? 0;
+    const partialPnlUSDC = trade.partialPnlUSDC ?? 0;
+    const target1Hit = trade.target1Hit ?? false;
+    const isBreakevenStop = trade.isBreakevenStop ?? false;
+    const trailing = trade.trailing ?? false;
+    const partialTriggerR = trade.partialTriggerR ?? 1;
+    const trailingTriggerR = trade.trailingTriggerR ?? 1.5;
+    const managementTimeline = trade.managementTimeline ?? [];
     this.db.prepare(`
       INSERT INTO demo_trades
         (id, user_id, pair, direction, status, open_time, close_time, entry, close_price, stop_loss, stop_loss_original,
          target1, target2, balance_at_open, risk_amount, position_size, remaining_position_size, risk_reward, pnl_usdc, pnl_pct,
-         realized_pnl_usdc, partial_pnl_usdc, target1_close_price, max_duration_ms,
+         realized_pnl_usdc, partial_pnl_usdc, target1_close_price, partial_trigger_r, trailing_trigger_r, max_duration_ms,
          initial_risk_amount, max_price_since_entry, min_price_since_entry,
          max_unrealized_pnl_usdc, min_unrealized_pnl_usdc,
          max_unrealized_pnl_before_partial, max_unrealized_pnl_after_partial,
          mfe_usdc, mae_usdc, mfe_r, mae_r,
          peak_giveback_usdc, open_giveback_usdc, total_giveback_usdc, peak_giveback_pct,
          last_management_update_at, management_timeline_json,
-         exit_reason, target1_hit, is_breakeven_stop, signal_reasons_json, market_conditions, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         exit_reason, target1_hit, is_breakeven_stop, trailing, signal_reasons_json, market_conditions, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         status = excluded.status, close_time = excluded.close_time, close_price = excluded.close_price,
         pnl_usdc = excluded.pnl_usdc, pnl_pct = excluded.pnl_pct, exit_reason = excluded.exit_reason,
         remaining_position_size = excluded.remaining_position_size,
         realized_pnl_usdc = excluded.realized_pnl_usdc, partial_pnl_usdc = excluded.partial_pnl_usdc,
-        target1_close_price = excluded.target1_close_price, max_duration_ms = excluded.max_duration_ms,
+        target1_close_price = excluded.target1_close_price,
+        partial_trigger_r = excluded.partial_trigger_r,
+        trailing_trigger_r = excluded.trailing_trigger_r,
+        max_duration_ms = excluded.max_duration_ms,
         initial_risk_amount = excluded.initial_risk_amount,
         max_price_since_entry = excluded.max_price_since_entry,
         min_price_since_entry = excluded.min_price_since_entry,
@@ -4906,13 +5005,16 @@ export class DemoStore {
         last_management_update_at = excluded.last_management_update_at,
         management_timeline_json = excluded.management_timeline_json,
         stop_loss = excluded.stop_loss, target1_hit = excluded.target1_hit,
-        is_breakeven_stop = excluded.is_breakeven_stop, updated_at = excluded.updated_at
+        is_breakeven_stop = excluded.is_breakeven_stop,
+        trailing = excluded.trailing,
+        updated_at = excluded.updated_at
     `).run(
       trade.id, userId, trade.pair, trade.direction, trade.status, trade.openTime, trade.closeTime ?? null,
-      trade.entry, trade.closePrice ?? null, trade.stopLoss, trade.stopLossOriginal, trade.target1, trade.target2,
-      trade.balanceAtOpen, trade.riskAmount, trade.positionSize, trade.remainingPositionSize ?? trade.positionSize,
+      trade.entry, trade.closePrice ?? null, stopLoss, stopLossOriginal, trade.target1, trade.target2,
+      trade.balanceAtOpen, trade.riskAmount, trade.positionSize, remainingPositionSize,
       trade.riskReward, trade.pnlUSDC ?? null, trade.pnlPct ?? null,
-      trade.realizedPnlUSDC ?? null, trade.partialPnlUSDC ?? null, trade.target1ClosePrice ?? null, trade.maxDurationMs ?? null,
+      realizedPnlUSDC, partialPnlUSDC, trade.target1ClosePrice ?? null,
+      partialTriggerR, trailingTriggerR, trade.maxDurationMs ?? null,
       trade.initialRiskAmount ?? trade.riskAmount,
       trade.maxPriceSinceEntry ?? null,
       trade.minPriceSinceEntry ?? null,
@@ -4929,8 +5031,8 @@ export class DemoStore {
       trade.totalGivebackUSDC ?? null,
       trade.peakGivebackPct ?? null,
       trade.lastManagementUpdateAt ?? null,
-      trade.managementTimeline ? JSON.stringify(trade.managementTimeline) : null,
-      trade.exitReason ?? null, Number(trade.target1Hit), Number(trade.isBreakevenStop),
+      JSON.stringify(managementTimeline),
+      trade.exitReason ?? null, Number(target1Hit), Number(isBreakevenStop), Number(trailing),
       JSON.stringify(trade.signalReasons), trade.marketConditions, now, now,
     );
   }
