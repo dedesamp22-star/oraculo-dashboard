@@ -15,6 +15,7 @@ export type ReentryCooldownReason = "REENTRY_COOLDOWN_TIMEOUT" | "REENTRY_COOLDO
 export type DemoDecision = "BUY" | "SELL" | "SEM ENTRADA";
 export type ManagementTimelineEventType =
   | "OPENED"
+  | "TICK"
   | "NEW_MFE"
   | "NEW_MAE"
   | "TARGET_1"
@@ -754,10 +755,40 @@ function safeTimelineEvent(value: unknown): ManagementTimelineEvent | null {
   };
 }
 
+function isImportantManagementTimelineEvent(event: ManagementTimelineEvent): boolean {
+  return [
+    "OPENED",
+    "TARGET_1",
+    "PARTIAL_EXECUTED",
+    "BREAKEVEN_ACTIVATED",
+    "TRAILING_ACTIVATED",
+    "TARGET_2",
+    "STOP",
+    "TIMEOUT",
+    "LOSS_OF_STRENGTH_DETECTED",
+    "CLOSED",
+  ].includes(event.type);
+}
+
+function compactManagementTimeline(events: ManagementTimelineEvent[]): ManagementTimelineEvent[] {
+  if (events.length <= MANAGEMENT_TIMELINE_LIMIT) return events;
+  const indexed = events.map((event, index) => ({ event, index }));
+  const important = indexed.filter(({ event }) => isImportantManagementTimelineEvent(event));
+  if (important.length >= MANAGEMENT_TIMELINE_LIMIT) {
+    return important.slice(-MANAGEMENT_TIMELINE_LIMIT).map(({ event }) => event);
+  }
+  const recentCommon = indexed
+    .filter(({ event }) => !isImportantManagementTimelineEvent(event))
+    .slice(-(MANAGEMENT_TIMELINE_LIMIT - important.length));
+  return [...important, ...recentCommon]
+    .sort((left, right) => left.index - right.index)
+    .map(({ event }) => event);
+}
+
 function safeManagementTimeline(value: unknown): ManagementTimelineEvent[] {
   const parsed = typeof value === "string" ? jsonParse<unknown>(value, []) : value;
   if (!Array.isArray(parsed)) return [];
-  return parsed.map(safeTimelineEvent).filter((event): event is ManagementTimelineEvent => event !== null).slice(-MANAGEMENT_TIMELINE_LIMIT);
+  return compactManagementTimeline(parsed.map(safeTimelineEvent).filter((event): event is ManagementTimelineEvent => event !== null));
 }
 
 function openedTimelineEvent(trade: Pick<DemoTrade, "entry" | "openTime">): ManagementTimelineEvent {
@@ -775,26 +806,7 @@ function appendTimelineEvent(timeline: ManagementTimelineEvent[] | undefined, ev
   const next = events.length === 0 && event.type !== "OPENED"
     ? [openedTimelineEvent({ entry: event.price ?? 0, openTime: Date.now() }), event]
     : [...events, event];
-  if (next.length <= MANAGEMENT_TIMELINE_LIMIT) return next;
-  const opened = next.find((item) => item.type === "OPENED");
-  let closed: ManagementTimelineEvent | undefined;
-  for (let index = next.length - 1; index >= 0; index -= 1) {
-    const item: ManagementTimelineEvent = next[index];
-    if (item.type === "CLOSED") {
-      closed = item;
-      break;
-    }
-  }
-  const protectedIds = new Set<ManagementTimelineEvent>();
-  if (opened) protectedIds.add(opened);
-  if (closed) protectedIds.add(closed);
-  const middle = next.filter((item) => !protectedIds.has(item));
-  const keepMiddle = middle.slice(-(MANAGEMENT_TIMELINE_LIMIT - protectedIds.size));
-  return [
-    ...(opened ? [opened] : []),
-    ...keepMiddle,
-    ...(closed && closed !== opened ? [closed] : []),
-  ].slice(-MANAGEMENT_TIMELINE_LIMIT);
+  return compactManagementTimeline(next);
 }
 
 function openPnlFor(trade: Pick<DemoTrade, "direction" | "entry" | "positionSize" | "remainingPositionSize">, price: number): number {
@@ -4518,6 +4530,35 @@ export class DemoStore {
     };
   }
 
+  private recordManagementTick(userId: string, trade: DemoTrade, price: number, action: string, noActionReason: string | null = null): DemoTrade {
+    const latest = this.getOpenPosition(userId, trade.id);
+    if (!latest) return trade;
+    const currentR = this.openRiskMultiple(latest, price);
+    const event = this.timelineEvent("TICK", latest, price, "Tick de gestao processado.", {
+      action,
+      noActionReason,
+      status: latest.status,
+      direction: latest.direction,
+      entry: latest.entry,
+      stopLossOriginal: latest.stopLossOriginal,
+      stopLoss: latest.stopLoss,
+      target1: latest.target1,
+      target2: latest.target2,
+      initialRiskAmount: latest.initialRiskAmount ?? latest.riskAmount,
+      currentR,
+      remainingPositionSize: latest.remainingPositionSize ?? latest.positionSize,
+      target1Hit: latest.target1Hit,
+      partialExecuted: latest.target1Hit,
+      isBreakevenStop: latest.isBreakevenStop,
+      trailing: latest.trailing,
+    });
+    const timeline = appendTimelineEvent(latest.managementTimeline ?? [], event);
+    const updatedAt = nowIso();
+    this.db.prepare("UPDATE demo_positions SET last_management_update_at = ?, management_timeline_json = ?, updated_at = ? WHERE user_id = ? AND id = ? AND status = 'OPEN'")
+      .run(updatedAt, JSON.stringify(timeline), updatedAt, userId, latest.id);
+    return { ...latest, lastManagementUpdateAt: updatedAt, managementTimeline: timeline };
+  }
+
   private updatePositionObservability(userId: string, trade: DemoTrade, price: number): DemoTrade {
     if (!Number.isFinite(price) || price <= 0) return trade;
     const currentOpenPnl = openPnlFor(trade, price);
@@ -4648,7 +4689,31 @@ export class DemoStore {
     return this.unrealizedFor(trade, price) / initialRisk;
   }
 
+  private managementStateFingerprint(trade: DemoTrade): string {
+    return canonical({
+      status: trade.status,
+      stopLoss: trade.stopLoss,
+      target1Hit: trade.target1Hit,
+      isBreakevenStop: trade.isBreakevenStop,
+      trailing: trade.trailing,
+      trailingTriggerR: trade.trailingTriggerR ?? null,
+      remainingPositionSize: trade.remainingPositionSize ?? trade.positionSize,
+      realizedPnlUSDC: trade.realizedPnlUSDC ?? 0,
+      partialPnlUSDC: trade.partialPnlUSDC ?? 0,
+      maxPriceSinceEntry: trade.maxPriceSinceEntry ?? null,
+      minPriceSinceEntry: trade.minPriceSinceEntry ?? null,
+      maxUnrealizedPnlUSDC: trade.maxUnrealizedPnlUSDC ?? null,
+      minUnrealizedPnlUSDC: trade.minUnrealizedPnlUSDC ?? null,
+      mfeUSDC: trade.mfeUSDC ?? null,
+      maeUSDC: trade.maeUSDC ?? null,
+      peakGivebackUSDC: trade.peakGivebackUSDC ?? null,
+      openGivebackUSDC: trade.openGivebackUSDC ?? null,
+      totalGivebackUSDC: trade.totalGivebackUSDC ?? null,
+    });
+  }
+
   private applyPriceToPosition(userId: string, trade: DemoTrade, price: number): void {
+    const initialManagementFingerprint = this.managementStateFingerprint(trade);
     const isBuy = trade.direction === "BUY";
     const settings = this.tradeManagementSettings(userId);
     const riskSettings = demoManagementSettings();
@@ -4656,6 +4721,7 @@ export class DemoStore {
     trade = this.updatePositionObservability(userId, trade, price);
 
     if (isBuy ? price <= trade.stopLoss : price >= trade.stopLoss) {
+      trade = this.recordManagementTick(userId, trade, price, "STOP_TRIGGERED");
       const reason: ManagedTradeExitReason = trade.isBreakevenStop ? "BREAKEVEN" : "STOP_LOSS";
       const key = `close:${trade.id}:${reason}`;
       if (this.recordEvent(userId, key, "close", trade.id)) this.closePosition(userId, trade, trade.stopLoss, reason);
@@ -4663,6 +4729,7 @@ export class DemoStore {
     }
 
     if (isBuy ? price >= trade.target2 : price <= trade.target2) {
+      trade = this.recordManagementTick(userId, trade, price, "TARGET_2_TRIGGERED");
       const key = `close:${trade.id}:TARGET_2`;
       if (this.recordEvent(userId, key, "close", trade.id)) this.closePosition(userId, trade, trade.target2, "TARGET_2");
       return;
@@ -4673,17 +4740,20 @@ export class DemoStore {
     if (!trade.target1Hit && currentR !== null && currentR >= riskSettings.partialTriggerR) {
       const key = `partial:${trade.id}:risk:${riskSettings.partialTriggerR}`;
       if (this.recordEvent(userId, key, "target1", trade.id)) {
-        current = this.realizeRiskPartial(userId, trade, price, riskSettings);
+        current = this.recordManagementTick(userId, current, price, "PARTIAL_TRIGGERED");
+        current = this.realizeRiskPartial(userId, current, price, riskSettings);
       }
     }
 
     const trailingR = this.openRiskMultiple(current, price);
     if (current.target1Hit && riskSettings.trailingEnabled && trailingR !== null && trailingR >= riskSettings.trailingTriggerR) {
+      current = this.recordManagementTick(userId, current, price, "TRAILING_EVALUATED");
       current = this.updateTrailingStop(userId, current, price, settings.trailingStopPct, history, riskSettings.trailingTriggerR);
     }
 
     if (current.target1Hit) {
       if (this.lossOfStrengthReached(userId, current, price, settings.lossOfStrengthPct, history)) {
+        current = this.recordManagementTick(userId, current, price, "LOSS_OF_STRENGTH_TRIGGERED");
         const key = `close:${current.id}:LOSS_OF_STRENGTH`;
         if (this.recordEvent(userId, key, "close", current.id)) this.closePosition(userId, current, price, "LOSS_OF_STRENGTH");
         return;
@@ -4691,8 +4761,14 @@ export class DemoStore {
     }
 
     if (tradeAgeMs(current) >= (current.maxDurationMs ?? settings.maxDurationMs)) {
+      current = this.recordManagementTick(userId, current, price, "TIMEOUT_TRIGGERED");
       const key = `close:${current.id}:TIMEOUT`;
       if (this.recordEvent(userId, key, "close", current.id)) this.closePosition(userId, current, price, "TIMEOUT");
+      return;
+    }
+    const latest = this.getOpenPosition(userId, current.id) ?? current;
+    if (this.managementStateFingerprint(latest) !== initialManagementFingerprint) {
+      this.recordManagementTick(userId, latest, price, "NO_ACTION", "Nenhum gatilho de stop, alvo, parcial, trailing, perda de forca ou timeout foi acionado.");
     }
   }
 
@@ -4825,37 +4901,44 @@ export class DemoStore {
 
   private updateTrailingStop(userId: string, trade: DemoTrade, price: number, trailingPct: number, history: Array<{ price: number; at: number }>, triggerR: number | null = null): DemoTrade {
     if (!Number.isFinite(price) || price <= 0) return trade;
-    const adaptivePct = this.adaptiveTrailingPct(trade, price, trailingPct, history);
-    const nextStop = trade.direction === "BUY"
-      ? Math.max(trade.stopLoss, price * (1 - adaptivePct))
-      : Math.min(trade.stopLoss, price * (1 + adaptivePct));
-    if (nextStop === trade.stopLoss && trade.trailing && (triggerR === null || trade.trailingTriggerR != null)) return trade;
-    let timeline = safeManagementTimeline(trade.managementTimeline ?? []);
-    if (timeline.length === 0) timeline = [openedTimelineEvent(trade)];
-    const trailingSeen = trade.trailing || timeline.some((event) => event.type === "TRAILING_ACTIVATED" || event.type === "TRAILING_UPDATED");
-    const stopMoveUSDC = Math.abs(nextStop - trade.stopLoss) * (trade.remainingPositionSize ?? trade.positionSize);
-    const shouldRecordTrailing = !trailingSeen || stopMoveUSDC >= managementToleranceUSDC(trade, MANAGEMENT_TRAILING_TOLERANCE_R);
+    const latest = this.getOpenPosition(userId, trade.id);
+    if (!latest) return trade;
+    const adaptivePct = this.adaptiveTrailingPct(latest, price, trailingPct, history);
+    const breakevenStop = latest.isBreakevenStop
+      ? latest.direction === "BUY"
+        ? Math.max(latest.stopLoss, latest.entry)
+        : Math.min(latest.stopLoss, latest.entry)
+      : latest.stopLoss;
+    const nextStop = latest.direction === "BUY"
+      ? Math.max(breakevenStop, price * (1 - adaptivePct))
+      : Math.min(breakevenStop, price * (1 + adaptivePct));
+    if (nextStop === latest.stopLoss && latest.trailing && (triggerR === null || latest.trailingTriggerR != null)) return latest;
+    let timeline = safeManagementTimeline(latest.managementTimeline ?? []);
+    if (timeline.length === 0) timeline = [openedTimelineEvent(latest)];
+    const trailingSeen = latest.trailing || timeline.some((event) => event.type === "TRAILING_ACTIVATED" || event.type === "TRAILING_UPDATED");
+    const stopMoveUSDC = Math.abs(nextStop - latest.stopLoss) * (latest.remainingPositionSize ?? latest.positionSize);
+    const shouldRecordTrailing = !trailingSeen || stopMoveUSDC >= managementToleranceUSDC(latest, MANAGEMENT_TRAILING_TOLERANCE_R);
     if (shouldRecordTrailing) {
       timeline = appendTimelineEvent(
         timeline,
-        this.timelineEvent(trailingSeen ? "TRAILING_UPDATED" : "TRAILING_ACTIVATED", trade, price, trailingSeen ? "Trailing atualizado." : "Trailing ativado.", { previousStop: trade.stopLoss, nextStop, adaptivePct, trailingTriggerR: triggerR ?? trade.trailingTriggerR ?? null }),
+        this.timelineEvent(trailingSeen ? "TRAILING_UPDATED" : "TRAILING_ACTIVATED", latest, price, trailingSeen ? "Trailing atualizado." : "Trailing ativado.", { previousStop: latest.stopLoss, nextStop, adaptivePct, trailingTriggerR: triggerR ?? latest.trailingTriggerR ?? null }),
       );
     }
     const updatedAt = nowIso();
-    const trailingTriggerR = trade.trailingTriggerR ?? triggerR;
+    const trailingTriggerR = latest.trailingTriggerR ?? triggerR;
     this.db.prepare("UPDATE demo_positions SET stop_loss = ?, trailing = 1, trailing_trigger_r = ?, last_management_update_at = ?, management_timeline_json = ?, updated_at = ? WHERE user_id = ? AND id = ? AND status = 'OPEN'")
-      .run(nextStop, trailingTriggerR, updatedAt, JSON.stringify(timeline), updatedAt, userId, trade.id);
-    const next = { ...trade, stopLoss: nextStop, trailing: true, trailingTriggerR, lastManagementUpdateAt: updatedAt, managementTimeline: timeline };
+      .run(nextStop, trailingTriggerR, updatedAt, JSON.stringify(timeline), updatedAt, userId, latest.id);
+    const next = { ...latest, stopLoss: nextStop, trailing: true, trailingTriggerR, lastManagementUpdateAt: updatedAt, managementTimeline: timeline };
     const bucket = Math.floor(Date.now() / envInt("ORACULO_TRAILING_ALERT_COOLDOWN_MS", 300_000, 60_000, 3_600_000));
     this.createNotification(userId, {
       type: "trailing_updated",
       title: "Trailing atualizado",
-      message: `${trade.pair}: stop ajustado para ${nextStop.toFixed(8)}.`,
+      message: `${latest.pair}: stop ajustado para ${nextStop.toFixed(8)}.`,
       severity: "info",
-      symbol: trade.pair,
+      symbol: latest.pair,
       source: "DEMO",
-      relatedEventId: trade.id,
-      idempotencyKey: `${userId}:trailing_updated:${trade.id}:${bucket}`,
+      relatedEventId: latest.id,
+      idempotencyKey: `${userId}:trailing_updated:${latest.id}:${bucket}`,
       adminMetadata: { trade: next, nextStop, adaptivePct, price, trailingTriggerR },
     });
     return this.appendPositionReason(userId, next, `TRAILING: stop ajustado para ${nextStop.toFixed(8)} apos gatilho ${trailingTriggerR ?? "-"}R usando ${(adaptivePct * 100).toFixed(3)}% adaptativo pela volatilidade recente.`);
@@ -4919,7 +5002,17 @@ export class DemoStore {
         : exitReason === "LOSS_OF_STRENGTH"
           ? "LOSS_OF_STRENGTH_DETECTED"
           : "STOP";
-    timeline = appendTimelineEvent(timeline, this.timelineEvent(exitType, position, closePrice, `Saida por ${exitReason}.`, { exitReason, status, pnlUSDC }));
+    timeline = appendTimelineEvent(timeline, this.timelineEvent(exitType, position, closePrice, `Saida por ${exitReason}.`, {
+      exitReason,
+      status,
+      pnlUSDC,
+      action: exitReason === "TARGET_2" ? "CLOSE_REMAINING_POSITION" : "CLOSE_POSITION",
+      direction: position.direction,
+      remainingPositionSize: remainingSize,
+      stopLoss: position.stopLoss,
+      target2: position.target2,
+      realizedPnlUSDC: realizedBeforeClose,
+    }));
     timeline = appendTimelineEvent(timeline, {
       type: "CLOSED",
       at: new Date(closeTime).toISOString(),
