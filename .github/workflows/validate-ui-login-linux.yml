@@ -15,7 +15,7 @@ jobs:
       - name: Checkout UI commit
         uses: actions/checkout@v4
         with:
-          ref: 83b5f33ebec480e79ee882c4ca9741365f3468d4
+          ref: 7841df273082bae16e68a74dfc9c08e721c0a4f2
 
       - name: Setup Node
         uses: actions/setup-node@v4
