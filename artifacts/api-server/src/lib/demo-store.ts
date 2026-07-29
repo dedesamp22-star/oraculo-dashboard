@@ -11,6 +11,7 @@ export type TradeDirection = "BUY" | "SELL";
 export type TradeStatus = "OPEN" | "WIN" | "LOSS" | "BREAKEVEN";
 export type TradeExitReason = "STOP_LOSS" | "BREAKEVEN" | "TARGET_1" | "TARGET_2";
 export type ManagedTradeExitReason = TradeExitReason | "TIMEOUT" | "TIME_EXIT" | "TRAILING_STOP" | "LOSS_OF_STRENGTH" | "SESSION_END";
+export type ReentryCooldownReason = "REENTRY_COOLDOWN_TIMEOUT" | "REENTRY_COOLDOWN_STOP_LOSS";
 export type DemoDecision = "BUY" | "SELL" | "SEM ENTRADA";
 export type ManagementTimelineEventType =
   | "OPENED"
@@ -835,6 +836,16 @@ function envInt(name: string, fallback: number, min: number, max: number): numbe
   return Number.isInteger(value) && value >= min && value <= max ? value : fallback;
 }
 
+interface ReentryCooldownEntry {
+  pair: string;
+  direction: TradeDirection;
+  reason: ReentryCooldownReason;
+  expiresAt: string;
+  expiresAtMs: number;
+  createdAt: string;
+  createdAtMs: number;
+}
+
 function envNumber(name: string, fallback: number, min: number, max: number): number {
   const value = Number(process.env[name]);
   return Number.isFinite(value) && value >= min && value <= max ? value : fallback;
@@ -862,6 +873,28 @@ function demoManagementSettings() {
     moveStopToBreakeven: envBool("DEMO_MOVE_STOP_TO_BREAKEVEN", true),
     trailingEnabled: envBool("DEMO_TRAILING_ENABLED", true),
   };
+}
+
+function reentryCooldownReason(exitReason: ManagedTradeExitReason): ReentryCooldownReason | null {
+  if (exitReason === "TIMEOUT") return "REENTRY_COOLDOWN_TIMEOUT";
+  if (exitReason === "STOP_LOSS") return "REENTRY_COOLDOWN_STOP_LOSS";
+  return null;
+}
+
+function reentryCooldownDurationMs(reason: ReentryCooldownReason): number {
+  return reason === "REENTRY_COOLDOWN_TIMEOUT" ? 15 * 60 * 1000 : 30 * 60 * 1000;
+}
+
+function reentryCooldownKey(pair: string, direction: TradeDirection): string {
+  return `${pair.toUpperCase()}:${direction}`;
+}
+
+function reentryCooldownSettingKey(pair: string, direction: TradeDirection): string {
+  return `demo.reentryCooldown.${reentryCooldownKey(pair, direction)}`;
+}
+
+function formatRemainingMinutes(ms: number): number {
+  return Math.max(1, Math.ceil(ms / 60_000));
 }
 
 function sessionTtlSeconds(): number {
@@ -2171,6 +2204,30 @@ export class DemoStore {
 
   getAutomation(userId: string) {
     return this.getSetting(userId, "demo.automation", { enabled: false, symbol: "BTCUSDT" });
+  }
+
+  private setReentryCooldown(userId: string, trade: DemoTrade, exitReason: ManagedTradeExitReason, nowMs: number): void {
+    const reason = reentryCooldownReason(exitReason);
+    if (!reason) return;
+    const key = reentryCooldownSettingKey(trade.pair, trade.direction);
+    const expiresAtMs = nowMs + reentryCooldownDurationMs(reason);
+    const existing = this.getSetting<ReentryCooldownEntry | null>(userId, key, null);
+    if (existing && Number.isFinite(existing.expiresAtMs) && existing.expiresAtMs >= expiresAtMs) return;
+    this.setSetting(userId, key, {
+      pair: trade.pair,
+      direction: trade.direction,
+      reason,
+      expiresAt: new Date(expiresAtMs).toISOString(),
+      expiresAtMs,
+      createdAt: new Date(nowMs).toISOString(),
+      createdAtMs: nowMs,
+    });
+  }
+
+  private activeReentryCooldown(userId: string, pair: string, direction: TradeDirection, nowMs = Date.now()): (ReentryCooldownEntry & { remainingMs: number }) | null {
+    const cooldown = this.getSetting<ReentryCooldownEntry | null>(userId, reentryCooldownSettingKey(pair, direction), null);
+    if (!cooldown || !Number.isFinite(cooldown.expiresAtMs) || cooldown.expiresAtMs <= nowMs) return null;
+    return { ...cooldown, remainingMs: cooldown.expiresAtMs - nowMs };
   }
 
   recordWorkerDiagnostic(input: WorkerDiagnosticInput): WorkerDiagnosticAdminDto {
@@ -4309,6 +4366,12 @@ export class DemoStore {
       };
       const existingEvent = this.db.prepare("SELECT event_key FROM demo_events WHERE event_key = ?").get(`${userId}:${key}`);
       if (existingEvent) return blocked("sinal duplicado ja processado.");
+      const reentryCooldown = this.activeReentryCooldown(userId, pair, decision);
+      if (reentryCooldown) {
+        this.recordEvent(userId, key, "reentry_cooldown_signal_blocked", null);
+        const reason = `${reentryCooldown.reason}: ${pair} ${decision} bloqueado ate ${reentryCooldown.expiresAt}; restante ${formatRemainingMinutes(reentryCooldown.remainingMs)} min.`;
+        return blocked(reason, "BLOQUEADO_RISCO");
+      }
       if (positions.some((position) => position.pair === pair)) {
         this.recordEvent(userId, key, "duplicate_signal_blocked", null);
         return blocked("ja existe posicao aberta para este par.");
@@ -4882,6 +4945,7 @@ export class DemoStore {
       managementTimeline: timeline,
     };
     this.upsertTrade(userId, closed);
+    this.setReentryCooldown(userId, closed, exitReason, closeTime);
     this.db.prepare("DELETE FROM demo_positions WHERE user_id = ? AND id = ?").run(userId, position.id);
     const account = this.getAccount(userId);
     const stats = { ...account.dailyStats };
