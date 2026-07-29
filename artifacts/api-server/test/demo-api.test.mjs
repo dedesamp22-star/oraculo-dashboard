@@ -424,7 +424,7 @@ test("demo price endpoint rejects missing pair without mutating open positions",
     const response = await postRawPrice(server.base, cookie, { price: 1913 });
     assert.equal(response.status, 400);
     const error = await json(response);
-    assert.match(error.message, /pair must be a non-empty string/);
+    assert.match(error.error, /pair must be a non-empty string/);
     const after = (await authedJson(server.base, cookie, "/api/demo/positions")).map(positionSnapshot);
     assert.deepEqual(after, before);
   } finally {
