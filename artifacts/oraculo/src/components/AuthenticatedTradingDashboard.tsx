@@ -8,6 +8,7 @@ import {
   CartesianGrid, Line, LineChart, ReferenceDot, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
 import type { AuthUser, EngineAuditEntry } from '../lib/demoApi';
+import { fetchKlines, type Candle } from '../lib/binance';
 import type { DemoSession, DemoTrade } from '../lib/demo';
 import { fmtDuration } from '../lib/demo';
 import type { TVInterval } from './TradingViewChart';
@@ -35,7 +36,7 @@ interface AuthenticatedTradingDashboardProps {
   onTvIntervalChange: (interval: TVInterval) => void;
   market: {
     price: number | null;
-    candles5m: Array<{ closeTime?: number; close: number }>;
+    candles5m: Candle[];
     lastUpdate: Date | null;
     error: string | null;
     loading: boolean;
@@ -100,8 +101,23 @@ function signedColor(value: number | null | undefined): string {
   return value > 0 ? 'text-[#00ff88]' : 'text-[#ff4d4d]';
 }
 
-function tradeCurrentPrice(trade: DemoTrade, prices: Record<string, number | null>, activePrice: number | null): number | null {
-  return prices[trade.pair] ?? (trade.id ? null : activePrice);
+function isValidPrice(value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+function tradeCurrentPrice(
+  trade: DemoTrade,
+  prices: Record<string, number | null>,
+  activePrice: number | null,
+  activeTrade: DemoTrade | null,
+): number | null {
+  const pairPrice = prices[trade.pair];
+  if (isValidPrice(pairPrice)) return pairPrice;
+
+  const sameActiveTrade = activeTrade?.id === trade.id && activeTrade.pair === trade.pair;
+  if (sameActiveTrade && isValidPrice(activePrice)) return activePrice;
+
+  return null;
 }
 
 function tradePnl(trade: DemoTrade, price: number | null): number | null {
@@ -113,7 +129,20 @@ function tradePnl(trade: DemoTrade, price: number | null): number | null {
 }
 
 function rrLabel(trade: DemoTrade): string {
-  return trade.riskReward || '1:2';
+  if (typeof trade.riskReward === 'string' && trade.riskReward.trim().length > 0) {
+    return trade.riskReward;
+  }
+
+  const entry = trade.entry;
+  const stop = trade.stopLossOriginal ?? trade.stopLoss;
+  const target = trade.target2;
+  if (!isValidPrice(entry) || !isValidPrice(stop) || !isValidPrice(target)) return '--';
+
+  const risk = Math.abs(entry - stop);
+  const reward = Math.abs(target - entry);
+  if (risk <= 0 || reward <= 0 || !Number.isFinite(risk) || !Number.isFinite(reward)) return '--';
+
+  return `1:${(reward / risk).toFixed(2)}`;
 }
 
 function selectedTradeFrom(openTrades: Trade[], session: DemoSession, selectedId: string | null): Trade | null {
@@ -124,18 +153,21 @@ function selectedTradeFrom(openTrades: Trade[], session: DemoSession, selectedId
   return openTrades[0] ?? session.activeTrade ?? null;
 }
 
-function makeChartData(trade: DemoTrade | null, currentPrice: number | null, market: AuthenticatedTradingDashboardProps['market']) {
-  if (trade) {
-    const points = [
-      { name: 'Entrada', price: trade.entry },
-      ...(typeof currentPrice === 'number' ? [{ name: 'Atual', price: currentPrice }] : []),
-    ];
-    return points.length > 1 ? points : [{ name: 'Entrada', price: trade.entry }, { name: 'Atual', price: trade.entry }];
-  }
-  return market.candles5m.slice(-42).map((candle, index) => ({
-    name: String(index + 1),
+function makeChartData(candles: Candle[]) {
+  return candles.slice(-90).map((candle) => ({
+    name: new Date(candle.closeTime).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
     price: candle.close,
+    rawTime: candle.closeTime,
   }));
+}
+
+type ChartPoint = ReturnType<typeof makeChartData>[number];
+
+function nearestPointByTime(data: ChartPoint[], timestamp: number): ChartPoint | null {
+  if (data.length === 0 || !Number.isFinite(timestamp)) return null;
+  return data.reduce((nearest, point) => (
+    Math.abs(point.rawTime - timestamp) < Math.abs(nearest.rawTime - timestamp) ? point : nearest
+  ));
 }
 
 function MiniMetric({ label, value, tone = 'neutral' }: { label: string; value: string; tone?: 'neutral' | 'gold' | 'green' | 'red' | 'blue' }) {
@@ -209,14 +241,23 @@ function Sidebar({ area, setArea, user, onLogout }: { area: DashboardArea; setAr
   );
 }
 
-function TradingLevelsChart({ trade, currentPrice, selectedPair, market }: {
+function TradingLevelsChart({ trade, currentPrice, selectedPair, candles, loading, error }: {
   trade: DemoTrade | null;
   currentPrice: number | null;
   selectedPair: string;
-  market: AuthenticatedTradingDashboardProps['market'];
+  candles: Candle[];
+  loading: boolean;
+  error: string | null;
 }) {
-  const data = useMemo(() => makeChartData(trade, currentPrice, market), [trade, currentPrice, market]);
+  const data = useMemo(() => makeChartData(candles), [candles]);
   const directionColor = trade?.direction === 'SELL' ? '#ff4d4d' : '#00ff88';
+  const entryPoint = trade ? nearestPointByTime(data, trade.openTime) : null;
+  const levels = trade ? [trade.entry, trade.stopLoss, trade.target1, trade.target2, currentPrice].filter(isValidPrice) : [currentPrice].filter(isValidPrice);
+  const chartValues = [...data.map((point) => point.price), ...levels];
+  const minPrice = chartValues.length > 0 ? Math.min(...chartValues) : 0;
+  const maxPrice = chartValues.length > 0 ? Math.max(...chartValues) : 1;
+  const pricePadding = Math.max((maxPrice - minPrice) * 0.08, Math.abs(maxPrice) * 0.001, 0.01);
+
   return (
     <div className="h-[520px] min-h-[360px] w-full border border-[#2a2419] bg-[#08090a] p-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
@@ -231,35 +272,44 @@ function TradingLevelsChart({ trade, currentPrice, selectedPair, market }: {
           </div>
         )}
       </div>
-      <ResponsiveContainer width="100%" height="86%">
-        <LineChart data={data} margin={{ top: 20, right: 34, bottom: 12, left: 6 }}>
-          <CartesianGrid stroke="rgba(212,175,55,0.08)" vertical={false} />
-          <XAxis dataKey="name" stroke="#71717a" tick={{ fontSize: 10 }} />
-          <YAxis domain={['auto', 'auto']} orientation="right" stroke="#71717a" tick={{ fontSize: 10 }} width={78} />
-          <Tooltip
-            contentStyle={{ background: '#09090b', border: '1px solid #2a2419', color: '#f4f4f5' }}
-            formatter={(value) => [fmtCurrency(Number(value)), 'Preco']}
-          />
-          <Line type="monotone" dataKey="price" stroke="#d4af37" dot={false} strokeWidth={2} isAnimationActive={false} />
-          {trade && (
-            <>
-              <ReferenceLine y={trade.entry} stroke="#f4f4f5" strokeDasharray="4 4" label={{ value: 'Entrada', fill: '#f4f4f5', fontSize: 11 }} />
-              <ReferenceLine y={trade.stopLoss} stroke="#ff4d4d" strokeDasharray="6 4" label={{ value: 'Stop', fill: '#ff4d4d', fontSize: 11 }} />
-              <ReferenceLine y={trade.target1} stroke="#00ff88" strokeDasharray="4 4" label={{ value: 'Alvo 1', fill: '#00ff88', fontSize: 11 }} />
-              <ReferenceLine y={trade.target2} stroke="#00ff88" strokeDasharray="8 4" label={{ value: 'Alvo 2', fill: '#00ff88', fontSize: 11 }} />
-              <ReferenceDot x="Entrada" y={trade.entry} r={5} fill={directionColor} stroke="#09090b" label={{ value: trade.direction, fill: directionColor, fontSize: 11, position: 'top' }} />
-            </>
-          )}
-        </LineChart>
-      </ResponsiveContainer>
+      {loading ? (
+        <div className="flex h-[86%] items-center justify-center border border-[#171717] text-xs uppercase tracking-[0.18em] text-zinc-500">Carregando historico real...</div>
+      ) : error ? (
+        <div className="flex h-[86%] items-center justify-center border border-[#171717] px-4 text-center text-sm text-[#ff4d4d]">{error}</div>
+      ) : data.length === 0 ? (
+        <div className="flex h-[86%] items-center justify-center border border-[#171717] text-sm text-zinc-500">Historico indisponivel para este ativo.</div>
+      ) : (
+        <ResponsiveContainer width="100%" height="86%">
+          <LineChart data={data} margin={{ top: 20, right: 34, bottom: 12, left: 6 }}>
+            <CartesianGrid stroke="rgba(212,175,55,0.08)" vertical={false} />
+            <XAxis dataKey="name" stroke="#71717a" tick={{ fontSize: 10 }} minTickGap={28} />
+            <YAxis domain={[minPrice - pricePadding, maxPrice + pricePadding]} orientation="right" stroke="#71717a" tick={{ fontSize: 10 }} width={78} />
+            <Tooltip
+              contentStyle={{ background: '#09090b', border: '1px solid #2a2419', color: '#f4f4f5' }}
+              formatter={(value) => [fmtCurrency(Number(value)), 'Preco']}
+            />
+            <Line type="monotone" dataKey="price" stroke="#d4af37" dot={false} strokeWidth={2} isAnimationActive={false} />
+            {trade && (
+              <>
+                <ReferenceLine y={trade.entry} stroke="#f4f4f5" strokeDasharray="4 4" label={{ value: 'Entrada', fill: '#f4f4f5', fontSize: 11 }} />
+                <ReferenceLine y={trade.stopLoss} stroke="#ff4d4d" strokeDasharray="6 4" label={{ value: 'Stop', fill: '#ff4d4d', fontSize: 11 }} />
+                <ReferenceLine y={trade.target1} stroke="#00ff88" strokeDasharray="4 4" label={{ value: 'Alvo 1', fill: '#00ff88', fontSize: 11 }} />
+                <ReferenceLine y={trade.target2} stroke="#00ff88" strokeDasharray="8 4" label={{ value: 'Alvo 2', fill: '#00ff88', fontSize: 11 }} />
+                {entryPoint && <ReferenceDot x={entryPoint.name} y={trade.entry} r={5} fill={directionColor} stroke="#09090b" label={{ value: trade.direction, fill: directionColor, fontSize: 11, position: 'top' }} />}
+              </>
+            )}
+          </LineChart>
+        </ResponsiveContainer>
+      )}
     </div>
   );
 }
 
-function TradeTable({ trades, prices, activePrice, selectedId, onSelect }: {
+function TradeTable({ trades, prices, activePrice, activeTrade, selectedId, onSelect }: {
   trades: Trade[];
   prices: Record<string, number | null>;
   activePrice: number | null;
+  activeTrade: DemoTrade | null;
   selectedId: string | null;
   onSelect: (id: string) => void;
 }) {
@@ -278,7 +328,7 @@ function TradeTable({ trades, prices, activePrice, selectedId, onSelect }: {
         </thead>
         <tbody>
           {trades.map((trade) => {
-            const price = tradeCurrentPrice(trade, prices, activePrice);
+            const price = tradeCurrentPrice(trade, prices, activePrice, activeTrade);
             const pnl = tradePnl(trade, price);
             const selected = selectedId === trade.id;
             return (
@@ -334,12 +384,16 @@ export function AuthenticatedTradingDashboard(props: AuthenticatedTradingDashboa
   const [area, setArea] = useState<DashboardArea>('dashboard');
   const [tableTab, setTableTab] = useState<'positions' | 'orders' | 'history' | 'audit'>('positions');
   const [selectedTradeId, setSelectedTradeId] = useState<string | null>(null);
+  const [chartCandles, setChartCandles] = useState<Candle[]>(props.market.candles5m);
+  const [chartCandlesLoading, setChartCandlesLoading] = useState(false);
+  const [chartCandlesError, setChartCandlesError] = useState<string | null>(null);
 
   const openTrades = props.mobileOpenTrades.length > 0
     ? props.mobileOpenTrades
     : props.demoSession.activeTrade ? [props.demoSession.activeTrade] : [];
   const selectedTrade = selectedTradeFrom(openTrades, props.demoSession, selectedTradeId);
-  const selectedPrice = selectedTrade ? tradeCurrentPrice(selectedTrade, props.mobilePricesByPair, props.activeTradeCurrentPrice) : props.market.price;
+  const selectedPrice = selectedTrade ? tradeCurrentPrice(selectedTrade, props.mobilePricesByPair, props.activeTradeCurrentPrice, props.demoSession.activeTrade) : props.market.price;
+  const chartPair = selectedTrade?.pair ?? props.selectedPair;
   const totalTrades = props.demoSession.dailyStats?.totalTrades ?? 0;
   const wins = props.demoSession.dailyStats?.wins ?? 0;
   const winRate = totalTrades > 0 ? `${((wins / totalTrades) * 100).toFixed(1)}%` : '--';
@@ -350,6 +404,39 @@ export function AuthenticatedTradingDashboard(props: AuthenticatedTradingDashboa
     if (selectedTradeId && openTrades.some((trade) => trade.id === selectedTradeId)) return;
     setSelectedTradeId(openTrades[0]?.id ?? null);
   }, [openTrades, selectedTradeId]);
+
+  useEffect(() => {
+    if (chartPair === 'BTCUSDT' && props.market.candles5m.length > 0) {
+      setChartCandles(props.market.candles5m);
+      setChartCandlesLoading(false);
+      setChartCandlesError(null);
+      return;
+    }
+
+    let cancelled = false;
+    const controller = new AbortController();
+    setChartCandlesLoading(true);
+    setChartCandlesError(null);
+
+    fetchKlines(chartPair, '5m', 120, controller.signal)
+      .then((candles) => {
+        if (cancelled) return;
+        setChartCandles(candles);
+      })
+      .catch((error) => {
+        if (cancelled || controller.signal.aborted) return;
+        setChartCandles([]);
+        setChartCandlesError(error instanceof Error ? error.message : 'Historico indisponivel para este ativo.');
+      })
+      .finally(() => {
+        if (!cancelled) setChartCandlesLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [chartPair, props.market.candles5m]);
 
   return (
     <div className="min-h-screen bg-[#050505] text-zinc-100">
@@ -388,7 +475,7 @@ export function AuthenticatedTradingDashboard(props: AuthenticatedTradingDashboa
                 </section>
 
                 <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-                  <TradingLevelsChart trade={selectedTrade} currentPrice={selectedPrice} selectedPair={props.selectedPair} market={props.market} />
+                  <TradingLevelsChart trade={selectedTrade} currentPrice={selectedPrice} selectedPair={chartPair} candles={chartCandles} loading={chartCandlesLoading} error={chartCandlesError} />
                   <aside className="grid content-start gap-3">
                     <div className="border border-[#2a2419] bg-[#0f1011] p-4">
                       <p className="text-[10px] uppercase tracking-[0.18em] text-[#d4af37]">Status do Oraculo</p>
@@ -429,7 +516,7 @@ export function AuthenticatedTradingDashboard(props: AuthenticatedTradingDashboa
                     ))}
                   </div>
                   <div className="p-4">
-                    {tableTab === 'positions' && <TradeTable trades={openTrades} prices={props.mobilePricesByPair} activePrice={props.activeTradeCurrentPrice} selectedId={selectedTrade?.id ?? null} onSelect={setSelectedTradeId} />}
+                    {tableTab === 'positions' && <TradeTable trades={openTrades} prices={props.mobilePricesByPair} activePrice={props.activeTradeCurrentPrice} activeTrade={props.demoSession.activeTrade} selectedId={selectedTrade?.id ?? null} onSelect={setSelectedTradeId} />}
                     {tableTab === 'orders' && <div className="border border-[#2a2419] bg-[#09090b] p-6 text-sm text-zinc-500">Sem ordens pendentes no modo DEMO.</div>}
                     {tableTab === 'history' && <CompactHistoryTable history={props.demoSession.history} />}
                     {tableTab === 'audit' && <AuditPreview entries={props.mobileAuditEntries} loading={props.mobileAuditLoading} error={props.mobileAuditError} />}
@@ -440,7 +527,7 @@ export function AuthenticatedTradingDashboard(props: AuthenticatedTradingDashboa
 
             {area === 'operations' && (
               <div className="grid gap-4">
-                <TradeTable trades={openTrades} prices={props.mobilePricesByPair} activePrice={props.activeTradeCurrentPrice} selectedId={selectedTrade?.id ?? null} onSelect={setSelectedTradeId} />
+                <TradeTable trades={openTrades} prices={props.mobilePricesByPair} activePrice={props.activeTradeCurrentPrice} activeTrade={props.demoSession.activeTrade} selectedId={selectedTrade?.id ?? null} onSelect={setSelectedTradeId} />
                 <CompactHistoryTable history={props.demoSession.history} />
               </div>
             )}
