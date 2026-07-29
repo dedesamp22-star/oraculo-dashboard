@@ -247,22 +247,23 @@ test("timeout, stop and trailing events are preserved without changing exits", (
     assert.ok(trailing.managementTimeline.some((event) => event.type === "BREAKEVEN_ACTIVATED"));
     assert.equal(trailing.managementTimeline.some((event) => event.type === "TRAILING_ACTIVATED"), false);
 
-    store.updatePrices(userId, { pair: "SOLUSDT", price: 64.9 });
+    store.updatePrices(userId, { pair: "SOLUSDT", price: 57.49 });
     trailing = latestPosition(store, userId);
     assert.equal(trailing.trailing, false);
     assert.equal(trailing.stopLoss, 50);
 
-    store.updatePrices(userId, { pair: "SOLUSDT", price: 65.1 });
+    store.updatePrices(userId, { pair: "SOLUSDT", price: 57.51 });
     trailing = latestPosition(store, userId);
     assert.equal(trailing.trailing, true);
     assert.equal(trailing.managementTimeline.filter((event) => event.type === "TRAILING_ACTIVATED").length, 1);
     assert.ok(trailing.stopLoss >= 50);
     const stopAfterActivation = trailing.stopLoss;
 
-    store.updatePrices(userId, { pair: "SOLUSDT", price: 65.1 });
+    store.updatePrices(userId, { pair: "SOLUSDT", price: 57.51 });
     trailing = latestPosition(store, userId);
     assert.equal(trailing.managementTimeline.filter((event) => event.type === "TRAILING_ACTIVATED").length, 1);
     assert.equal(trailing.managementTimeline.filter((event) => event.type === "PARTIAL_EXECUTED").length, 1);
+    assert.equal(trailing.managementTimeline.filter((event) => event.type === "BREAKEVEN_ACTIVATED").length, 1);
     assert.ok(trailing.stopLoss >= stopAfterActivation);
   });
 });

@@ -102,7 +102,7 @@ function closeTrade(store, userId, overrides, closePrice, exitReason = "STOP_LOS
   return store.patchPosition(userId, trade.id, { status: "CLOSED", closePrice, exitReason });
 }
 
-function approvedSignal(pair = "ETHUSDT") {
+function approvedSignal(pair = "ETHUSDT", overrides = {}) {
   return {
     pair,
     decision: "BUY",
@@ -113,6 +113,7 @@ function approvedSignal(pair = "ETHUSDT") {
     riskReward: "1:2",
     signalKey: `${pair}-${Date.now()}-${Math.random()}`,
     steps: [{ number: 1, name: "Teste", value: "OK", reason: "sinal aprovado" }],
+    ...overrides,
   };
 }
 
@@ -154,7 +155,12 @@ test("three losses create one cooldown and block only new entries", () => {
     assert.equal(diagnostics[0].trades.length, 3);
     assert.ok(diagnostics[0].patterns.some((pattern) => pattern.name === "MFE_POSITIVO" && pattern.value === 2));
 
-    const blocked = store.openFromSignalWithResult(userId, approvedSignal("BTCUSDT"));
+    const blocked = store.openFromSignalWithResult(userId, approvedSignal("BTCUSDT", {
+      decision: "SELL",
+      stopLossNum: 105,
+      target1Num: 95,
+      target2Num: 90,
+    }));
     assert.equal(blocked.opened, false);
     assert.equal(blocked.decisionState, "BLOQUEADO_RISCO");
     assert.match(blocked.blockedReason, /Pausa temporaria apos 3 perdas consecutivas/);
@@ -269,7 +275,12 @@ test("config zero records diagnostic without blocking and audit enrichment stays
     assert.equal(triggerSnapshot.score, null, "ambiguous audit match must not enrich the trade");
     assert.equal(triggerSnapshot.volumeRelative, null);
 
-    const opened = store.openFromSignalWithResult(userId, approvedSignal("BTCUSDT"));
+    const opened = store.openFromSignalWithResult(userId, approvedSignal("BTCUSDT", {
+      decision: "SELL",
+      stopLossNum: 105,
+      target1Num: 95,
+      target2Num: 90,
+    }));
     assert.equal(opened.opened, true);
   });
 });
