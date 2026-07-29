@@ -141,6 +141,14 @@ async function postPrice(base, cookie, pair, price) {
   return await json(res);
 }
 
+async function postRawPrice(base, cookie, body) {
+  return await fetch(`${base}/api/demo/price`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: cookie },
+    body: JSON.stringify(body),
+  });
+}
+
 async function startSimulation(base, cookie, overrides = {}) {
   const scenario = {
     symbol: "BTCUSDT",
@@ -365,6 +373,60 @@ test("0.4 homologation integrated flow persists and isolates admin and second us
     assert.equal(persistedUser.history.some((trade) => trade.id === "homolog_admin_btc"), false);
     assert.equal(persistedAdmin.dailyStats.totalTrades, 1);
     assert.equal(persistedUser.dailyStats.totalTrades, 1);
+  } finally {
+    await stopServer(server.child);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("demo price endpoint rejects missing pair without mutating open positions", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "oraculo-demo-price-pair-api-"));
+  const dbPath = path.join(dir, "oraculo.sqlite");
+  const port = 5134;
+  const server = await startServer({ port, dbPath });
+  const positionSnapshot = (position) => ({
+    id: position.id,
+    pair: position.pair,
+    status: position.status,
+    stopLoss: position.stopLoss,
+    target1Hit: position.target1Hit,
+    isBreakevenStop: position.isBreakevenStop,
+    trailing: position.trailing,
+    remainingPositionSize: position.remainingPositionSize,
+    mfeUSDC: position.mfeUSDC,
+    maeUSDC: position.maeUSDC,
+    maxPriceSinceEntry: position.maxPriceSinceEntry,
+    minPriceSinceEntry: position.minPriceSinceEntry,
+    managementTimeline: position.managementTimeline,
+  });
+  try {
+    const cookie = await login(server.base);
+    await postPosition(server.base, cookie, sampleTrade({
+      id: "btc_price_pair_api",
+      pair: "BTCUSDT",
+      entry: 64000,
+      stopLoss: 63000,
+      stopLossOriginal: 63000,
+      target1: 65000,
+      target2: 66000,
+    }));
+    await postPosition(server.base, cookie, sampleTrade({
+      id: "eth_price_pair_api",
+      pair: "ETHUSDT",
+      entry: 1900,
+      stopLoss: 1850,
+      stopLossOriginal: 1850,
+      target1: 1950,
+      target2: 2000,
+    }));
+
+    const before = (await authedJson(server.base, cookie, "/api/demo/positions")).map(positionSnapshot);
+    const response = await postRawPrice(server.base, cookie, { price: 1913 });
+    assert.equal(response.status, 400);
+    const error = await json(response);
+    assert.match(error.message, /pair must be a non-empty string/);
+    const after = (await authedJson(server.base, cookie, "/api/demo/positions")).map(positionSnapshot);
+    assert.deepEqual(after, before);
   } finally {
     await stopServer(server.child);
     rmSync(dir, { recursive: true, force: true });

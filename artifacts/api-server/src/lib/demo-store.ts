@@ -4454,9 +4454,9 @@ export class DemoStore {
   updatePrices(userId: string, body: unknown) {
     const input = body as Record<string, unknown>;
     const price = finiteNumber(input.price, "price", 0.00000001, MAX_PRICE);
-    const pair = typeof input.pair === "string" ? input.pair.toUpperCase() : undefined;
+    const pair = nonEmptyString(input.pair, "pair", 30).toUpperCase();
     return this.transaction(() => {
-      const positions = this.getPositions(userId).filter((position) => !pair || position.pair === pair);
+      const positions = this.getPositions(userId).filter((position) => position.pair === pair);
       for (const position of positions) this.setSetting(userId, `demo.lastPrice.${position.pair}`, price);
       for (const trade of positions) this.applyPriceToPosition(userId, trade, price);
       return this.getSession(userId);

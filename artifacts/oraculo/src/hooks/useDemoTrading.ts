@@ -18,7 +18,7 @@ export interface DemoTradingState {
   serverAvailable: boolean;
   serverError: string | null;
   feedSignal: (result: EngineResult, pair: string) => void;
-  updatePrice: (price: number, pair?: string) => void;
+  updatePrice: (price: number, pair: string) => void;
   resetSession: (startingBalance: number) => void;
   setConfiguredBalance: (balance: number) => void;
   setAutomationEnabled: (enabled: boolean, symbol?: string) => void;
@@ -127,14 +127,14 @@ export function useDemoTrading(authenticated: boolean): DemoTradingState {
     })();
   }, [applyRemoteSession, ensureWritable, markError]);
 
-  const updatePrice = useCallback((price: number, pair?: string) => {
-    if (!Number.isFinite(price) || price <= 0 || writeInFlightRef.current) return;
+  const updatePrice = useCallback((price: number, pair: string) => {
+    if (!Number.isFinite(price) || price <= 0 || pair.trim().length === 0 || automationEnabled || writeInFlightRef.current) return;
     writeInFlightRef.current = true;
     void (async () => {
       const generation = generationRef.current;
       try {
         if (!(await ensureWritable())) return;
-        const next = await submitDemoPrice(price, pair ?? sessionRef.current.activeTrade?.pair);
+        const next = await submitDemoPrice(price, pair);
         if (generation === generationRef.current) applyRemoteSession(next);
       } catch (err) {
         if (generation === generationRef.current) markError(err);
@@ -142,7 +142,7 @@ export function useDemoTrading(authenticated: boolean): DemoTradingState {
         if (generation === generationRef.current) writeInFlightRef.current = false;
       }
     })();
-  }, [applyRemoteSession, ensureWritable, markError]);
+  }, [applyRemoteSession, automationEnabled, ensureWritable, markError]);
 
   const resetSession = useCallback((startingBalance: number) => {
     void (async () => {

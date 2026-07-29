@@ -37,6 +37,11 @@ import { fetchPrice } from '../lib/binance';
 import { resolveOracleVisualState, type OracleVisualState } from '@shared/oracleVisualState';
 import { APP_DISPLAY_NAME, APP_NAME, APP_VERSION } from '@shared/appVersion';
 
+type ActiveTradeQuote = {
+  pair: string;
+  price: number;
+};
+
 // â”€â”€ Formatters â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function isFiniteNumber(n: number | null | undefined): n is number {
@@ -1219,8 +1224,8 @@ export default function Home() {
     setAutomationEnabled,
   } = useDemoTrading(isAuthenticated);
   const activeTradePair = demoSession.activeTrade?.pair ?? null;
-  const [activeTradePrice, setActiveTradePrice] = useState<number | null>(null);
-  const activeTradeCurrentPrice = activeTradePair ? activeTradePrice : null;
+  const [activeTradeQuote, setActiveTradeQuote] = useState<ActiveTradeQuote | null>(null);
+  const activeTradeCurrentPrice = activeTradePair && activeTradeQuote?.pair === activeTradePair ? activeTradeQuote.price : null;
   const oracleVisualState = resolveOracleVisualState({
     authenticated: isAuthenticated,
     apiError: apiHealth.error || demoServerError,
@@ -1230,17 +1235,19 @@ export default function Home() {
 
   useEffect(() => {
     if (!isAuthenticated || !activeTradePair) {
-      setActiveTradePrice(null);
+      setActiveTradeQuote(null);
       return;
     }
+    setActiveTradeQuote(null);
     let cancelled = false;
     const controller = new AbortController();
+    const requestedPair = activeTradePair;
     const refreshActiveTradePrice = async () => {
       try {
-        const price = await fetchPrice(activeTradePair, controller.signal);
-        if (!cancelled) setActiveTradePrice(Number.isFinite(price) && price > 0 ? price : null);
+        const price = await fetchPrice(requestedPair, controller.signal);
+        if (!cancelled) setActiveTradeQuote(Number.isFinite(price) && price > 0 ? { pair: requestedPair, price } : null);
       } catch {
-        if (!cancelled) setActiveTradePrice(null);
+        if (!cancelled) setActiveTradeQuote(null);
       }
     };
     void refreshActiveTradePrice();
@@ -1254,10 +1261,10 @@ export default function Home() {
 
   // Feed the active trade's own pair price into the demo state machine.
   useEffect(() => {
-    if (isAuthenticated && activeTradePair && activeTradeCurrentPrice !== null) {
+    if (isAuthenticated && !demoEnabled && activeTradePair && activeTradeQuote?.pair === activeTradePair && activeTradeCurrentPrice !== null) {
       updatePrice(activeTradeCurrentPrice, activeTradePair);
     }
-  }, [activeTradeCurrentPrice, activeTradePair, isAuthenticated, updatePrice]);
+  }, [activeTradeCurrentPrice, activeTradePair, activeTradeQuote, demoEnabled, isAuthenticated, updatePrice]);
 
   useEffect(() => {
     if (!isAuthenticated) {

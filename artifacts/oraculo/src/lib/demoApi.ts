@@ -390,7 +390,7 @@ export async function submitDemoSignal(result: EngineResult, pair: string): Prom
   });
 }
 
-export async function submitDemoPrice(price: number, pair?: string): Promise<DemoSession> {
+export async function submitDemoPrice(price: number, pair: string): Promise<DemoSession> {
   return await request<DemoSession>('/api/demo/price', {
     method: 'POST',
     body: JSON.stringify({ price, pair }),
