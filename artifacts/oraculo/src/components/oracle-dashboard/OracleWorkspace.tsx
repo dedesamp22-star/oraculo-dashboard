@@ -45,6 +45,8 @@ import { NotificationsPanel } from '../NotificationsPanel';
 import { ObservabilityPanel } from '../ObservabilityPanel';
 import { RobotDiagnosticsPanel } from '../RobotDiagnosticsPanel';
 import { OracleCandlestickChart } from './OracleCandlestickChart';
+import { OperationJourney } from './OperationJourney';
+import { RobotDaySummary } from './RobotDaySummary';
 import './oracle-workspace.css';
 
 type DashboardArea = 'dashboard' | 'operations' | 'markets' | 'strategy' | 'reports' | 'alerts' | 'system';
@@ -311,7 +313,15 @@ function TradeTable({
   );
 }
 
-function HistoryTable({ history }: { history: DemoTrade[] }) {
+function HistoryTable({
+  history,
+  selectedTradeId,
+  onSelect,
+}: {
+  history: DemoTrade[];
+  selectedTradeId: string | null;
+  onSelect: (tradeId: string) => void;
+}) {
   if (history.length === 0) return <div className="oracle-empty-state">O histórico ainda está vazio.</div>;
   return (
     <div className="oracle-table-wrap">
@@ -319,7 +329,11 @@ function HistoryTable({ history }: { history: DemoTrade[] }) {
         <thead><tr><th>Ativo</th><th>Direção</th><th>Resultado</th><th>PnL</th><th>MFE</th><th>MAE</th><th>Duração</th><th>Encerrada</th></tr></thead>
         <tbody>
           {history.slice(0, 40).map((trade) => (
-            <tr key={trade.id}>
+            <tr
+              key={trade.id}
+              className={trade.id === selectedTradeId ? 'selected' : ''}
+              onClick={() => onSelect(trade.id)}
+            >
               <td><b>{trade.pair.replace('USDT', '')}</b><span>/USDT</span></td>
               <td className={trade.direction === 'BUY' ? 'positive' : 'negative'}>{trade.direction}</td>
               <td>{trade.exitReason ?? trade.status}</td>
@@ -394,15 +408,22 @@ export function OracleWorkspace({
     [demoTrading.session, serverOpenTrades],
   );
 
+  const knownTrades = useMemo(() => {
+    const map = new Map<string, DemoTrade>();
+    for (const trade of demoTrading.session.history) map.set(trade.id, trade);
+    for (const trade of openTrades) map.set(trade.id, trade);
+    return Array.from(map.values()).sort((a, b) => b.openTime - a.openTime);
+  }, [demoTrading.session.history, openTrades]);
+
   const selectedTrade = useMemo(
-    () => openTrades.find((trade) => trade.id === selectedTradeId) ?? null,
-    [openTrades, selectedTradeId],
+    () => knownTrades.find((trade) => trade.id === selectedTradeId) ?? null,
+    [knownTrades, selectedTradeId],
   );
 
   useEffect(() => {
-    if (selectedTradeId && openTrades.some((trade) => trade.id === selectedTradeId)) return;
+    if (selectedTradeId && knownTrades.some((trade) => trade.id === selectedTradeId)) return;
     setSelectedTradeId(openTrades[0]?.id ?? null);
-  }, [openTrades, selectedTradeId]);
+  }, [knownTrades, openTrades, selectedTradeId]);
 
   const chartPair = (selectedTrade?.pair as RadarSymbol | undefined) ?? selectedPair;
   const pairPrice = pricesByPair[chartPair] ?? null;
@@ -432,13 +453,26 @@ export function OracleWorkspace({
     if (tableTab === 'positions') {
       return <TradeTable trades={openTrades} prices={pricesByPair} selectedTradeId={selectedTrade?.id ?? null} onSelect={setSelectedTradeId} />;
     }
-    if (tableTab === 'history') return <HistoryTable history={session.history} />;
+    if (tableTab === 'history') {
+      return (
+        <HistoryTable
+          history={session.history}
+          selectedTradeId={selectedTrade?.id ?? null}
+          onSelect={setSelectedTradeId}
+        />
+      );
+    }
     if (tableTab === 'audit') return <AuditTable entries={auditEntries} loading={auditLoading} error={auditError} />;
     return <div className="oracle-empty-state">Sem ordens pendentes no ambiente DEMO.</div>;
   };
 
   return (
     <div className="oracle-shell">
+      <div className={`oracle-ambient-guardian ${oracleState}`} aria-hidden="true">
+        <img src={`${import.meta.env.BASE_URL}brand/oraculo-guardian.png`} alt="" />
+        <i className="oracle-ambient-core" />
+        <i className="oracle-ambient-scan" />
+      </div>
       {menuOpen && <button type="button" className="oracle-sidebar-backdrop" aria-label="Fechar menu" onClick={() => setMenuOpen(false)} />}
       <aside className={`oracle-sidebar ${menuOpen ? 'open' : ''}`}>
         <div className="oracle-brand">
@@ -506,6 +540,13 @@ export function OracleWorkspace({
                 <MetricCard label="Motor ativo" value="Adaptive V1" note={`Decisão: ${workerDecision}`} tone="gold" icon={ShieldCheck} />
               </section>
 
+              <RobotDaySummary
+                session={session}
+                openTrades={openTrades}
+                auditEntries={auditEntries}
+                workerLastCycleAt={apiHealth.health?.worker?.lastCycleAt}
+              />
+
               <section className="oracle-trading-grid">
                 <OracleCandlestickChart
                   candles={pairChart.candles}
@@ -515,6 +556,7 @@ export function OracleWorkspace({
                   error={pairChart.error}
                   currentPrice={chartPrice}
                   trade={selectedTrade}
+                  history={session.history}
                   onIntervalChange={setInterval}
                 />
 
@@ -587,10 +629,11 @@ export function OracleWorkspace({
 
           {area === 'operations' && (
             <section className="oracle-section-stack">
-              <div className="oracle-section-heading"><div><span className="oracle-eyebrow">Operações</span><h1>Posições e execução DEMO</h1></div><div className="oracle-heading-stat"><span>Risco aberto</span><strong>{formatUsd(session.openRiskUSDC)}</strong></div></div>
-              <OracleCandlestickChart candles={pairChart.candles} pair={chartPair} interval={interval} loading={pairChart.loading} error={pairChart.error} currentPrice={chartPrice} trade={selectedTrade} onIntervalChange={setInterval} />
+              <div className="oracle-section-heading"><div><span className="oracle-eyebrow">Operações</span><h1>O que está acontecendo com cada operação</h1></div><div className="oracle-heading-stat"><span>Risco aberto</span><strong>{formatUsd(session.openRiskUSDC)}</strong></div></div>
+              <OperationJourney trade={selectedTrade} currentPrice={chartPrice} openCount={openTrades.length} />
+              <OracleCandlestickChart candles={pairChart.candles} pair={chartPair} interval={interval} loading={pairChart.loading} error={pairChart.error} currentPrice={chartPrice} trade={selectedTrade} history={session.history} onIntervalChange={setInterval} />
               <TradeTable trades={openTrades} prices={pricesByPair} selectedTradeId={selectedTrade?.id ?? null} onSelect={setSelectedTradeId} />
-              <HistoryTable history={session.history} />
+              <HistoryTable history={session.history} selectedTradeId={selectedTrade?.id ?? null} onSelect={setSelectedTradeId} />
             </section>
           )}
 
