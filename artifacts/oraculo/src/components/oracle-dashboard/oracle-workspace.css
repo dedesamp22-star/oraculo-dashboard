@@ -1137,3 +1137,169 @@
     animation: none !important;
   }
 }
+/* ORACULO V6 FUTURISTIC OVERRIDES */
+.oracle-shell{
+  --oracle-cyan:#32d7ff;
+  --oracle-electric:#2f7bff;
+  background:
+    radial-gradient(circle at 80% 18%,rgba(47,123,255,.18),transparent 31%),
+    radial-gradient(circle at 50% 55%,rgba(50,215,255,.06),transparent 36%),
+    radial-gradient(circle at 15% 100%,rgba(226,183,70,.08),transparent 34%),
+    linear-gradient(135deg,#020407 0%,#050a12 48%,#020307 100%);
+}
+.oracle-page{position:relative;isolation:isolate;overflow:hidden}
+.oracle-page::before{
+  content:"";position:fixed;z-index:-2;top:70px;right:-5vw;
+  width:min(66vw,1000px);height:calc(100vh - 70px);min-height:640px;
+  background:
+    linear-gradient(90deg,rgba(2,4,8,.98),rgba(2,4,8,.45) 38%,rgba(2,4,8,.03) 76%),
+    linear-gradient(180deg,rgba(2,4,8,.02),rgba(2,4,8,.18) 62%,rgba(2,4,8,.88)),
+    url('/brand/oraculo-guardian.png') center top/contain no-repeat;
+  opacity:.58;filter:contrast(1.26) brightness(1.12) saturate(1.30)
+    drop-shadow(0 0 30px rgba(50,215,255,.26))
+    drop-shadow(0 0 80px rgba(47,123,255,.18));
+  transform-origin:72% 38%;animation:oracleV6Breath 7s ease-in-out infinite;
+  pointer-events:none
+}
+.oracle-page::after{
+  content:"";position:fixed;z-index:-1;inset:70px 0 0 238px;opacity:.20;
+  background:
+    repeating-linear-gradient(0deg,transparent 0,transparent 3px,rgba(50,215,255,.035) 4px),
+    linear-gradient(90deg,transparent,rgba(50,215,255,.025) 74%,transparent);
+  mask-image:linear-gradient(to bottom,transparent,#000 12%,#000 82%,transparent);
+  animation:oracleV6Scan 12s linear infinite;pointer-events:none
+}
+@keyframes oracleV6Breath{
+  0%,100%{transform:scale(1.01);opacity:.52}
+  50%{transform:scale(1.045) translate(-10px,-5px);opacity:.66}
+}
+@keyframes oracleV6Scan{from{transform:translateY(-8px)}to{transform:translateY(8px)}}
+
+.oracle-sidebar{
+  border-right-color:rgba(50,215,255,.14);
+  background:linear-gradient(180deg,rgba(5,9,16,.99),rgba(2,4,8,.99));
+  box-shadow:18px 0 64px rgba(0,0,0,.42),inset -1px 0 rgba(50,215,255,.04)
+}
+.oracle-guardian{
+  height:194px;border-color:rgba(50,215,255,.25);
+  box-shadow:0 18px 38px rgba(0,0,0,.40),0 0 30px rgba(50,215,255,.08)
+}
+.oracle-guardian img{
+  opacity:1;transform:scale(1.12);
+  filter:contrast(1.18) brightness(1.15) saturate(1.22);
+  animation:oracleSidePulse 6s ease-in-out infinite
+}
+@keyframes oracleSidePulse{
+  0%,100%{transform:scale(1.10);filter:contrast(1.14) brightness(1.08) saturate(1.16)}
+  50%{transform:scale(1.16);filter:contrast(1.22) brightness(1.20) saturate(1.32)}
+}
+
+.oracle-topbar{
+  border-bottom-color:rgba(50,215,255,.14);
+  background:linear-gradient(90deg,rgba(4,7,12,.98),rgba(6,10,17,.91));
+  box-shadow:0 12px 46px rgba(0,0,0,.32),inset 0 -1px rgba(50,215,255,.04)
+}
+.oracle-content,.oracle-dashboard-view,.oracle-section-stack{position:relative;z-index:2}
+
+.oracle-metric,.oracle-chart-card,.oracle-side-card,.oracle-bottom-panel,
+.oracle-day-summary,.oracle-operation-journey,.oracle-system-control,
+.oracle-strategy-grid article{
+  backdrop-filter:blur(14px) saturate(1.12);
+  border-color:rgba(121,177,203,.15);
+  background:linear-gradient(145deg,rgba(10,16,25,.91),rgba(4,8,14,.87));
+  box-shadow:0 22px 56px rgba(0,0,0,.31),inset 0 1px rgba(255,255,255,.025)
+}
+.oracle-metric:hover,.oracle-side-card:hover{
+  border-color:rgba(50,215,255,.27);
+  box-shadow:0 24px 62px rgba(0,0,0,.35),0 0 26px rgba(50,215,255,.05)
+}
+
+.oracle-chart-v6{
+  position:relative;border-color:rgba(50,215,255,.28);
+  background:rgba(3,6,11,.97);
+  box-shadow:0 28px 80px rgba(0,0,0,.49),0 0 48px rgba(47,123,255,.09)
+}
+.oracle-chart-v6::before{
+  content:"";position:absolute;z-index:5;left:0;right:0;top:0;height:2px;
+  background:linear-gradient(90deg,transparent,var(--oracle-cyan),var(--oracle-gold),transparent);
+  opacity:.78;box-shadow:0 0 20px rgba(50,215,255,.55);pointer-events:none
+}
+.oracle-chart-v6 .oracle-chart-toolbar{
+  background:linear-gradient(90deg,rgba(7,12,20,.99),rgba(4,8,14,.95));
+  border-bottom-color:rgba(50,215,255,.12)
+}
+.oracle-chart-v6 .oracle-chart-stage{
+  background:
+    linear-gradient(rgba(50,215,255,.018) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(50,215,255,.018) 1px,transparent 1px),
+    radial-gradient(circle at 78% 20%,rgba(47,123,255,.065),transparent 38%),
+    #03060b;
+  background-size:24px 24px,24px 24px,auto,auto
+}
+.oracle-chart-v6 .oracle-ohlc-strip{
+  color:#7d94a8;background:rgba(4,8,14,.97);
+  border-bottom-color:rgba(50,215,255,.08)
+}
+.oracle-chart-v6 .oracle-chart-subtitle{color:#7890a4}
+.oracle-chart-v6 .oracle-live-dot{color:#29dd9a;text-shadow:0 0 12px rgba(41,221,154,.45)}
+.oracle-chart-v6 .oracle-intervals{
+  border-color:rgba(50,215,255,.16);background:rgba(2,5,9,.92)
+}
+.oracle-chart-v6 .oracle-intervals button.active{
+  color:#021015;background:linear-gradient(135deg,#45ddff,#2f9dff);
+  box-shadow:0 0 20px rgba(50,215,255,.28)
+}
+.oracle-chart-v6 .oracle-events-toggle.active{
+  color:#9ceeff;border-color:rgba(50,215,255,.32);
+  background:rgba(50,215,255,.08);box-shadow:inset 0 0 20px rgba(50,215,255,.06)
+}
+.oracle-chart-v6 .oracle-chart-footer{
+  color:#647d91;background:rgba(3,6,11,.99);
+  border-top-color:rgba(50,215,255,.08)
+}
+
+.oracle-nav button.active{
+  color:#a5f1ff;border-color:rgba(50,215,255,.28);
+  background:linear-gradient(90deg,rgba(50,215,255,.15),rgba(47,123,255,.03));
+  box-shadow:inset 3px 0 var(--oracle-cyan),0 0 20px rgba(50,215,255,.04)
+}
+.oracle-pair-switcher button.active{
+  color:#bdf5ff;border-color:rgba(50,215,255,.32);
+  background:rgba(50,215,255,.08)
+}
+.oracle-table th{color:#758da1;background:rgba(4,8,14,.99)}
+.oracle-table tbody tr.selected{
+  background:rgba(50,215,255,.07);box-shadow:inset 2px 0 var(--oracle-cyan)
+}
+.oracle-status-dot,.oracle-live-dot::before{animation:oracleV6Pulse 1.8s ease-in-out infinite}
+@keyframes oracleV6Pulse{
+  0%,100%{opacity:.72;transform:scale(.9)}
+  50%{opacity:1;transform:scale(1.2)}
+}
+
+@media(max-width:1280px){
+  .oracle-page::before{right:-12vw;width:min(74vw,920px);opacity:.50}
+  .oracle-guardian{height:160px}
+}
+@media(max-width:980px){
+  .oracle-page::before{
+    position:absolute;top:64px;right:-210px;width:760px;height:760px;min-height:0;opacity:.34
+  }
+  .oracle-page::after{inset:64px 0 0 0}
+}
+@media(max-width:720px){
+  .oracle-page::before{
+    top:92px;right:-270px;width:700px;height:700px;opacity:.28;
+    filter:contrast(1.18) brightness(1.08) saturate(1.20)
+      drop-shadow(0 0 24px rgba(50,215,255,.20))
+  }
+  .oracle-chart-v6 .oracle-chart-stage{background-size:20px 20px,20px 20px,auto,auto}
+}
+@media(max-width:430px){
+  .oracle-page::before{top:110px;right:-300px;width:650px;height:650px;opacity:.24}
+  .oracle-guardian{height:180px}
+}
+@media(prefers-reduced-motion:reduce){
+  .oracle-page::before,.oracle-page::after,.oracle-guardian img,
+  .oracle-status-dot,.oracle-live-dot::before{animation:none!important}
+}

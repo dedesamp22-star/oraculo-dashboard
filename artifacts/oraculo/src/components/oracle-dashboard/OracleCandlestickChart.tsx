@@ -274,15 +274,15 @@ export function OracleCandlestickChart({
   }, [chart, data, markers]);
 
   return (
-    <section className="oracle-chart-card oracle-chart-v5">
+    <section className="oracle-chart-card oracle-chart-v6">
       <header className="oracle-chart-toolbar">
         <div>
-          <span className="oracle-eyebrow">Gráfico operacional</span>
+          <span className="oracle-eyebrow">Terminal operacional do Oráculo</span>
           <div className="oracle-chart-title-row">
             <strong>{pair.replace('USDT', '/USDT')}</strong>
-            <span className="oracle-live-dot">BINANCE AO VIVO</span>
+            <span className="oracle-live-dot">DADOS REAIS · BINANCE</span>
           </div>
-          <small className="oracle-chart-subtitle">Visual limpo inspirado no TradingView, com eventos internos do robô.</small>
+          <small className="oracle-chart-subtitle">Candles reais com COMPRA, VENDA, STOP, ALVOS e saídas executadas pelo robô.</small>
         </div>
         <div className="oracle-chart-controls">
           <button
