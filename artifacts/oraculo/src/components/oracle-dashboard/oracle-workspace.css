@@ -1303,3 +1303,271 @@
   .oracle-page::before,.oracle-page::after,.oracle-guardian img,
   .oracle-status-dot,.oracle-live-dot::before{animation:none!important}
 }
+/* =========================================================
+   ORACULO V7 CRYSTAL BACKGROUND
+   Fundo aprovado em tela inteira, contraste e leitura.
+   ========================================================= */
+
+.oracle-ambient-guardian,
+.oracle-guardian {
+  display: none !important;
+}
+
+.oracle-nav {
+  padding-top: 18px;
+}
+
+.oracle-page {
+  background: #020305;
+}
+
+.oracle-page::before {
+  content: "";
+  position: fixed;
+  z-index: -2;
+  inset: 70px 0 0 238px;
+  width: auto;
+  height: auto;
+  min-height: 0;
+  background-image:
+    linear-gradient(
+      90deg,
+      rgba(2, 3, 5, 0.92) 0%,
+      rgba(2, 3, 5, 0.66) 22%,
+      rgba(2, 3, 5, 0.22) 50%,
+      rgba(2, 3, 5, 0.08) 74%,
+      rgba(2, 3, 5, 0.28) 100%
+    ),
+    linear-gradient(
+      180deg,
+      rgba(2, 3, 5, 0.16) 0%,
+      rgba(2, 3, 5, 0.03) 44%,
+      rgba(2, 3, 5, 0.40) 100%
+    ),
+    url('/brand/oraculo-dashboard-crystal.webp');
+  background-repeat: no-repeat;
+  background-position: center center;
+  background-size: cover;
+  opacity: 1;
+  filter:
+    contrast(1.14)
+    brightness(1.04)
+    saturate(1.14);
+  transform: none;
+  animation: none;
+  pointer-events: none;
+}
+
+.oracle-page::after {
+  content: "";
+  position: fixed;
+  z-index: -1;
+  inset: 70px 0 0 238px;
+  opacity: 1;
+  background:
+    radial-gradient(
+      circle at 70% 55%,
+      rgba(226, 183, 70, 0.14) 0%,
+      rgba(226, 183, 70, 0.045) 25%,
+      transparent 49%
+    ),
+    radial-gradient(
+      circle at 72% 31%,
+      rgba(47, 123, 255, 0.15) 0%,
+      rgba(47, 123, 255, 0.04) 22%,
+      transparent 42%
+    ),
+    repeating-linear-gradient(
+      0deg,
+      transparent 0,
+      transparent 4px,
+      rgba(255, 255, 255, 0.012) 5px
+    );
+  mask-image: none;
+  animation: oracleV7Aura 8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes oracleV7Aura {
+  0%, 100% { opacity: 0.80; }
+  50% { opacity: 1; }
+}
+
+.oracle-content {
+  background: transparent;
+}
+
+.oracle-topbar {
+  background:
+    linear-gradient(
+      90deg,
+      rgba(3, 5, 9, 0.985),
+      rgba(5, 8, 13, 0.94)
+    );
+  border-bottom-color: rgba(226, 183, 70, 0.20);
+  box-shadow:
+    0 14px 46px rgba(0, 0, 0, 0.48),
+    inset 0 -1px 0 rgba(226, 183, 70, 0.055);
+}
+
+.oracle-sidebar {
+  background:
+    linear-gradient(
+      180deg,
+      rgba(3, 5, 9, 0.997),
+      rgba(1, 2, 4, 0.997)
+    );
+  border-right-color: rgba(226, 183, 70, 0.20);
+}
+
+.oracle-metric,
+.oracle-chart-card,
+.oracle-side-card,
+.oracle-bottom-panel,
+.oracle-day-summary,
+.oracle-operation-journey,
+.oracle-system-control,
+.oracle-strategy-grid article {
+  border-color: rgba(226, 183, 70, 0.22);
+  background:
+    linear-gradient(
+      150deg,
+      rgba(6, 10, 16, 0.92),
+      rgba(2, 5, 9, 0.88)
+    );
+  backdrop-filter: blur(9px) saturate(1.10);
+  box-shadow:
+    0 22px 58px rgba(0, 0, 0, 0.48),
+    inset 0 1px 0 rgba(255, 255, 255, 0.032),
+    0 0 0 1px rgba(226, 183, 70, 0.030);
+}
+
+.oracle-metric {
+  background:
+    linear-gradient(
+      145deg,
+      rgba(8, 13, 20, 0.95),
+      rgba(3, 6, 10, 0.92)
+    );
+}
+
+.oracle-chart-v6 {
+  border-color: rgba(226, 183, 70, 0.32);
+  background: rgba(2, 5, 9, 0.82);
+  box-shadow:
+    0 30px 86px rgba(0, 0, 0, 0.60),
+    0 0 0 1px rgba(226, 183, 70, 0.05),
+    0 0 52px rgba(226, 183, 70, 0.07);
+}
+
+.oracle-chart-v6::before {
+  background:
+    linear-gradient(
+      90deg,
+      transparent,
+      #32d7ff,
+      #e2b746,
+      transparent
+    );
+}
+
+.oracle-chart-v6 .oracle-chart-toolbar,
+.oracle-chart-v6 .oracle-ohlc-strip,
+.oracle-chart-v6 .oracle-chart-footer {
+  background: rgba(2, 5, 9, 0.94);
+}
+
+.oracle-chart-v6 .oracle-chart-stage {
+  background:
+    linear-gradient(rgba(226, 183, 70, 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(226, 183, 70, 0.018) 1px, transparent 1px),
+    linear-gradient(rgba(2, 5, 9, 0.74), rgba(2, 5, 9, 0.74));
+  background-size: 24px 24px, 24px 24px, auto;
+}
+
+.oracle-table-wrap {
+  background: rgba(2, 5, 9, 0.72);
+  backdrop-filter: blur(8px);
+}
+
+.oracle-table th {
+  color: #a5b0ba;
+  background: rgba(3, 7, 12, 0.98);
+}
+
+.oracle-table td {
+  color: #cbd1d7;
+}
+
+.oracle-table tbody tr:hover {
+  background: rgba(226, 183, 70, 0.05);
+}
+
+.oracle-table tbody tr.selected {
+  background: rgba(226, 183, 70, 0.08);
+  box-shadow: inset 2px 0 0 var(--oracle-gold);
+}
+
+.oracle-section-heading h1,
+.oracle-day-summary-header h2 {
+  color: #ffffff;
+  text-shadow: 0 2px 18px rgba(0, 0, 0, 0.82);
+}
+
+.oracle-section-heading,
+.oracle-day-summary-header,
+.oracle-operation-journey {
+  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.80);
+}
+
+@media (max-width: 1280px) {
+  .oracle-page::before,
+  .oracle-page::after {
+    left: 210px;
+  }
+}
+
+@media (max-width: 980px) {
+  .oracle-page::before,
+  .oracle-page::after {
+    position: fixed;
+    inset: 64px 0 0 0;
+  }
+
+  .oracle-page::before {
+    background-position: 66% center;
+  }
+}
+
+@media (max-width: 720px) {
+  .oracle-page::before {
+    background-position: 70% center;
+    background-size: auto 100%;
+  }
+
+  .oracle-page::after {
+    background:
+      linear-gradient(rgba(2, 3, 5, 0.25), rgba(2, 3, 5, 0.54)),
+      radial-gradient(circle at 70% 48%, rgba(226, 183, 70, 0.09), transparent 45%);
+  }
+
+  .oracle-metric,
+  .oracle-chart-card,
+  .oracle-side-card,
+  .oracle-bottom-panel,
+  .oracle-day-summary,
+  .oracle-operation-journey {
+    background:
+      linear-gradient(
+        150deg,
+        rgba(5, 9, 15, 0.96),
+        rgba(2, 5, 9, 0.94)
+      );
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .oracle-page::after {
+    animation: none !important;
+  }
+}
