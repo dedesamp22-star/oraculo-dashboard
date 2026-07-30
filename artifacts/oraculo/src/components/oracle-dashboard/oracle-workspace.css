@@ -1,0 +1,492 @@
+:root {
+  --oracle-bg: #050607;
+  --oracle-panel: #0b0d10;
+  --oracle-panel-2: #101318;
+  --oracle-line: rgba(226, 183, 70, 0.16);
+  --oracle-line-strong: rgba(226, 183, 70, 0.34);
+  --oracle-gold: #e2b746;
+  --oracle-gold-soft: #ffd978;
+  --oracle-green: #18d78b;
+  --oracle-red: #ff5b68;
+  --oracle-blue: #4bc4ff;
+  --oracle-text: #f4f4f5;
+  --oracle-muted: #8b919d;
+  --oracle-muted-2: #5f6671;
+}
+
+* { box-sizing: border-box; }
+
+.oracle-shell {
+  min-height: 100vh;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 238px minmax(0, 1fr);
+  color: var(--oracle-text);
+  background:
+    radial-gradient(circle at 72% -10%, rgba(226, 183, 70, 0.08), transparent 32%),
+    radial-gradient(circle at 22% 105%, rgba(75, 196, 255, 0.055), transparent 30%),
+    var(--oracle-bg);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.oracle-sidebar {
+  position: sticky;
+  top: 0;
+  z-index: 70;
+  height: 100vh;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  border-right: 1px solid var(--oracle-line);
+  background: linear-gradient(180deg, rgba(11, 13, 16, 0.98), rgba(5, 6, 7, 0.98));
+  box-shadow: 16px 0 48px rgba(0, 0, 0, 0.24);
+}
+
+.oracle-brand {
+  min-height: 82px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--oracle-line);
+}
+
+.oracle-brand-mark {
+  width: 38px;
+  height: 48px;
+  object-fit: contain;
+  filter: drop-shadow(0 0 12px rgba(226, 183, 70, 0.34));
+}
+
+.oracle-brand div { display: grid; gap: 2px; }
+.oracle-brand strong { font-size: 14px; letter-spacing: 0.22em; }
+.oracle-brand span { color: var(--oracle-gold); font-size: 10px; font-weight: 800; letter-spacing: 0.3em; }
+.oracle-sidebar-close { display: none; margin-left: auto; color: var(--oracle-muted); background: transparent; border: 0; }
+
+.oracle-guardian {
+  margin: 14px;
+  height: 154px;
+  overflow: hidden;
+  position: relative;
+  border: 1px solid var(--oracle-line);
+  border-radius: 12px;
+  background: #020203;
+}
+
+.oracle-guardian::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 45%, rgba(4, 5, 6, 0.92) 88%);
+  pointer-events: none;
+}
+
+.oracle-guardian img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 28%;
+  opacity: 0.92;
+  transform: scale(1.03);
+}
+
+.oracle-guardian div {
+  position: absolute;
+  z-index: 2;
+  left: 12px;
+  right: 12px;
+  bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #c7cbd2;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.oracle-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--oracle-green);
+  box-shadow: 0 0 12px var(--oracle-green);
+}
+
+.oracle-nav {
+  flex: 1;
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  padding: 4px 12px 14px;
+}
+
+.oracle-nav button {
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 9px;
+  padding: 0 12px;
+  color: #8f95a0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 650;
+  transition: 150ms ease;
+}
+
+.oracle-nav button svg:last-child { opacity: 0; transition: 150ms ease; }
+.oracle-nav button:hover { color: #e8e8ea; background: rgba(255,255,255,0.025); }
+.oracle-nav button.active {
+  color: var(--oracle-gold-soft);
+  border-color: var(--oracle-line-strong);
+  background: linear-gradient(90deg, rgba(226,183,70,0.14), rgba(226,183,70,0.025));
+  box-shadow: inset 3px 0 0 var(--oracle-gold);
+}
+.oracle-nav button.active svg:last-child { opacity: 1; }
+
+.oracle-sidebar-footer {
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--oracle-line);
+}
+
+.oracle-sidebar-footer > div { display: grid; gap: 2px; min-width: 0; }
+.oracle-sidebar-footer span { color: var(--oracle-muted-2); font-size: 9px; text-transform: uppercase; letter-spacing: 0.14em; }
+.oracle-sidebar-footer strong { font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.oracle-sidebar-footer button {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #aeb3bc;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 7px;
+  background: rgba(255,255,255,0.02);
+}
+
+.oracle-page { min-width: 0; }
+.oracle-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  min-height: 70px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--oracle-line);
+  background: rgba(7, 8, 10, 0.92);
+  backdrop-filter: blur(18px);
+}
+
+.oracle-topbar-left,
+.oracle-topbar-status,
+.oracle-pair-switcher { display: flex; align-items: center; }
+.oracle-topbar-left { min-width: 0; gap: 18px; }
+.oracle-topbar-status { gap: 10px; justify-content: flex-end; }
+.oracle-pair-switcher { gap: 5px; }
+
+.oracle-pair-switcher button {
+  height: 38px;
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: #747b87;
+  background: transparent;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.oracle-pair-switcher button b { font-size: 12px; }
+.oracle-pair-switcher button span { font-size: 9px; }
+.oracle-pair-switcher button:hover { color: #d6d7da; }
+.oracle-pair-switcher button.active { color: var(--oracle-gold-soft); border-color: var(--oracle-line-strong); background: rgba(226,183,70,0.09); }
+
+.oracle-top-price { display: grid; gap: 2px; padding-left: 16px; border-left: 1px solid rgba(255,255,255,0.08); }
+.oracle-top-price span { color: var(--oracle-muted-2); font-size: 8px; text-transform: uppercase; letter-spacing: .16em; }
+.oracle-top-price strong { color: #f7f7f8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 15px; }
+
+.oracle-topbar-status > div {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 7px;
+  background: rgba(255,255,255,0.018);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .11em;
+  white-space: nowrap;
+}
+.oracle-topbar-status > div > span { width: 6px; height: 6px; border-radius: 999px; background: currentColor; box-shadow: 0 0 8px currentColor; }
+.oracle-state.waiting { color: var(--oracle-gold); }
+.oracle-state.analyzing { color: var(--oracle-blue); }
+.oracle-state.buy { color: var(--oracle-green); }
+.oracle-state.sell { color: var(--oracle-red); }
+
+.oracle-refresh-button,
+.oracle-mobile-menu {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  color: #a8adb6;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 7px;
+  background: rgba(255,255,255,0.02);
+}
+.oracle-mobile-menu { display: none; }
+
+.oracle-content { padding: 16px; }
+.oracle-dashboard-view,
+.oracle-section-stack { display: grid; gap: 14px; }
+
+.oracle-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.oracle-metric {
+  min-width: 0;
+  min-height: 104px;
+  display: grid;
+  grid-template-columns: 34px minmax(0,1fr) 18px;
+  gap: 10px;
+  align-items: center;
+  padding: 13px;
+  border: 1px solid rgba(255,255,255,0.075);
+  border-radius: 10px;
+  background: linear-gradient(145deg, rgba(17,20,25,.94), rgba(9,11,14,.94));
+  box-shadow: 0 12px 30px rgba(0,0,0,.16);
+}
+.oracle-metric-icon { width: 33px; height: 33px; display: grid; place-items: center; border-radius: 8px; background: rgba(255,255,255,.035); color: #aab0b9; }
+.oracle-metric-copy { min-width: 0; display: grid; gap: 3px; }
+.oracle-metric-copy > span { color: var(--oracle-muted-2); font-size: 8px; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; }
+.oracle-metric-copy strong { overflow: hidden; color: #f1f1f2; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 15px; white-space: nowrap; text-overflow: ellipsis; }
+.oracle-metric-copy small { overflow: hidden; color: #6f7580; font-size: 9px; white-space: nowrap; text-overflow: ellipsis; }
+.oracle-metric-bars { height: 31px; display: flex; align-items: end; gap: 2px; opacity: .55; }
+.oracle-metric-bars i { width: 2px; border-radius: 2px; background: currentColor; }
+.oracle-metric-bars i:nth-child(1){height:9px}.oracle-metric-bars i:nth-child(2){height:16px}.oracle-metric-bars i:nth-child(3){height:23px}.oracle-metric-bars i:nth-child(4){height:30px}
+.oracle-tone-gold { color: var(--oracle-gold); border-color: rgba(226,183,70,.20); }
+.oracle-tone-positive { color: var(--oracle-green); border-color: rgba(24,215,139,.17); }
+.oracle-tone-negative { color: var(--oracle-red); border-color: rgba(255,91,104,.17); }
+.oracle-tone-blue { color: var(--oracle-blue); border-color: rgba(75,196,255,.17); }
+.oracle-tone-neutral { color: #858b95; }
+.oracle-metric.oracle-tone-gold .oracle-metric-icon { color: var(--oracle-gold); background: rgba(226,183,70,.09); }
+.oracle-metric.oracle-tone-positive .oracle-metric-icon { color: var(--oracle-green); background: rgba(24,215,139,.08); }
+.oracle-metric.oracle-tone-negative .oracle-metric-icon { color: var(--oracle-red); background: rgba(255,91,104,.08); }
+.oracle-metric.oracle-tone-blue .oracle-metric-icon { color: var(--oracle-blue); background: rgba(75,196,255,.08); }
+
+.oracle-trading-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 12px;
+  align-items: start;
+}
+
+.oracle-chart-card,
+.oracle-side-card,
+.oracle-bottom-panel,
+.oracle-system-control,
+.oracle-strategy-grid article {
+  border: 1px solid rgba(255,255,255,0.075);
+  border-radius: 11px;
+  background: linear-gradient(160deg, rgba(13,15,19,.97), rgba(7,9,11,.97));
+  box-shadow: 0 18px 42px rgba(0,0,0,.18);
+}
+
+.oracle-chart-card { min-width: 0; overflow: hidden; }
+.oracle-chart-toolbar {
+  min-height: 63px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+}
+.oracle-eyebrow { display: block; color: var(--oracle-gold); font-size: 8px; font-weight: 800; letter-spacing: .2em; text-transform: uppercase; }
+.oracle-chart-title-row { display: flex; align-items: center; gap: 9px; margin-top: 3px; }
+.oracle-chart-title-row strong { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 16px; }
+.oracle-live-dot { color: var(--oracle-green); font-size: 8px; font-weight: 900; letter-spacing: .12em; }
+.oracle-live-dot::before { content:""; display:inline-block; width:6px; height:6px; margin-right:5px; border-radius:99px; background:var(--oracle-green); box-shadow:0 0 8px var(--oracle-green); }
+.oracle-intervals { display: flex; gap: 4px; padding: 3px; border: 1px solid rgba(255,255,255,.07); border-radius: 7px; background: #07080a; }
+.oracle-intervals button { min-width: 38px; height: 28px; padding: 0 8px; color: #6f7580; border: 0; border-radius: 5px; background: transparent; font-size: 9px; font-weight: 850; }
+.oracle-intervals button.active { color: #101114; background: var(--oracle-gold); }
+.oracle-ohlc-strip { min-height: 31px; display: flex; align-items: center; gap: 13px; padding: 0 14px; overflow-x: auto; border-bottom: 1px solid rgba(255,255,255,.045); color: #737986; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9px; white-space: nowrap; }
+.oracle-ohlc-strip b { color: #c7cad0; font-weight: 600; }
+.oracle-chart-stage { position: relative; height: 540px; min-height: 420px; background: #07080a; }
+.oracle-candles-svg { display: block; width: 100%; height: 100%; touch-action: none; }
+.oracle-chart-state { position: absolute; inset: 0; display: grid; place-items: center; color: #7d838d; font-size: 12px; letter-spacing: .06em; }
+.oracle-chart-state.error { color: var(--oracle-red); }
+.oracle-chart-footer { min-height: 33px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 14px; border-top: 1px solid rgba(255,255,255,.05); color: #5f6570; font-size: 8px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+
+.oracle-right-column { display: grid; gap: 10px; }
+.oracle-side-card { padding: 13px; }
+.oracle-side-card-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #8d939e; font-size: 9px; font-weight: 850; letter-spacing: .14em; text-transform: uppercase; }
+.oracle-state-card > strong { display: block; margin: 13px 0 12px; font-size: 19px; text-transform: uppercase; }
+.oracle-state-card > strong.waiting { color: var(--oracle-gold); }
+.oracle-state-card > strong.analyzing { color: var(--oracle-blue); }
+.oracle-state-card > strong.buy { color: var(--oracle-green); }
+.oracle-state-card > strong.sell { color: var(--oracle-red); }
+.oracle-state-card dl { display: grid; gap: 7px; margin: 0; }
+.oracle-state-card dl div { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 7px; border-top: 1px solid rgba(255,255,255,.05); }
+.oracle-state-card dt { color: #666d78; font-size: 9px; }
+.oracle-state-card dd { margin: 0; color: #c8cbd1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; font-weight: 700; }
+
+.oracle-watchlist { display: grid; gap: 5px; margin-top: 10px; }
+.oracle-watchlist button { min-height: 43px; display: grid; grid-template-columns: minmax(60px,.8fr) minmax(70px,1fr) minmax(76px,.9fr); align-items: center; gap: 8px; padding: 0 9px; color: #aeb2ba; border: 1px solid rgba(255,255,255,.055); border-radius: 7px; background: rgba(255,255,255,.015); text-align: left; }
+.oracle-watchlist button:hover,.oracle-watchlist button.active { border-color: var(--oracle-line-strong); background: rgba(226,183,70,.045); }
+.oracle-watchlist b { font-size: 11px; }
+.oracle-watchlist small { color: #5c626d; font-size: 8px; }
+.oracle-watchlist .watch-price { color: #c3c6cc; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; text-align: right; }
+.oracle-watchlist em { font-size: 8px; font-style: normal; font-weight: 850; text-align: right; }
+
+.oracle-alert-list { display: grid; gap: 6px; margin-top: 10px; }
+.oracle-alert-list div { display: flex; align-items: flex-start; gap: 7px; padding: 8px; border-radius: 6px; background: rgba(255,255,255,.02); font-size: 9px; line-height: 1.4; }
+.oracle-alert-list svg { flex: 0 0 auto; margin-top: 1px; }
+.oracle-card-link { width: 100%; min-height: 31px; margin-top: 8px; color: var(--oracle-gold); border: 0; background: transparent; font-size: 9px; font-weight: 750; text-align: left; }
+
+.oracle-quick-actions { display: grid; gap: 8px; }
+.oracle-quick-actions .oracle-side-card-title { margin-bottom: 2px; }
+.oracle-quick-actions > button { min-height: 35px; color: #b8bcc3; border: 1px solid rgba(255,255,255,.08); border-radius: 6px; background: rgba(255,255,255,.02); font-size: 9px; font-weight: 850; letter-spacing: .08em; text-transform: uppercase; }
+.oracle-quick-actions > button:first-of-type { color: #101114; border-color: var(--oracle-gold); background: var(--oracle-gold); }
+.oracle-quick-actions > button.active { color: var(--oracle-green); border-color: rgba(24,215,139,.35); background: rgba(24,215,139,.06); }
+.oracle-quick-actions > button:disabled { opacity: .38; cursor: not-allowed; }
+.oracle-quick-actions small { color: #626873; font-size: 8px; }
+
+.oracle-bottom-panel { overflow: hidden; }
+.oracle-tabs { display: flex; gap: 0; border-bottom: 1px solid rgba(255,255,255,.06); overflow-x: auto; }
+.oracle-tabs button { min-height: 43px; padding: 0 18px; color: #707681; border: 0; border-bottom: 2px solid transparent; background: transparent; font-size: 9px; font-weight: 850; letter-spacing: .11em; text-transform: uppercase; white-space: nowrap; }
+.oracle-tabs button.active { color: var(--oracle-gold-soft); border-bottom-color: var(--oracle-gold); background: rgba(226,183,70,.035); }
+.oracle-tab-content { min-width: 0; }
+
+.oracle-table-wrap { width: 100%; overflow: auto; }
+.oracle-table { width: 100%; min-width: 920px; border-collapse: collapse; color: #aeb3bc; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; }
+.oracle-table th { position: sticky; top: 0; z-index: 1; height: 36px; padding: 0 12px; color: #656b76; background: #0b0d10; border-bottom: 1px solid rgba(255,255,255,.06); font-size: 8px; font-weight: 850; letter-spacing: .12em; text-align: left; text-transform: uppercase; white-space: nowrap; }
+.oracle-table td { height: 44px; padding: 0 12px; border-bottom: 1px solid rgba(255,255,255,.04); white-space: nowrap; }
+.oracle-table tbody tr { cursor: default; transition: 120ms ease; }
+.oracle-table tbody tr:hover { background: rgba(255,255,255,.018); }
+.oracle-table tbody tr.selected { background: rgba(226,183,70,.055); box-shadow: inset 2px 0 0 var(--oracle-gold); }
+.oracle-table td b { color: #e5e6e8; }
+.oracle-table td span { color: #5d636e; }
+.oracle-empty-state { min-height: 100px; display: grid; place-items: center; padding: 24px; color: #656b76; font-size: 11px; }
+.oracle-empty-state.error { color: var(--oracle-red); }
+
+.oracle-shell .positive { color: var(--oracle-green) !important; }
+.oracle-shell .negative { color: var(--oracle-red) !important; }
+.oracle-shell .gold { color: var(--oracle-gold) !important; }
+.oracle-shell .blue { color: var(--oracle-blue) !important; }
+.oracle-shell .neutral { color: var(--oracle-muted) !important; }
+
+.oracle-section-stack { max-width: 1540px; margin: 0 auto; }
+.oracle-section-heading { min-height: 68px; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 0 4px; }
+.oracle-section-heading h1 { margin: 5px 0 0; font-size: clamp(20px, 2vw, 30px); line-height: 1.05; }
+.oracle-heading-stat { display: grid; gap: 3px; min-width: 116px; padding: 10px 13px; border: 1px solid var(--oracle-line); border-radius: 8px; background: rgba(226,183,70,.04); }
+.oracle-heading-stat span { color: #686f7a; font-size: 8px; text-transform: uppercase; letter-spacing: .12em; }
+.oracle-heading-stat strong { color: var(--oracle-gold); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.oracle-primary-button { min-height: 40px; padding: 0 16px; color: #121316; border: 0; border-radius: 7px; background: var(--oracle-gold); font-size: 9px; font-weight: 850; letter-spacing: .1em; text-transform: uppercase; }
+
+.oracle-strategy-grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 10px; }
+.oracle-strategy-grid article { min-height: 174px; display: grid; align-content: start; gap: 9px; padding: 17px; }
+.oracle-strategy-grid article > svg { color: var(--oracle-gold); }
+.oracle-strategy-grid article > span { color: #686f7a; font-size: 8px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+.oracle-strategy-grid article strong { font-size: 17px; }
+.oracle-strategy-grid article p { margin: 0; color: #777e89; font-size: 11px; line-height: 1.6; }
+
+.oracle-system-control { min-height: 92px; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 16px; }
+.oracle-system-control > div { display: grid; gap: 4px; }
+.oracle-system-control span { color: var(--oracle-gold); font-size: 9px; font-weight: 850; letter-spacing: .14em; text-transform: uppercase; }
+.oracle-system-control strong { font-size: 18px; }
+.oracle-system-control p { margin: 0; color: #777d87; font-size: 10px; }
+.oracle-system-control button { min-width: 112px; min-height: 40px; color: #aeb3bc; border: 1px solid rgba(255,255,255,.09); border-radius: 7px; background: rgba(255,255,255,.02); font-size: 9px; font-weight: 850; text-transform: uppercase; }
+.oracle-system-control button.active { color: var(--oracle-green); border-color: rgba(24,215,139,.35); background: rgba(24,215,139,.06); }
+
+.oracle-fallback { min-height: 100vh; display: grid; place-items: center; padding: 24px; color: var(--oracle-text); background: radial-gradient(circle at 50% 30%, rgba(226,183,70,.09), transparent 30%), #050607; }
+.oracle-fallback-card { width: min(520px, 100%); display: grid; justify-items: start; gap: 14px; padding: 28px; border: 1px solid var(--oracle-line-strong); border-radius: 14px; background: rgba(11,13,16,.96); box-shadow: 0 30px 90px rgba(0,0,0,.42); }
+.oracle-fallback-card img { width: 46px; height: 58px; object-fit: contain; }
+.oracle-fallback-card h1 { margin: 0; font-size: 24px; }
+.oracle-fallback-card p { margin: 0; color: #9298a2; line-height: 1.6; }
+.oracle-fallback-card button { min-height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 14px; color: #111216; border: 0; border-radius: 7px; background: var(--oracle-gold); font-weight: 800; }
+.oracle-fallback-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.oracle-fallback-actions button:last-child { color: #b4b9c1; border: 1px solid rgba(255,255,255,.09); background: transparent; }
+.oracle-fallback-card code { max-width: 100%; overflow-wrap: anywhere; color: var(--oracle-red); font-size: 10px; }
+.oracle-sidebar-backdrop { display: none; }
+
+@media (max-width: 1280px) {
+  .oracle-shell { grid-template-columns: 210px minmax(0,1fr); }
+  .oracle-sidebar { width: 210px; }
+  .oracle-guardian { height: 130px; }
+  .oracle-metrics-grid { grid-template-columns: repeat(3, minmax(0,1fr)); }
+  .oracle-trading-grid { grid-template-columns: minmax(0,1fr) 270px; }
+  .oracle-chart-stage { height: 500px; }
+  .oracle-strategy-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+}
+
+@media (max-width: 980px) {
+  .oracle-shell { display: block; }
+  .oracle-sidebar { position: fixed; left: 0; top: 0; width: min(286px, 88vw); transform: translateX(-105%); transition: transform 180ms ease; }
+  .oracle-sidebar.open { transform: translateX(0); }
+  .oracle-sidebar-close { display: grid; place-items: center; }
+  .oracle-sidebar-backdrop { position: fixed; inset: 0; z-index: 65; display: block; border: 0; background: rgba(0,0,0,.68); backdrop-filter: blur(4px); }
+  .oracle-mobile-menu { display: grid; }
+  .oracle-topbar { min-height: 64px; }
+  .oracle-topbar-left { gap: 9px; }
+  .oracle-top-price { display: none; }
+  .oracle-topbar-status > div:first-child { display: none; }
+  .oracle-content { padding: 12px; }
+  .oracle-trading-grid { grid-template-columns: 1fr; }
+  .oracle-right-column { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .oracle-chart-stage { height: 500px; }
+}
+
+@media (max-width: 720px) {
+  .oracle-topbar { align-items: flex-start; padding: 9px 10px; }
+  .oracle-topbar-left { min-width: 0; flex: 1; }
+  .oracle-pair-switcher { overflow-x: auto; }
+  .oracle-pair-switcher button { padding: 0 8px; }
+  .oracle-topbar-status > div:not(.oracle-state), .oracle-refresh-button { display: none; }
+  .oracle-state { height: 38px; padding: 0 8px !important; font-size: 8px !important; }
+  .oracle-metrics-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .oracle-metric { min-height: 93px; grid-template-columns: 30px minmax(0,1fr); }
+  .oracle-metric-bars { display: none; }
+  .oracle-metric-copy strong { font-size: 14px; }
+  .oracle-right-column { grid-template-columns: 1fr; }
+  .oracle-chart-toolbar { align-items: flex-start; }
+  .oracle-ohlc-strip { gap: 10px; }
+  .oracle-chart-stage { height: 420px; min-height: 380px; }
+  .oracle-chart-footer { justify-content: flex-start; overflow-x: auto; white-space: nowrap; }
+  .oracle-tabs button { padding: 0 13px; }
+  .oracle-section-heading { align-items: flex-start; flex-direction: column; padding: 8px 2px; }
+  .oracle-strategy-grid { grid-template-columns: 1fr; }
+  .oracle-system-control { align-items: flex-start; flex-direction: column; }
+  .oracle-system-control button { width: 100%; }
+}
+
+@media (max-width: 430px) {
+  .oracle-content { padding: 8px; }
+  .oracle-topbar { position: sticky; }
+  .oracle-pair-switcher button span { display: none; }
+  .oracle-pair-switcher button { min-width: 45px; justify-content: center; }
+  .oracle-metrics-grid { gap: 7px; }
+  .oracle-metric { padding: 10px; border-radius: 8px; }
+  .oracle-metric-icon { width: 29px; height: 29px; }
+  .oracle-metric-copy small { display: none; }
+  .oracle-chart-toolbar { min-height: 58px; padding: 9px 10px; }
+  .oracle-chart-title-row strong { font-size: 14px; }
+  .oracle-chart-stage { height: 390px; min-height: 350px; }
+  .oracle-side-card { padding: 11px; }
+  .oracle-fallback-card { padding: 22px; }
+}
